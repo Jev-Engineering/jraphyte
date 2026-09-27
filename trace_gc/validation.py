@@ -20,6 +20,8 @@ def validate_bundle(bundle: dict[str,Any], *, trust: TrustStore | None=None,at: 
     m=bundle["manifest"];raw=bundle["records"]
     require(len(raw)==len({r["id"] for r in raw}),"DUPLICATE_ID","record IDs must be unique across all kinds")
     catalog=Catalog(raw)
+    from .domains import validate_catalog as validate_domain_catalog
+    validate_domain_catalog(catalog, trust=trust, at=at)
     require(m["record_hashes"]=={r["id"]:r["hash"] for r in raw},"GRAPH_MANIFEST","manifest must enumerate exact record hashes")
     sources={r["id"] for r in catalog.all("source")}
     require(set(m["source_status"])==sources,"SOURCE_STATUS_MISSING","source status must enumerate all included snapshots")

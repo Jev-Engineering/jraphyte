@@ -18,6 +18,9 @@ STAGES={"source":"SOURCE","claim":"CLAIM","evidence":"EVIDENCE","candidate":"CAN
 
 from .retrieval.contracts import KINDS as RETRIEVAL_KINDS
 STAGES.update({kind: "RETRIEVAL" for kind in RETRIEVAL_KINDS})
+STAGES.update({"research-domain-taxonomy": "DOMAIN_TAXONOMY",
+               "classification-proposal": "CLASSIFICATION_PROPOSAL",
+               "classification-assignment": "CLASSIFICATION_ASSIGNMENT"})
 
 def references(record: dict[str,Any]) -> list[tuple[str,str]]:
     """Every record-ID-bearing field is enumerated; hashes are validated separately."""
@@ -58,6 +61,8 @@ def references(record: dict[str,Any]) -> list[tuple[str,str]]:
             if "evidence_ids" in op:add(op["evidence_ids"],"evidence")
     from .retrieval.integration import references as retrieval_references
     refs.extend(retrieval_references(kind, b))
+    from .domains import references as domain_references
+    refs.extend(domain_references(kind, b))
     return list(dict.fromkeys(refs))
 
 def causal_references(record: dict[str,Any], catalog: Catalog | None=None) -> set[str]:
@@ -69,7 +74,7 @@ def causal_references(record: dict[str,Any], catalog: Catalog | None=None) -> se
         receipts={digest(r["body"]):r["id"] for r in catalog.all("receipt")}
         if kind=="receipt":
             p=b["payload"]
-            field={"AUTHORIZATION":"plan_hash","PREFLIGHT":"plan_hash","QUALIFICATION":"qualification_hash","OBSERVATION":"observation_hash"}.get(b["purpose"])
+            field={"AUTHORIZATION":"plan_hash","PREFLIGHT":"plan_hash","QUALIFICATION":"qualification_hash","OBSERVATION":"observation_hash","CLASSIFICATION_REVIEW":"proposal_hash"}.get(b["purpose"])
             if field:
                 require(field in p and p[field] in hashes,"MISSING_REFERENCE","receipt's bound record is absent")
                 refs.add(hashes[p[field]])
@@ -107,6 +112,7 @@ def build_ledger(catalog: Catalog, *, run_id: str, execution_mode: str, created_
     for ref in order:
         record=records[ref];body=record["body"]
         stamp=body.get("completed_at",body.get("created_at",body.get("committed_at",body.get("issued_at",created_at or now()))))
+        if record["kind"] == "classification-assignment": stamp=body["reviewed_at"]
         event={"id":f"{run_id}:event:{len(events)+1}","run_id":run_id,"execution_mode":execution_mode,"sequence":len(events)+1,
                "stage":STAGES[record["kind"]],"created_at":stamp,"parent_ids":sorted(record_events[x] for x in dependencies[ref]),
                "previous_hash":previous,"record_ids":[ref],"payload_hash":digest([record])}

@@ -11,12 +11,20 @@ KINDS = {"source", "claim", "evidence", "candidate", "pack", "observation", "eva
 
 from .retrieval.contracts import KINDS as RETRIEVAL_KINDS
 KINDS.update(RETRIEVAL_KINDS)
+from .domains import KINDS as DOMAIN_KINDS
+KINDS.update(DOMAIN_KINDS)
 
 class Catalog:
     def __init__(self, records: Iterable[dict[str, Any]] = ()):
         self._records: dict[str, dict[str, Any]] = {}
-        for record in records:
-            self.add(record)
+        self._loading = True
+        try:
+            for record in records:
+                self.add(record)
+        finally:
+            self._loading = False
+        from .domains import validate_catalog
+        validate_catalog(self)
 
     @boundary
     def add(self, record: dict[str, Any]) -> str:
@@ -27,6 +35,10 @@ class Catalog:
                 "RECORD_HASH", record["id"])
         if record["id"] in self._records:
             require(self._records[record["id"]] == record, "IMMUTABLE_RECORD", record["id"])
+        if (record["kind"] in DOMAIN_KINDS or
+                (record["kind"] == "receipt" and record["body"]["purpose"] == "CLASSIFICATION_REVIEW")) and not self._loading:
+            from .domains import validate_record
+            validate_record(self, record)
         self._records[record["id"]] = deepcopy(record)
         return record["id"]
 

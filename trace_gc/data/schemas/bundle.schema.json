@@ -195,7 +195,10 @@
               "retrieval-lineage",
               "graphrag-answer",
               "retrieval-replay",
-              "retrieval-evaluation"
+              "retrieval-evaluation",
+              "research-domain-taxonomy",
+              "classification-proposal",
+              "classification-assignment"
             ]
           },
           "hash": {
@@ -257,7 +260,10 @@
               "SCHEMA",
               "SNAPSHOT",
               "POLICY",
-              "RETRIEVAL"
+              "RETRIEVAL",
+              "DOMAIN_TAXONOMY",
+              "CLASSIFICATION_PROPOSAL",
+              "CLASSIFICATION_ASSIGNMENT"
             ]
           },
           "created_at": {
@@ -331,7 +337,8 @@
                 "QUALIFICATION",
                 "RUN_CHECKPOINT",
                 "SOURCE_STATUS",
-                "OBSERVATION"
+                "OBSERVATION",
+                "CLASSIFICATION_REVIEW"
               ]
             },
             "issuer": {
