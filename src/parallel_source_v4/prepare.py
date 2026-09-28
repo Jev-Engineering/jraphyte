@@ -3,12 +3,14 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import re
-from .common import child,data_root,digest,read,write_once
+import sys
+from .common import REPO,child,data_root,digest,read,write_once
 from trace_gc.pdf_source_parallel_v4 import source_lines
 
 
 def prepare(root: Path, sources: list[dict], destination: Path) -> dict:
     import fitz
+    import PIL
     if destination.exists():raise ValueError('new_preparation_directory_required')
     ids=[r['sample_id'] for r in sources]
     if len(ids)!=len(set(ids)) or not ids:raise ValueError('nonempty_unique_sources_required')
@@ -30,7 +32,11 @@ def prepare(root: Path, sources: list[dict], destination: Path) -> dict:
                          **{k+'_sha256':digest(p) for k,p in paths.items()},
                          'conversion_outputs':{name:(destination/'conversions'/name/(sid+'.json')).relative_to(root).as_posix()
                                                for name in ('docling','docling_document','grobid','mineru','olmocr')}})
-    result={'pdfs':manifest,'stage':'source_review_inputs_only_no_predictions'}
+    result={'pdfs':manifest,'stage':'source_review_inputs_only_no_predictions',
+            'native_extractor':{'python':sys.version.split()[0],'pymupdf':fitz.VersionBind,
+                                'mupdf':fitz.VersionFitz,'pillow':PIL.__version__,
+                                'source_module_sha256':digest(REPO/'trace_gc/pdf_source_parallel_v4.py'),
+                                'render_dpi':120}}
     write_once(destination/'manifest.json',result)
     return result
 

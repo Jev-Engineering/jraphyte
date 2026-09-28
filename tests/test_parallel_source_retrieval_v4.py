@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from trace_gc.pdf_source_parallel_v4 import digest_value
+from trace_gc.pdf_structure_parallel_v4 import seal
 from src.parallel_source_v4.retrieval import (extract_fields, candidate_pool, rerank_pool,
     evaluate, local_cross_encoder, BM25, normalize_queries)
 from src.parallel_source_v4.metrics import ranking_metrics, score_case, summary, fallback_increment
@@ -60,6 +61,26 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(extract_fields('paper',lines,**PARAMS,abstract_assessment=assessment)['abstract'],ABSTRACT)
         assessment['text']='tampered'
         with self.assertRaises(ValueError):extract_fields('paper',lines,**PARAMS,abstract_assessment=assessment)
+
+    def test_abstract_field_rejects_duplicate_native_occurrence_and_held_wrong_source(self):
+        lines=[line(0,'Abstract '+ABSTRACT),line(1,'Introduction',200)]
+        assessment=assess(lines)
+        duplicated=[*lines,line(2,'Abstract '+ABSTRACT,350)]
+        with self.assertRaisesRegex(ValueError,'abstract_field_spans_not_unique_or_current'):
+            extract_fields('paper',duplicated,**PARAMS,abstract_assessment=assessment)
+        held=assess(lines,conversion_status='error')
+        held['page_sha256']='e'*64
+        seal(held)
+        with self.assertRaisesRegex(ValueError,'abstract_field_source_mismatch'):
+            extract_fields('paper',lines,**PARAMS,abstract_assessment=held)
+        unsupported={**held,'page_sha256':PARAMS['page_sha256'],'schema_version':99}
+        seal(unsupported)
+        with self.assertRaisesRegex(ValueError,'unsupported_abstract_assessment_version_or_state'):
+            extract_fields('paper',lines,**PARAMS,abstract_assessment=unsupported)
+        unknown={**held,'page_sha256':PARAMS['page_sha256'],'status':'mystery'}
+        seal(unknown)
+        with self.assertRaisesRegex(ValueError,'unsupported_abstract_assessment_version_or_state'):
+            extract_fields('paper',lines,**PARAMS,abstract_assessment=unknown)
 
     def test_full_page_rank_44_enters_candidate_pool(self):
         field=[f'field-{i}' for i in range(50)];dense=[f'dense-{i}' for i in range(50)]

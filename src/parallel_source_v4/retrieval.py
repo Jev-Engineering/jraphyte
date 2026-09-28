@@ -13,8 +13,8 @@ import time
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Callable, Sequence
-from trace_gc.pdf_source_parallel_v4 import canonical, digest_value, locate, normalize, style
-from trace_gc.pdf_structure_parallel_v4 import METADATA_START, _author_like, verify_assessment
+from trace_gc.pdf_source_parallel_v4 import canonical, digest_value, locate, normalize, style, validate_lines, validate_source_spans
+from trace_gc.pdf_structure_parallel_v4 import METADATA_START, VERSION as ASSESSMENT_VERSION, _author_like, verify_assessment
 from .adapters import conversion_state
 from .common import child, data_root, digest, read, write_once
 from .metrics import ranking_metrics
@@ -30,10 +30,48 @@ def _title_like(text: str) -> bool:
                 len(re.findall(r"[.!?]\s+[A-Z]", text)) < 2)
 
 
+def verify_source_bound_assessment(assessment: dict, native: list[dict], *, page_size: list,
+                                   source_sha256: str, page_sha256: str) -> None:
+    """Verify the seal, source identity and unique native span for any assessment state."""
+    if not isinstance(assessment,dict):
+        raise ValueError("abstract_assessment_record_required")
+    verify_assessment(assessment)
+    if (assessment.get("schema_version") != 3 or
+            assessment.get("extractor_version") != ASSESSMENT_VERSION or
+            assessment.get("status") not in {"complete","partial","absent","uncertain","error","truncated"} or
+            type(assessment.get("proposal")) is not bool):
+        raise ValueError("unsupported_abstract_assessment_version_or_state")
+    if (assessment.get("source_sha256") != source_sha256 or
+            assessment.get("page_sha256") != page_sha256 or
+            assessment.get("physical_page") != 1 or
+            assessment.get("page_size") != page_size):
+        raise ValueError("abstract_field_source_mismatch")
+    if not assessment.get("proposal"):
+        return
+    if (assessment.get("status") != "complete" or
+            assessment.get("complete_candidate") is not True or
+            assessment.get("transcription") != "native_pdf" or
+            not assessment.get("spans") or
+            not assessment.get("closing_boundary")):
+        raise ValueError("abstract_field_requires_complete_native_proposal")
+    try:
+        validate_source_spans(assessment["spans"],native)
+    except (KeyError,TypeError,ValueError) as exc:
+        raise ValueError("abstract_field_native_spans_mismatch") from exc
+    if "\n".join(span["text"] for span in assessment["spans"]) != assessment.get("text"):
+        raise ValueError("abstract_field_text_not_source_spans")
+    relocated=locate(assessment["text"],native)
+    saved_positions=[(str(s["line_id"]),s["start"],s["end"]) for s in assessment["spans"]]
+    located_positions=[(str(s["line_id"]),s["start"],s["end"]) for s in relocated["spans"]]
+    if relocated["status"] != "located" or saved_positions != located_positions:
+        raise ValueError("abstract_field_spans_not_unique_or_current")
+
+
 def extract_fields(case_id: str, native: list[dict], *, page_size: list,
                    source_sha256: str, page_sha256: str, image_sha256: str | None = None,
                    abstract_assessment: dict | None = None, reviewed_title: dict | None = None,
                    ocr_cache: dict | None = None) -> dict:
+    native=validate_lines(native,page_size)
     groups = defaultdict(list)
     for line in native:
         groups[line.get("block_id", str(line["id"]))].append(line)
@@ -77,11 +115,10 @@ def extract_fields(case_id: str, native: list[dict], *, page_size: list,
             if not result["title"] and _title_like(ocr_cache.get("title", "")):
                 result["title"] = ocr_cache["title"]
                 result["field_provenance"]["title"] = {"kind": "local_ocr_title_candidate", "source_reviewed": False}
-    if abstract_assessment:
-        verify_assessment(abstract_assessment)
-    if abstract_assessment and abstract_assessment.get("proposal") and abstract_assessment.get("spans"):
-        if abstract_assessment.get("source_sha256") != source_sha256 or abstract_assessment.get("page_sha256") != page_sha256:
-            raise ValueError("abstract_field_source_mismatch")
+    if abstract_assessment is not None:
+        verify_source_bound_assessment(abstract_assessment,native,page_size=page_size,
+                                       source_sha256=source_sha256,page_sha256=page_sha256)
+    if abstract_assessment and abstract_assessment.get("proposal"):
         result["abstract"] = abstract_assessment["text"]
         result["field_provenance"]["abstract"] = {"kind": "source_located_selector_proposal", "source_reviewed": False,
                                                  "assessment_sha256": abstract_assessment["assessment_sha256"]}
