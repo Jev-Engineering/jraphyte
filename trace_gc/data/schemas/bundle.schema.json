@@ -195,7 +195,8 @@
               "retrieval-lineage",
               "graphrag-answer",
               "retrieval-replay",
-              "retrieval-evaluation"
+              "retrieval-evaluation",
+              "image-evidence-v1"
             ]
           },
           "hash": {

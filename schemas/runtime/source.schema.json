@@ -42,6 +42,10 @@
           "type": "null"
         }
       ]
+    },
+    "image_evidence_id": {
+      "type": "string",
+      "minLength": 1
     }
   },
   "required": [
@@ -54,5 +58,28 @@
     "parser_version",
     "raw_document_hash"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "representation": {
+            "const": "reviewed-image-transcription-v1"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "image_evidence_id"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "image_evidence_id"
+          ]
+        }
+      }
+    }
+  ]
 }

@@ -43,6 +43,10 @@ def _references(catalog: Catalog, id_: str, *, bounded_graph: bool = False) -> l
     elif kind == "evidence":
         catalog.verify_evidence(id_)
         links = [(b["source_snapshot_id"], "source", "source-span")]
+    elif kind == "source" and "image_evidence_id" in b:
+        from .pdf_image_evidence import verify_image_source
+        verify_image_source(catalog, b)
+        links = [(b["image_evidence_id"], "image-evidence-v1", "reviewed-image-lineage")]
     elif kind == "observation":
         require(b["status"] == "OK", "PREREQUISITE_NOT_COMPLETED", id_)
         links = [(b["pack_id"],"pack","observed-input"), (b["candidate_id"],"candidate","target")]

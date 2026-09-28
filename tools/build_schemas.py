@@ -124,6 +124,8 @@ SCHEMAS["transaction"]=obj({"backend":S,"version":N,"idempotency_key":S,"plan_ha
                             "preflight_hash":H,"upstream_head":nullable(H),"committed_at":T})
 from retrieval_schemas import extend
 extend(SCHEMAS)
+from image_evidence_schemas import extend as extend_image_evidence
+extend_image_evidence(SCHEMAS)
 
 EVENT=obj({"id":S,"run_id":S,"execution_mode":MODE,"sequence":{"type":"integer","minimum":1},
            "stage":{"enum":["SOURCE","CLAIM","EVIDENCE","CANDIDATE","PACK","OBSERVATION","RESOLUTION","EVALUATION","QUALIFICATION","PLAN","RECEIPT","TRANSACTION","SCHEMA","SNAPSHOT","POLICY","RETRIEVAL"]},
@@ -140,7 +142,7 @@ def main():
     dest=ROOT/"schemas"/"runtime"; dest.mkdir(parents=True,exist_ok=True)
     for name,body in SCHEMAS.items():
         schema={"$schema":"https://json-schema.org/draft/2020-12/schema","$id":f"urn:trace-gc:0.3.0:{name}","title":f"TRACE-GC {name} v0.3.0",**body}
-        (dest/f"{name}.schema.json").write_text(json.dumps(schema,indent=2)+"\n",encoding="utf-8")
+        (dest/f"{name}.schema.json").write_text(json.dumps(schema,indent=2)+"\n",encoding="utf-8",newline="\n")
     package=ROOT/"trace_gc"/"data"/"schemas";package.mkdir(parents=True,exist_ok=True)
     for path in dest.glob("*.schema.json"):(package/path.name).write_bytes(path.read_bytes())
     print(f"Wrote {len(SCHEMAS)} standalone runtime schemas and wheel resources")

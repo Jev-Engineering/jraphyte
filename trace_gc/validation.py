@@ -35,7 +35,13 @@ def validate_bundle(bundle: dict[str,Any], *, trust: TrustStore | None=None,at: 
         if "run_id" in b:require(b["run_id"]==m["run_id"],"MODE_MISMATCH","record from another run")
         if "execution_mode" in b:require(b["execution_mode"]==m["execution_mode"],"MODE_MISMATCH","record execution mode differs")
         if "security_scope" in b:require(b["security_scope"]==m["security_scope"],"SECURITY_SCOPE",r["id"])
-        if kind=="source":require(text_digest(b["text"])==b["text_hash"],"PROVENANCE_MISMATCH","source text hash changed")
+        if kind=="source":
+            require(text_digest(b["text"])==b["text_hash"],"PROVENANCE_MISMATCH","source text hash changed")
+            from .pdf_image_evidence import verify_image_source
+            verify_image_source(catalog, b)
+        elif kind=="image-evidence-v1":
+            from .pdf_image_evidence import validate_image_record
+            validate_image_record(b)
         elif kind=="evidence":catalog.verify_evidence(r["id"])
         elif kind=="schema":validate_schema_contract(b["relations"])
         elif kind=="graph-snapshot":

@@ -1,0 +1,431 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:trace-gc:0.3.0:image-evidence-v1",
+  "title": "TRACE-GC image-evidence-v1 v0.3.0",
+  "type": "object",
+  "properties": {
+    "version": {
+      "const": "pdf-image-evidence-v1"
+    },
+    "source_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "physical_page": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "page_identity_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "render": {
+      "type": "object",
+      "properties": {
+        "renderer": {
+          "const": "PyMuPDF"
+        },
+        "renderer_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mupdf_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pillow_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dpi": {
+          "type": "integer",
+          "minimum": 36,
+          "maximum": 600
+        },
+        "rotation_degrees": {
+          "enum": [
+            0,
+            90,
+            180,
+            270
+          ]
+        },
+        "unrotated_page_rect": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "pdf_to_pixels": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 6,
+          "maxItems": 6
+        },
+        "pixels_to_pdf": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 6,
+          "maxItems": 6
+        },
+        "pixmap_origin": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "dimensions": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "colorspace": {
+          "const": "RGB"
+        },
+        "coordinate_system": {
+          "const": "unrotated-mupdf-page-points-to-rendered-top-left-pixels-v1"
+        },
+        "page_png_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "page_pixels_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "renderer",
+        "renderer_version",
+        "mupdf_version",
+        "pillow_version",
+        "dpi",
+        "rotation_degrees",
+        "unrotated_page_rect",
+        "pdf_to_pixels",
+        "pixels_to_pdf",
+        "pixmap_origin",
+        "dimensions",
+        "colorspace",
+        "coordinate_system",
+        "page_png_sha256",
+        "page_pixels_sha256"
+      ],
+      "additionalProperties": false
+    },
+    "crop": {
+      "type": "object",
+      "properties": {
+        "bbox": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "dimensions": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "coordinate_system": {
+          "const": "rendered-top-left-pixel-edges-half-open-v1"
+        },
+        "location_basis": {
+          "const": "observed-source-image"
+        },
+        "png_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "pixels_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "bbox",
+        "dimensions",
+        "coordinate_system",
+        "location_basis",
+        "png_sha256",
+        "pixels_sha256"
+      ],
+      "additionalProperties": false
+    },
+    "native_observation": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "enum": [
+            "absent",
+            "suspect_encoding",
+            "available"
+          ]
+        },
+        "text_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "character_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "replacement_or_control_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "state",
+        "text_sha256",
+        "character_count",
+        "replacement_or_control_count"
+      ],
+      "additionalProperties": false
+    },
+    "fallback_reason": {
+      "enum": [
+        "native_absent",
+        "native_corrupt",
+        "native_uncertain",
+        "image_review_requested"
+      ]
+    },
+    "ocr": {
+      "type": "object",
+      "properties": {
+        "engine": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "configuration_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "configuration": {
+          "type": "object"
+        },
+        "raw_output_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "raw_output_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "input_crop_sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input_binding": {
+          "enum": [
+            "verified-crop",
+            "unverified-cache"
+          ]
+        },
+        "output_status": {
+          "enum": [
+            "complete",
+            "truncated",
+            "error"
+          ]
+        }
+      },
+      "required": [
+        "engine",
+        "revision",
+        "configuration_sha256",
+        "configuration",
+        "raw_output_sha256",
+        "raw_output_bytes",
+        "input_crop_sha256",
+        "input_binding",
+        "output_status"
+      ],
+      "additionalProperties": false
+    },
+    "transcription": {
+      "type": "string"
+    },
+    "transcription_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "correction": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "previous_candidate_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "previous_transcription_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "editor": {
+              "type": "string",
+              "minLength": 1
+            },
+            "editor_kind": {
+              "enum": [
+                "assistant",
+                "human"
+              ]
+            },
+            "edited_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "previous_candidate_sha256",
+            "previous_transcription_sha256",
+            "editor",
+            "editor_kind",
+            "edited_at",
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "review": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "candidate_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "reviewer": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reviewer_kind": {
+              "enum": [
+                "assistant",
+                "human"
+              ]
+            },
+            "reviewed_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "independent_review": {
+              "const": false
+            },
+            "disposition": {
+              "enum": [
+                "complete",
+                "partial",
+                "absent",
+                "ambiguous",
+                "uncertain_equation",
+                "error"
+              ]
+            },
+            "checks": {
+              "type": "object",
+              "properties": {
+                "transcription": {
+                  "type": "boolean"
+                },
+                "reading_order": {
+                  "type": "boolean"
+                },
+                "boundaries": {
+                  "type": "boolean"
+                },
+                "notation": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "transcription",
+                "reading_order",
+                "boundaries",
+                "notation"
+              ],
+              "additionalProperties": false
+            },
+            "notes": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "candidate_sha256",
+            "reviewer",
+            "reviewer_kind",
+            "reviewed_at",
+            "independent_review",
+            "disposition",
+            "checks",
+            "notes"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "version",
+    "source_id",
+    "source_sha256",
+    "physical_page",
+    "page_identity_sha256",
+    "render",
+    "crop",
+    "native_observation",
+    "fallback_reason",
+    "ocr",
+    "transcription",
+    "transcription_sha256",
+    "correction",
+    "review"
+  ],
+  "additionalProperties": false
+}

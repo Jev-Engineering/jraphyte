@@ -18,12 +18,14 @@ STAGES={"source":"SOURCE","claim":"CLAIM","evidence":"EVIDENCE","candidate":"CAN
 
 from .retrieval.contracts import KINDS as RETRIEVAL_KINDS
 STAGES.update({kind: "RETRIEVAL" for kind in RETRIEVAL_KINDS})
+STAGES["image-evidence-v1"] = "SOURCE"
 
 def references(record: dict[str,Any]) -> list[tuple[str,str]]:
     """Every record-ID-bearing field is enumerated; hashes are validated separately."""
     b=record["body"];kind=record["kind"];refs=[]
     def add(values,expected):refs.extend((v,expected) for v in values)
-    if kind=="evidence":add([b["source_snapshot_id"]],"source")
+    if kind=="source" and "image_evidence_id" in b:add([b["image_evidence_id"]],"image-evidence-v1")
+    elif kind=="evidence":add([b["source_snapshot_id"]],"source")
     elif kind=="candidate":
         add([b["claim_id"]],"claim");add(b["evidence_ids"],"evidence")
         add(b["prerequisites"]+b["alternatives"],"candidate")
