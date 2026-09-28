@@ -1,0 +1,59 @@
+{
+  "checks": [
+    "Caller result and artifact descriptors are copied before validation.",
+    "Live complete trust enrollment policies and revocation set must remain unchanged.",
+    "Post-write input, evaluator/image code, runtime and output readback is required.",
+    "Completion is required; durable invalidation remains authoritative after source restoration.",
+    "Public summary must exactly match deterministic redaction of the privately pinned result."
+  ],
+  "claim": "Authored evaluator and publication integrity tests only; no real-paper qualification or issue20 closure.",
+  "focused_report_sha256": "c73fd9fb6740ef9c258f70090a6fa36f91349521d0910c8c7728ba790bb1b4c9",
+  "focused_tests": {
+    "passed": 51,
+    "scope": "Authored protocol and adapter tests, including seven publication test methods with adversarial subcases.",
+    "seconds": 11.629
+  },
+  "full_validation": {
+    "errors": 0,
+    "failures": 0,
+    "production_graph_writes": 0,
+    "provider_calls": 0,
+    "skipped": 7,
+    "status": "PASS_WITH_EXTERNAL_GATES",
+    "tests_passed": 836,
+    "tests_run": 843
+  },
+  "graph_qualification_registered": false,
+  "independent_human_qualification": false,
+  "internal_peer_code_review": {
+    "publication_tests_passed": 7,
+    "source_sha256": "b704062da849c330cd608b65bc790f145f9a1ed51a25f4aabdfe1cebfdd10b09",
+    "status": "PASS"
+  },
+  "legacy_package_validator": {
+    "graph_commits": 0,
+    "model_calls": 0,
+    "records": 17,
+    "schemas": 12,
+    "status": "PASS"
+  },
+  "owned_source_sha256": {
+    "docs/paper_qualification_v1.md": "d45717c9b667356beb85f69b6f5765c0d3f4440cf1412d48b993c43e469c63cf",
+    "src/paper_qualification_v1.py": "b704062da849c330cd608b65bc790f145f9a1ed51a25f4aabdfe1cebfdd10b09",
+    "tests/test_paper_qualification_v1.py": "d163fb279c5215becfe79912839342af11bbce13ead1c049ed20fbccdca8d89b"
+  },
+  "parent_implementation_commit": "16094b7e43226631dcf3662784deac110728b0df",
+  "qualification_pass": false,
+  "remaining_gates": [
+    "Latest-main integrated validation and hosted CI.",
+    "Exact final-tree image-enabled issue19 PASS.",
+    "Genuine four-converter access and execution records.",
+    "Prospective frozen source-first references and signed phases."
+  ],
+  "unseen_images_opened": 0,
+  "unseen_pdfs_opened": 0,
+  "unseen_predictions_opened": 0,
+  "validation_log_sha256": "6cac60904023ff458c75e9d87d10f41e64ad1ab4bbea652e843b61ca9a318f65",
+  "validation_report_sha256": "01cea96872d022f1a6d6e288375f7b8261ca89b5bd93aa7deeeccb06d8dff7ac",
+  "version": "paper-qualification-publication-integrity-validation-v1"
+}

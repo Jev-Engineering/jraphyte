@@ -7,6 +7,7 @@ independence, truthful observation, or statistical representativeness.
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import asdict
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -937,6 +938,17 @@ def _evaluate(root, bundle_descriptor, *, expected_preregistration_sha256, trust
         "claim": "Internally attributed source-first study only. The generic graph QualificationRegistry is unchanged."}
 
 
+def _trust_identity(trust):
+    """Observe current application authority without copying or enrolling it."""
+    require(isinstance(trust, TrustStore), "external_review_trust_required")
+    issuers = {}
+    for issuer, policy in sorted(trust._issuers.items()):
+        values = asdict(policy)
+        issuers[issuer] = {key: value.hex() if isinstance(value, bytes) else
+            sorted(value) if isinstance(value, (set, frozenset)) else value for key, value in values.items()}
+    return digest_value({"issuers": issuers, "revoked": sorted(trust._revoked)})
+
+
 def evaluate(root, bundle_descriptor, *, expected_preregistration_sha256, trust: TrustStore,
              at=None, runtime_lock=DEFAULT_RUNTIME_LOCK):
     """Fail closed; expected raw hashes and issuer enrollment come from the caller.
@@ -946,9 +958,13 @@ def evaluate(root, bundle_descriptor, *, expected_preregistration_sha256, trust:
     """
     at = at or datetime.now(timezone.utc).isoformat()
     try:
+        bundle_descriptor = deepcopy(bundle_descriptor)
+        trust_identity = _trust_identity(trust)
         require(instant(at) <= datetime.now(timezone.utc), "evaluation_time_cannot_be_future")
-        return _evaluate(root, bundle_descriptor, expected_preregistration_sha256=expected_preregistration_sha256,
+        result = _evaluate(root, bundle_descriptor, expected_preregistration_sha256=expected_preregistration_sha256,
             trust=trust, at=at, runtime_lock=runtime_lock)
+        require(_trust_identity(trust) == trust_identity, "review_trust_changed_during_evaluation")
+        return result
     except (EvidenceError, ContractError, OSError, RuntimeError, ValueError, KeyError, TypeError, AttributeError, IndexError, OverflowError) as error:
         reason = str(error) if isinstance(error, EvidenceError) else "missing_or_invalid_bound_study_evidence"
         return {"version": VERSION, "status": "BLOCKED", "reason": reason, "qualification_pass": False,
@@ -956,15 +972,28 @@ def evaluate(root, bundle_descriptor, *, expected_preregistration_sha256, trust:
             "graph_writes": 0, "paid_calls": 0}
 
 
+def _public_summary(result, private_hash):
+    """Deterministic redaction; the public claim is derived from the pinned result."""
+    excluded = {"input_hashes", "cases", "review_audit_ids", "study_id", "invocation"}
+    public = {key: value for key, value in result.items() if key not in excluded}
+    if "measured_arms" in public:
+        public["measured_arms"] = {method: {key: value for key, value in arm.items() if key != "cases"}
+            for method, arm in public["measured_arms"].items()}
+    public["private_evaluation_sha256"] = private_hash
+    return public
+
+
 def publish(root, output_relative, result, *, expected_preregistration_sha256=None, trust=None,
             runtime_lock=DEFAULT_RUNTIME_LOCK):
     """Recompute under external trust before publishing any evidence-bearing claim."""
     from src.parallel_source_v4.image_ocr import code_identity
+    result = deepcopy(result)
     root = Path(root).resolve()
     output = child(root, output_relative)
     require(output != root and not output.exists(), "fresh_evaluation_output_directory_required")
     require(result.get("version") == VERSION and result.get("graph_qualification_registered") is False,
             "paper_evaluation_result_required")
+    store = None
     if "input_hashes" not in result:
         exact(result, {"version", "status", "reason", "qualification_pass", "independent_human_qualification",
             "graph_qualification_registered", "graph_writes", "paid_calls"}, "unverified_publication_result_rejected")
@@ -978,8 +1007,10 @@ def publish(root, output_relative, result, *, expected_preregistration_sha256=No
         invocation = result.get("invocation", {})
         require(invocation.get("expected_preregistration_sha256") == expected_preregistration_sha256,
             "publication_preregistration_trust_anchor_mismatch")
+        trust_identity = _trust_identity(trust)
         rebuilt = evaluate(root, **invocation, trust=trust, at=result.get("evaluated_at"), runtime_lock=runtime_lock)
-        require(rebuilt == result, "evaluation_result_changed_before_publication")
+        require(digest_value(rebuilt) == digest_value(result), "evaluation_result_changed_before_publication")
+        require(_trust_identity(trust) == trust_identity, "review_trust_changed_before_publication")
         store = Artifacts(root)
         for relative, sha in result["input_hashes"].items():
             path = child(root, relative)
@@ -988,31 +1019,81 @@ def publish(root, output_relative, result, *, expected_preregistration_sha256=No
             store.verify({"relative": relative, "sha256": sha})
         require(evaluator_identity() == result["code_sha256"] and code_identity() == result["image_code_sha256"]
             and runtime_receipt(runtime_lock) == result["runtime"], "evaluation_changed_before_publication")
-    private_hash = write_once(output/"evaluation.json", result)
-    excluded = {"input_hashes", "cases", "review_audit_ids", "study_id", "invocation"}
-    public = {key:value for key,value in result.items() if key not in excluded}
-    if "measured_arms" in public:
-        public["measured_arms"] = {method: {key:value for key,value in arm.items() if key != "cases"}
-            for method,arm in public["measured_arms"].items()}
-    public["private_evaluation_sha256"] = private_hash
-    public_hash = write_once(output/"public-summary.json", public)
+    # Own one fresh publication directory; preserve attempted artifacts on any
+    # failure. A completion marker is not sufficient without current replay.
+    output.mkdir(parents=True, exist_ok=False)
+    written = {}
+    published = Artifacts(root)
+    def record(name, value):
+        sha = write_once(output/name, value)
+        written[name] = sha
+        published.verify({"relative": (output/name).relative_to(root).as_posix(), "sha256": sha})
+        return sha
+    def recheck():
+        if store is not None:
+            store.recheck()
+            require(_trust_identity(trust) == trust_identity, "review_trust_changed_during_publication")
+            require(evaluator_identity() == result["code_sha256"] and code_identity() == result["image_code_sha256"]
+                and runtime_receipt(runtime_lock) == result["runtime"], "evaluation_changed_during_publication")
+        published.recheck()
+        require(not (output/"publication-invalidated.json").exists(), "publication_invalidated")
+    try:
+        private_hash = record("evaluation.json", result)
+        public_hash = record("public-summary.json", _public_summary(result, private_hash))
+        recheck()
+        completion_hash = record("publication-complete.json", {"version": "paper-evaluation-publication-v1",
+            "evaluation_sha256": private_hash, "public_summary_sha256": public_hash,
+            "status": result["status"], "qualification_pass": result["qualification_pass"],
+            "graph_qualification_registered": False})
+        recheck()
+    except Exception:
+        marker = {"version": "paper-evaluation-publication-invalidation-v1", "status": "BLOCKED",
+            "reason": "publication_write_or_final_integrity_check_failed", "qualification_pass": False,
+            "graph_qualification_registered": False, "attempted_artifact_sha256": written}
+        invalidation_hash = write_once(output/"publication-invalidated.json", marker)
+        return {"status": "BLOCKED", "qualification_pass": False, "graph_qualification_registered": False,
+            "reason": marker["reason"], "invalidation_sha256": invalidation_hash,
+            "attempted_artifact_sha256": written}
     return {"status": result["status"], "qualification_pass": result["qualification_pass"],
         "private_evaluation_sha256": private_hash, "public_summary_sha256": public_hash,
+        "publication_complete_sha256": completion_hash,
         "graph_qualification_registered": False}
 
 
 def verify_published(root, receipt_descriptor, *, expected_preregistration_sha256, trust,
                      runtime_lock=DEFAULT_RUNTIME_LOCK):
     """Recompute the complete study before trusting a privately pinned PASS."""
+    receipt_descriptor = deepcopy(receipt_descriptor)
+    trust_identity = _trust_identity(trust)
     store = Artifacts(root)
+    directory = child(store.root, receipt_descriptor["relative"]).parent
+    require(not (directory/"publication-invalidated.json").exists(), "publication_invalidated")
     recorded = store.json(receipt_descriptor)
     require(recorded.get("status") == "PASS" and recorded.get("qualification_pass") is True,
             "nonpassing_or_authored_study_cannot_qualify")
+    marker_relative = (directory/"publication-complete.json").relative_to(store.root).as_posix()
+    marker_path = child(store.root, marker_relative)
+    require(marker_path.is_file(), "publication_completion_required")
+    raw = marker_path.read_bytes()
+    store.seen[marker_relative] = hashlib.sha256(raw).hexdigest()
+    marker = store.parse(raw)
+    exact(marker, {"version", "evaluation_sha256", "public_summary_sha256", "status", "qualification_pass",
+        "graph_qualification_registered"}, "publication_completion_contract_required")
+    require(marker["version"] == "paper-evaluation-publication-v1"
+        and marker["evaluation_sha256"] == receipt_descriptor["sha256"] and marker["status"] == "PASS"
+        and marker["qualification_pass"] is True and marker["graph_qualification_registered"] is False,
+        "publication_completion_identity_mismatch")
+    public = store.json({"relative": (directory/"public-summary.json").relative_to(store.root).as_posix(),
+        "sha256": marker["public_summary_sha256"]})
+    require(digest_value(public) == digest_value(_public_summary(recorded, receipt_descriptor["sha256"])),
+            "public_summary_does_not_match_private_evaluation")
     invocation = recorded["invocation"]
     require(invocation["expected_preregistration_sha256"] == expected_preregistration_sha256,
             "preregistration_trust_anchor_mismatch")
     current = evaluate(root, **invocation, trust=trust, at=recorded["evaluated_at"], runtime_lock=runtime_lock)
-    require(current == recorded, "qualification_evidence_changed_after_publication")
+    require(digest_value(current) == digest_value(recorded), "qualification_evidence_changed_after_publication")
     store.recheck()
+    require(_trust_identity(trust) == trust_identity, "review_trust_changed_during_verification")
+    require(not (directory/"publication-invalidated.json").exists(), "publication_invalidated")
     return {"status": "PASS", "qualification_pass": True, "evaluation_sha256": receipt_descriptor["sha256"],
         "review_policy": REVIEW_POLICY, "independent_human_qualification": False, "graph_qualification_registered": False}

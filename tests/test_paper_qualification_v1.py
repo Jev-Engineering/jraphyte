@@ -9,7 +9,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 
 from src.paper_qualification_v1 import (Artifacts, EvidenceError, PHASES, QUOTAS,
     REVIEW_POLICY, SAMPLING, SEED, TARGETS, REFERENCE_REVIEW, VERSION, METHODS,
@@ -399,6 +399,176 @@ class ArtifactTests(unittest.TestCase):
             with self.assertRaisesRegex(EvidenceError,"unverified_publication"):
                 publish(d,"forged",result)
             self.assertFalse((Path(d)/"forged").exists())
+
+
+class PublicationTests(unittest.TestCase):
+    """Authored publication boundary probes; evaluation itself is substituted."""
+    @contextmanager
+    def fixture(self, root):
+        from src import paper_qualification_v1 as module
+        original = b"authored publication input"
+        (Path(root)/"input.json").write_bytes(original)
+        anchors = {"expected_preregistration_sha256": "a"*64, "trust": TrustStore()}
+        result = {"version": VERSION, "status": "PASS", "qualification_pass": True,
+            "graph_qualification_registered": False, "independent_human_qualification": False,
+            "input_hashes": {"input.json": hashlib.sha256(original).hexdigest()},
+            "code_sha256": {"authored_evaluator": "b"*64}, "image_code_sha256": {"authored_image": "c"*64},
+            "runtime": {"authored_runtime": True}, "evaluated_at": "2026-01-02T00:00:00Z",
+            "invocation": {"bundle_descriptor": {"relative": "input.json", "sha256": hashlib.sha256(original).hexdigest()},
+                "expected_preregistration_sha256": "a"*64},
+            "cases": {"private-source-text": True}, "study_id": "private-study",
+            "measured_arms": {"authored": {"count": 1, "cases": {"private-source-text": True}}}}
+        with ExitStack() as stack:
+            # This fixture exercises publication IO only. It cannot qualify any
+            # study: the complete evaluator is replaced by a fixed test port.
+            stack.enter_context(patch.object(module, "evaluate", return_value=deepcopy(result)))
+            stack.enter_context(patch.object(module, "evaluator_identity", return_value=result["code_sha256"]))
+            stack.enter_context(patch.object(module, "runtime_receipt", return_value=result["runtime"]))
+            stack.enter_context(patch("src.parallel_source_v4.image_ocr.code_identity", return_value=result["image_code_sha256"]))
+            yield module, result, anchors
+
+    def test_input_write_race_is_durably_invalidated_after_restoration(self):
+        for trigger in ("evaluation.json", "publication-complete.json"):
+            with self.subTest(trigger=trigger), tempfile.TemporaryDirectory() as d, self.fixture(d) as (module, result, anchors):
+                original = (Path(d)/"input.json").read_bytes()
+                real_write = module.write_once
+                def during_write(path, value):
+                    sha = real_write(path, value)
+                    if path.name == trigger:
+                        (Path(d)/"input.json").write_bytes(b"changed during publication")
+                    return sha
+                with patch.object(module, "write_once", side_effect=during_write):
+                    receipt = publish(d, "attempt", result, **anchors)
+                self.assertEqual(receipt["status"], "BLOCKED")
+                self.assertFalse(receipt["qualification_pass"])
+                directory = Path(d)/"attempt"
+                self.assertTrue((directory/"evaluation.json").is_file())
+                self.assertTrue((directory/"public-summary.json").is_file())
+                marker = json.loads((directory/"publication-invalidated.json").read_bytes())
+                self.assertEqual(marker["status"], "BLOCKED")
+                self.assertFalse(marker["qualification_pass"])
+                self.assertEqual((directory/"publication-complete.json").exists(), trigger == "publication-complete.json")
+                (Path(d)/"input.json").write_bytes(original)
+                descriptor = {"relative": "attempt/evaluation.json",
+                    "sha256": hashlib.sha256((directory/"evaluation.json").read_bytes()).hexdigest()}
+                with self.assertRaisesRegex(EvidenceError, "publication_invalidated"):
+                    verify_published(d, descriptor, **anchors)
+
+    def test_code_image_and_runtime_drift_during_write_block_publication(self):
+        ports = ("src.paper_qualification_v1.evaluator_identity",
+                 "src.parallel_source_v4.image_ocr.code_identity", "src.paper_qualification_v1.runtime_receipt")
+        for target, field in zip(ports, ("code_sha256", "image_code_sha256", "runtime")):
+            with self.subTest(port=target), tempfile.TemporaryDirectory() as d, self.fixture(d) as (module, result, anchors):
+                changed = False
+                real_write = module.write_once
+                def during_write(path, value):
+                    nonlocal changed
+                    sha = real_write(path, value)
+                    if path.name == "evaluation.json": changed = True
+                    return sha
+                with patch(target, side_effect=lambda *args: {"changed": True} if changed else result[field]), \
+                        patch.object(module, "write_once", side_effect=during_write):
+                    receipt = publish(d, "attempt", result, **anchors)
+                self.assertEqual(receipt["status"], "BLOCKED")
+                self.assertFalse(receipt["qualification_pass"])
+                self.assertTrue((Path(d)/"attempt/publication-invalidated.json").is_file())
+
+    def test_caller_result_mutation_cannot_change_validated_publication(self):
+        with tempfile.TemporaryDirectory() as d, self.fixture(d) as (module, result, anchors):
+            real_write = module.write_once
+            def during_write(path, value):
+                if path.name == "evaluation.json":
+                    result["measured_arms"]["authored"]["count"] = 999
+                    result["invocation"]["expected_preregistration_sha256"] = "f"*64
+                return real_write(path, value)
+            with patch.object(module, "write_once", side_effect=during_write):
+                receipt = publish(d, "attempt", result, **anchors)
+            recorded = json.loads((Path(d)/"attempt/evaluation.json").read_bytes())
+            self.assertEqual(recorded["measured_arms"]["authored"]["count"], 1)
+            self.assertEqual(recorded["invocation"]["expected_preregistration_sha256"], "a"*64)
+            descriptor = {"relative": "attempt/evaluation.json", "sha256": receipt["private_evaluation_sha256"]}
+            self.assertTrue(verify_published(d, descriptor, **anchors)["qualification_pass"])
+
+    def test_trust_revoke_or_enroll_during_write_invalidates_publication(self):
+        for action in ("revoke", "enroll"):
+            with self.subTest(action=action), tempfile.TemporaryDirectory() as d, self.fixture(d) as (module, result, anchors):
+                signer = Signer.ephemeral("authored-publication-reviewer")
+                policy = IssuerPolicy(public_key=signer.public_key(), principal="authored-reviewer",
+                    purposes=frozenset({"RUN_CHECKPOINT"}), operations=frozenset(), scopes=frozenset(),
+                    modes=frozenset({"AUTHORED_CONTRACT_TEST"}), can_review=True)
+                anchors["trust"].enroll(signer.issuer, policy)
+                real_write = module.write_once
+                def during_write(path, value):
+                    sha = real_write(path, value)
+                    if path.name == "evaluation.json":
+                        if action == "revoke": anchors["trust"].revoke(signer.issuer)
+                        else: anchors["trust"].enroll("authored-additional-reviewer", policy)
+                    return sha
+                with patch.object(module, "write_once", side_effect=during_write):
+                    receipt = publish(d, "attempt", result, **anchors)
+                self.assertEqual(receipt["status"], "BLOCKED")
+                self.assertFalse(receipt["qualification_pass"])
+                self.assertTrue((Path(d)/"attempt/publication-invalidated.json").is_file())
+
+    def test_verifier_owns_receipt_descriptor_during_replay(self):
+        with tempfile.TemporaryDirectory() as d, self.fixture(d) as (module, result, anchors):
+            receipt = publish(d, "attempt", result, **anchors)
+            expected = receipt["private_evaluation_sha256"]
+            descriptor = {"relative": "attempt/evaluation.json", "sha256": expected}
+            def during_replay(*args, **kwargs):
+                descriptor.update(relative="not-the-pinned-receipt.json", sha256="f"*64)
+                return deepcopy(result)
+            with patch.object(module, "evaluate", side_effect=during_replay):
+                verified = verify_published(d, descriptor, **anchors)
+            self.assertEqual(verified["evaluation_sha256"], expected)
+
+    def test_evaluator_owns_bundle_descriptor_and_observes_live_trust(self):
+        from src import paper_qualification_v1 as module
+        descriptor = {"relative": "authored-bundle.json", "sha256": "a"*64}
+        initial = deepcopy(descriptor)
+        trust = TrustStore()
+        def during_evaluation(root, passed, **kwargs):
+            descriptor["sha256"] = "f"*64
+            return {"descriptor": passed}
+        with patch.object(module, "_evaluate", side_effect=during_evaluation):
+            result = evaluate(".", descriptor, expected_preregistration_sha256="b"*64,
+                trust=trust, at="2026-01-02T00:00:00Z")
+        self.assertEqual(result["descriptor"], initial)
+        signer = Signer.ephemeral("authored-reviewer")
+        trust.enroll(signer.issuer, IssuerPolicy(public_key=signer.public_key(), principal="authored",
+            purposes=frozenset({"RUN_CHECKPOINT"}), operations=frozenset(), scopes=frozenset(), modes=frozenset()))
+        def revoke(*args, **kwargs):
+            trust.revoke(signer.issuer)
+            return {"status": "PASS", "qualification_pass": True}
+        with patch.object(module, "_evaluate", side_effect=revoke):
+            result = evaluate(".", initial, expected_preregistration_sha256="b"*64,
+                trust=trust, at="2026-01-02T00:00:00Z")
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertEqual(result["reason"], "review_trust_changed_during_evaluation")
+
+    def test_completion_and_derived_public_contents_are_required(self):
+        with tempfile.TemporaryDirectory() as d, self.fixture(d) as (_, result, anchors):
+            receipt = publish(d, "attempt", result, **anchors)
+            descriptor = {"relative": "attempt/evaluation.json", "sha256": receipt["private_evaluation_sha256"]}
+            self.assertTrue(verify_published(d, descriptor, **anchors)["qualification_pass"])
+            directory = Path(d)/"attempt"
+            public = json.loads((directory/"public-summary.json").read_bytes())
+            self.assertNotIn("private-source-text", json.dumps(public))
+            self.assertNotIn("private-study", json.dumps(public))
+            marker_path = directory/"publication-complete.json"
+            marker_raw = marker_path.read_bytes()
+            marker_path.unlink()
+            with self.assertRaisesRegex(EvidenceError, "publication_completion_required"):
+                verify_published(d, descriptor, **anchors)
+            marker_path.write_bytes(marker_raw)
+            for field, wrong in (("qualification_pass", 1), ("private_evaluation_sha256", "f"*64)):
+                tampered = deepcopy(public); tampered[field] = wrong
+                raw = json.dumps(tampered).encode()
+                (directory/"public-summary.json").write_bytes(raw)
+                marker = json.loads(marker_raw); marker["public_summary_sha256"] = hashlib.sha256(raw).hexdigest()
+                marker_path.write_text(json.dumps(marker), encoding="utf-8")
+                with self.subTest(field=field), self.assertRaisesRegex(EvidenceError, "public_summary_does_not_match"):
+                    verify_published(d, descriptor, **anchors)
 
 
 @unittest.skipUnless(PDF_STACK_AVAILABLE, "optional PDF/image fixture dependencies unavailable")

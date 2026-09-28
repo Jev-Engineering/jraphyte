@@ -221,11 +221,30 @@ recomputes the complete evaluation under those external trust anchors and
 requires exact result equality, then rechecks all inputs. A fabricated PASS dict
 or modified metric fails before any output directory is created. Only a strictly
 shaped nonqualifying BLOCKED error can be published without study evidence.
+Caller-owned results and artifact descriptors are copied before validation;
+later caller mutation cannot change the validated claim. The live application's
+trust store is retained. Its complete public issuer policies and revocation set
+are fingerprinted before evaluation and checked after evaluation, publication
+writes and verifier replay. Enrollment or revocation during these operations
+blocks the operation instead of preserving stale authority.
 It writes immutable `evaluation.json` and a redacted
-`public-summary.json`. Private paths, per-work rows, study identity and review
+`public-summary.json`, then rechecks the bound inputs, evaluator/image code,
+runtime and written outputs. It writes `publication-complete.json` only after
+those checks and rechecks again after that write. A write or integrity failure
+preserves the attempted files, records a separate
+`publication-invalidated.json`, and returns BLOCKED; failure to persist that
+marker raises instead of returning success. An invalidated directory remains
+ineligible even if changed inputs are later restored. Retry into a fresh
+directory after correcting the cause.
+
+Private paths, per-work rows, study identity and review
 audit membership are omitted from the public summary. `verify_published` takes
 the private receipt's externally pinned descriptor, original preregistration
-trust anchor and trust store, then recomputes the complete evaluation. A copied
+trust anchor and trust store, requires completion without an invalidation marker,
+checks the public summary against deterministic redaction of the pinned private
+result, and recomputes the complete evaluation. Checksums in the completion
+marker cannot authorize different public claims. Later external changes still
+require this full readback; a completion marker alone is not authority. A copied
 `PASS` field or a public summary cannot qualify a study.
 
 `AUTHORED_CONTRACT_TEST` can return
