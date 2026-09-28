@@ -173,7 +173,10 @@ def wire_request(pack: dict[str, Any]) -> bytes:
         questions[q["id"]] = {"type":primitive.lower(),"instructions":q["instructions"],"criteria":value}
     # Preserve criterion insertion order on the wire. Canonical hash is separate.
     import json
-    return json.dumps({"model":pack["model_version"],"state":pack["state"],"questions":questions},
+    request = {"model":pack["model_version"],"state":pack["state"],"questions":questions}
+    if "model_profile" in pack:
+        request["model_profile"] = pack["model_profile"]
+    return json.dumps(request,
                       ensure_ascii=False, separators=(",",":"),allow_nan=False).encode("utf-8")
 
 def semantic_input(pack: dict[str, Any]) -> dict[str, Any]:
@@ -181,6 +184,8 @@ def semantic_input(pack: dict[str, Any]) -> dict[str, Any]:
               "model_version","program_version","materializer_version","packing_version","tokenizer_version",
               "candidate_ids","prior_observation_ids","questions","state","closure","materialization","transformation")
     result = {k:deepcopy(pack[k]) for k in fields}
+    if "model_profile" in pack:
+        result["model_profile"] = deepcopy(pack["model_profile"])
     from .retrieval.integration import LINEAGE_FIELDS
     result.update({k:deepcopy(pack[k]) for k in LINEAGE_FIELDS if k in pack})
     return result
@@ -197,8 +202,9 @@ def compile_pack(catalog: Catalog, *, id_: str, run_id: str, candidate_ids: list
                  transformation: str = "identity-v1", token_counter: Callable[[Any],int] | None = None,
                  tokenizer_version: str = "utf8-byte-estimate-v1", request_cap: int = 64000,
                  state_longest_cap: int = 32000, graph_context_ids: list[str] | None = None,
-                 source_retrieval_ids: list[str] | None = None) -> str:
-    require(bool(MODEL_PATTERN.fullmatch(model_version)), "MODEL_VERSION_UNPINNED", model_version)
+                 source_retrieval_ids: list[str] | None = None, model_profile: dict | None = None) -> str:
+    from .semantic_profile import validate_model, adapter_for
+    validate_model(model_version, model_profile)
     require(len(candidate_ids) == len(set(candidate_ids)) and bool(candidate_ids),"DUPLICATE_ID","candidate roots")
     prior = sorted(prior_observation_ids or [])
     require(len(prior) == len(set(prior)),"DUPLICATE_ID","prior observations")
@@ -211,6 +217,8 @@ def compile_pack(catalog: Catalog, *, id_: str, run_id: str, candidate_ids: list
             "tokenizer_version":tokenizer_version,"candidate_ids":sorted(candidate_ids),"prior_observation_ids":prior,
             "questions":deepcopy(questions),"state":state,"closure":closed,"materialization":traces,
             "transformation":transformation,"created_at":created_at or now()}
+    if model_profile is not None:
+        pack["model_profile"] = deepcopy(model_profile)
     if graph_context_ids is not None or source_retrieval_ids is not None:
         from .retrieval.integration import lineage_fields
         pack.update(lineage_fields(catalog, graph_context_ids or [], source_retrieval_ids or [], closed["hash"]))
@@ -224,7 +232,7 @@ def compile_pack(catalog: Catalog, *, id_: str, run_id: str, candidate_ids: list
     pack["request_base64"] = base64.b64encode(wire).decode("ascii")
     pack["wire_request_hash"] = bytes_digest(wire)
     pack["cache_key"] = digest({"semantic_hash":pack["semantic_hash"],"wire_request_hash":pack["wire_request_hash"],
-                                "tenant":security_scope,"mode":execution_mode,"adapter":"typesafe-http-v1"})
+                                "tenant":security_scope,"mode":execution_mode,"adapter":adapter_for(pack)})
     # Validate before adding; never bless a caller-constructed "complete" flag.
     validate_pack(catalog,pack)
     return catalog.put("pack",pack,id_)
@@ -234,7 +242,13 @@ def validate_pack(catalog: Catalog, pack: dict[str, Any], *, source_status: dict
                   historical: bool = False, current_graph_access: dict[str, Any] | None = None) -> None:
     from .schema import validate
     validate("pack",pack)
-    require(bool(MODEL_PATTERN.fullmatch(pack["model_version"])),"MODEL_VERSION_UNPINNED",pack["model_version"])
+    from .semantic_profile import validate_model, adapter_for
+    validate_model(pack["model_version"], pack.get("model_profile"))
+    if "model_profile" in pack:
+        require(pack["program_version"] == "fixed-questions-v1" and
+                all(q["primitive"] == "CHOICE" and not q["depends_on"] for q in pack["questions"]) and
+                pack["tokenizer_version"] == "tokenizer-sha256:" + pack["model_profile"]["tokenizer_sha256"],
+                "LOCAL_SEMANTIC_PROFILE", "local profile supports independent CHOICE questions and its pinned tokenizer only")
     expected_state,expected_closure,expected_trace = materialize(catalog, pack["candidate_ids"],
                                                 pack["prior_observation_ids"],pack["snapshot_id"],pack["transformation"],
                                                 pack.get("graph_context_ids"),pack.get("source_retrieval_ids"))
@@ -295,7 +309,7 @@ def validate_pack(catalog: Catalog, pack: dict[str, Any], *, source_status: dict
     require(pack["request_base64"] == base64.b64encode(request).decode() and pack["wire_request_hash"] == bytes_digest(request),
             "WIRE_REQUEST_HASH","actual adapter bytes differ")
     require(pack["cache_key"] == digest({"semantic_hash":pack["semantic_hash"],"wire_request_hash":pack["wire_request_hash"],
-             "tenant":pack["security_scope"],"mode":pack["execution_mode"],"adapter":"typesafe-http-v1"}),"CACHE_SCOPE","cache identity differs")
+             "tenant":pack["security_scope"],"mode":pack["execution_mode"],"adapter":adapter_for(pack)}),"CACHE_SCOPE","cache identity differs")
     b = pack["budget"]
     require(set(b["question_tokens"]) == set(ids),"PACK_BUDGET_ACCOUNTING","question estimates incomplete")
     require(b["state_tokens"] + sum(b["question_tokens"].values()) <= b["request_cap"] and

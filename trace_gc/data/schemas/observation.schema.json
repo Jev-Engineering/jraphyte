@@ -60,7 +60,10 @@
       "pattern": "^[0-9a-f]{64}$"
     },
     "adapter_version": {
-      "const": "typesafe-http-v1"
+      "enum": [
+        "typesafe-http-v1",
+        "local-qwen-semantic-v1"
+      ]
     },
     "model_requested": {
       "type": "string",
@@ -176,33 +179,170 @@
       "format": "date-time"
     },
     "wire": {
-      "type": "object",
-      "properties": {
-        "request_base64": {
-          "type": "string",
-          "minLength": 1
-        },
-        "response_base64": {
-          "type": "string"
-        },
-        "http_status": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "response_headers": {
+      "oneOf": [
+        {
           "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
+          "properties": {
+            "request_base64": {
+              "type": "string",
+              "minLength": 1
+            },
+            "response_base64": {
+              "type": "string"
+            },
+            "http_status": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "response_headers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "request_base64",
+            "response_base64",
+            "http_status",
+            "response_headers"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "transport": {
+              "const": "LOCAL_TRANSFORMERS"
+            },
+            "request_base64": {
+              "type": "string",
+              "minLength": 1
+            },
+            "response_base64": {
+              "type": "string"
+            },
+            "execution": {
+              "type": "object",
+              "properties": {
+                "version": {
+                  "const": "local-semantic-execution-v1"
+                },
+                "profile_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "request_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "prompt_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "response_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "prompt_base64": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "execution_preflight_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "input_token_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "minItems": 1
+                },
+                "output_token_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "minItems": 0
+                },
+                "input_tokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "output_tokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "started_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "completed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "finish_reason": {
+                  "enum": [
+                    "eos",
+                    "length",
+                    "error"
+                  ]
+                },
+                "response_source": {
+                  "enum": [
+                    "ACTUAL_MODEL_EXECUTION",
+                    "AUTHORED_SYNTHETIC"
+                  ]
+                },
+                "paid_api_calls": {
+                  "const": 0
+                },
+                "cost_usd": {
+                  "const": 0
+                },
+                "graph_writes": {
+                  "const": 0
+                },
+                "publication_authorized": {
+                  "const": false
+                }
+              },
+              "required": [
+                "version",
+                "profile_sha256",
+                "request_sha256",
+                "prompt_sha256",
+                "response_sha256",
+                "prompt_base64",
+                "execution_preflight_sha256",
+                "input_token_ids",
+                "output_token_ids",
+                "input_tokens",
+                "output_tokens",
+                "started_at",
+                "completed_at",
+                "finish_reason",
+                "response_source",
+                "paid_api_calls",
+                "cost_usd",
+                "graph_writes",
+                "publication_authorized"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "transport",
+            "request_base64",
+            "response_base64",
+            "execution"
+          ],
+          "additionalProperties": false
         }
-      },
-      "required": [
-        "request_base64",
-        "response_base64",
-        "http_status",
-        "response_headers"
-      ],
-      "additionalProperties": false
+      ]
     },
     "graph_retrieval_query_ids": {
       "type": "array",
@@ -235,6 +375,142 @@
     "retrieval_fingerprint": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
+    },
+    "model_profile": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": "local-qwen-choice-profile-v1"
+        },
+        "provider": {
+          "const": "local-transformers"
+        },
+        "model_id": {
+          "const": "Qwen/Qwen3-4B-Instruct-2507"
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "model_manifest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "snapshot_files_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "tokenizer_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "tokenizer_config_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "adapter_version": {
+          "const": "local-qwen-semantic-v1"
+        },
+        "prompt_version": {
+          "const": "qwen-choice-json-v1"
+        },
+        "prompt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "scoring": {
+          "const": "MODEL_GENERATED_UNCALIBRATED"
+        },
+        "generation": {
+          "type": "object",
+          "properties": {
+            "do_sample": {
+              "const": false
+            },
+            "dtype": {
+              "const": "bfloat16"
+            },
+            "device": {
+              "enum": [
+                "cpu",
+                "cuda:0"
+              ]
+            },
+            "threads": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8
+            },
+            "maximum_input_tokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8192
+            },
+            "maximum_new_tokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2048
+            }
+          },
+          "required": [
+            "do_sample",
+            "dtype",
+            "device",
+            "threads",
+            "maximum_input_tokens",
+            "maximum_new_tokens"
+          ],
+          "additionalProperties": false
+        },
+        "runtime": {
+          "type": "object",
+          "properties": {
+            "python": {
+              "type": "string",
+              "minLength": 1
+            },
+            "torch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "transformers": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "python",
+            "torch",
+            "transformers"
+          ],
+          "additionalProperties": false
+        },
+        "implementation_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "version",
+        "provider",
+        "model_id",
+        "revision",
+        "model_manifest_sha256",
+        "snapshot_files_sha256",
+        "tokenizer_sha256",
+        "tokenizer_config_sha256",
+        "adapter_version",
+        "prompt_version",
+        "prompt_sha256",
+        "scoring",
+        "generation",
+        "runtime",
+        "implementation_sha256"
+      ],
+      "additionalProperties": false
+    },
+    "score_origin": {
+      "const": "MODEL_GENERATED_UNCALIBRATED"
     }
   },
   "required": [
@@ -267,5 +543,204 @@
     "completed_at",
     "wire"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "adapter_version": {
+            "const": "local-qwen-semantic-v1"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "model_profile",
+          "score_origin"
+        ],
+        "properties": {
+          "wire": {
+            "type": "object",
+            "properties": {
+              "transport": {
+                "const": "LOCAL_TRANSFORMERS"
+              },
+              "request_base64": {
+                "type": "string",
+                "minLength": 1
+              },
+              "response_base64": {
+                "type": "string"
+              },
+              "execution": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "const": "local-semantic-execution-v1"
+                  },
+                  "profile_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "request_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "prompt_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "response_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "prompt_base64": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "execution_preflight_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "input_token_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "minItems": 1
+                  },
+                  "output_token_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "minItems": 0
+                  },
+                  "input_tokens": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "output_tokens": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "started_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "completed_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "finish_reason": {
+                    "enum": [
+                      "eos",
+                      "length",
+                      "error"
+                    ]
+                  },
+                  "response_source": {
+                    "enum": [
+                      "ACTUAL_MODEL_EXECUTION",
+                      "AUTHORED_SYNTHETIC"
+                    ]
+                  },
+                  "paid_api_calls": {
+                    "const": 0
+                  },
+                  "cost_usd": {
+                    "const": 0
+                  },
+                  "graph_writes": {
+                    "const": 0
+                  },
+                  "publication_authorized": {
+                    "const": false
+                  }
+                },
+                "required": [
+                  "version",
+                  "profile_sha256",
+                  "request_sha256",
+                  "prompt_sha256",
+                  "response_sha256",
+                  "prompt_base64",
+                  "execution_preflight_sha256",
+                  "input_token_ids",
+                  "output_token_ids",
+                  "input_tokens",
+                  "output_tokens",
+                  "started_at",
+                  "completed_at",
+                  "finish_reason",
+                  "response_source",
+                  "paid_api_calls",
+                  "cost_usd",
+                  "graph_writes",
+                  "publication_authorized"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "transport",
+              "request_base64",
+              "response_base64",
+              "execution"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "else": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "model_profile"
+              ]
+            },
+            {
+              "required": [
+                "score_origin"
+              ]
+            }
+          ]
+        },
+        "properties": {
+          "wire": {
+            "type": "object",
+            "properties": {
+              "request_base64": {
+                "type": "string",
+                "minLength": 1
+              },
+              "response_base64": {
+                "type": "string"
+              },
+              "http_status": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "response_headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "request_base64",
+              "response_base64",
+              "http_status",
+              "response_headers"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    }
+  ]
 }

@@ -416,6 +416,139 @@
     "retrieval_fingerprint": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
+    },
+    "model_profile": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": "local-qwen-choice-profile-v1"
+        },
+        "provider": {
+          "const": "local-transformers"
+        },
+        "model_id": {
+          "const": "Qwen/Qwen3-4B-Instruct-2507"
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "model_manifest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "snapshot_files_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "tokenizer_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "tokenizer_config_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "adapter_version": {
+          "const": "local-qwen-semantic-v1"
+        },
+        "prompt_version": {
+          "const": "qwen-choice-json-v1"
+        },
+        "prompt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "scoring": {
+          "const": "MODEL_GENERATED_UNCALIBRATED"
+        },
+        "generation": {
+          "type": "object",
+          "properties": {
+            "do_sample": {
+              "const": false
+            },
+            "dtype": {
+              "const": "bfloat16"
+            },
+            "device": {
+              "enum": [
+                "cpu",
+                "cuda:0"
+              ]
+            },
+            "threads": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8
+            },
+            "maximum_input_tokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8192
+            },
+            "maximum_new_tokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2048
+            }
+          },
+          "required": [
+            "do_sample",
+            "dtype",
+            "device",
+            "threads",
+            "maximum_input_tokens",
+            "maximum_new_tokens"
+          ],
+          "additionalProperties": false
+        },
+        "runtime": {
+          "type": "object",
+          "properties": {
+            "python": {
+              "type": "string",
+              "minLength": 1
+            },
+            "torch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "transformers": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "python",
+            "torch",
+            "transformers"
+          ],
+          "additionalProperties": false
+        },
+        "implementation_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "version",
+        "provider",
+        "model_id",
+        "revision",
+        "model_manifest_sha256",
+        "snapshot_files_sha256",
+        "tokenizer_sha256",
+        "tokenizer_config_sha256",
+        "adapter_version",
+        "prompt_version",
+        "prompt_sha256",
+        "scoring",
+        "generation",
+        "runtime",
+        "implementation_sha256"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [

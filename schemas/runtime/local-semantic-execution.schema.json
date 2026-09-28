@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:trace-gc:0.3.0:local-semantic-execution",
+  "title": "TRACE-GC local-semantic-execution v0.3.0",
+  "type": "object",
+  "properties": {
+    "version": {
+      "const": "local-semantic-execution-v1"
+    },
+    "profile_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "request_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "prompt_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "response_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "prompt_base64": {
+      "type": "string",
+      "minLength": 1
+    },
+    "execution_preflight_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "input_token_ids": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "minItems": 1
+    },
+    "output_token_ids": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "minItems": 0
+    },
+    "input_tokens": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "output_tokens": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finish_reason": {
+      "enum": [
+        "eos",
+        "length",
+        "error"
+      ]
+    },
+    "response_source": {
+      "enum": [
+        "ACTUAL_MODEL_EXECUTION",
+        "AUTHORED_SYNTHETIC"
+      ]
+    },
+    "paid_api_calls": {
+      "const": 0
+    },
+    "cost_usd": {
+      "const": 0
+    },
+    "graph_writes": {
+      "const": 0
+    },
+    "publication_authorized": {
+      "const": false
+    }
+  },
+  "required": [
+    "version",
+    "profile_sha256",
+    "request_sha256",
+    "prompt_sha256",
+    "response_sha256",
+    "prompt_base64",
+    "execution_preflight_sha256",
+    "input_token_ids",
+    "output_token_ids",
+    "input_tokens",
+    "output_tokens",
+    "started_at",
+    "completed_at",
+    "finish_reason",
+    "response_source",
+    "paid_api_calls",
+    "cost_usd",
+    "graph_writes",
+    "publication_authorized"
+  ],
+  "additionalProperties": false
+}

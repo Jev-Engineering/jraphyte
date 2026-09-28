@@ -71,8 +71,17 @@ def parse_answer(question: dict[str,Any], answer: Any) -> tuple[dict[str,float],
 @boundary
 def record_response(catalog: Catalog, pack_id: str, response: bytes, *, http_status: int = 200,
                     response_headers: dict[str,str] | None = None, completed_at: str | None = None,
-                    supersedes: dict[str,str] | None = None, transport_error: str | None = None) -> list[str]:
+                    supersedes: dict[str,str] | None = None, transport_error: str | None = None,
+                    local_execution: dict | None = None) -> list[str]:
     pack=catalog.get(pack_id,"pack"); validate_pack(catalog,pack)
+    if "model_profile" in pack:
+        require(local_execution is not None and http_status == 200 and not response_headers and
+                supersedes is None and transport_error is None and
+                (completed_at is None or completed_at == local_execution["completed_at"]),
+                "LOCAL_SEMANTIC_TRANSPORT", "local execution evidence required; HTTP/retry metadata forbidden")
+        from .local_semantics import record_local_response
+        return record_local_response(catalog, pack_id, response, execution=local_execution)
+    require(local_execution is None, "LOCAL_SEMANTIC_TRANSPORT", "local execution cannot be imported as TypeSafe HTTP")
     require(len(response) <= MAX_RESPONSE,"RESPONSE_TOO_LARGE","receipt byte limit exceeded")
     when=completed_at or now()
     require(timestamp(when)>=timestamp(pack["created_at"]),"TEMPORAL_ORDER","response before request")
@@ -121,6 +130,11 @@ def record_response(catalog: Catalog, pack_id: str, response: bytes, *, http_sta
 @boundary
 def validate_observation(catalog: Catalog, observation_id: str) -> None:
     o=catalog.get(observation_id,"observation"); p=catalog.get(o["pack_id"],"pack")
+    if o["adapter_version"] == "local-qwen-semantic-v1":
+        from .local_semantics import validate_local_observation
+        return validate_local_observation(catalog, observation_id)
+    require("model_profile" not in p and o["adapter_version"] == ADAPTER,
+            "LOCAL_SEMANTIC_TRANSPORT", "adapter identity differs from compiled profile")
     from .retrieval.integration import validate_observation_lineage
     validate_observation_lineage(o, p)
     q=next((q for q in p["questions"] if q["id"]==o["question_id"]),None)
@@ -181,6 +195,7 @@ class TypeSafeAdapter:
                  max_retries: int = 2, current_graph_access: dict[str, Any] | None = None) -> list[str]:
         require(self.enabled and bool(self.api_key),"LIVE_DISABLED","explicit capability and externally supplied credentials required")
         pack=catalog.get(pack_id,"pack")
+        require("model_profile" not in pack, "LOCAL_SEMANTIC_TRANSPORT", "local profile cannot be sent to TypeSafe HTTP")
         require(pack["execution_mode"]=="LIVE","MODE_MISMATCH","live adapter cannot label calls synthetic or recorded")
         require(pack["budget"]["measured"] and pack["tokenizer_version"]!="utf8-byte-estimate-v1","TOKENIZER_UNQUALIFIED","live cap checks need a measured tokenizer")
         require(budget.run_id==pack["run_id"],"BUDGET_SCOPE","another run's budget")

@@ -56,7 +56,7 @@ class PaperPilot:
 
     @boundary
     def __init__(self, root, *, config, catalog, backend, service, budget, current_access,
-                 token_counter=None):
+                 token_counter=None, semantic_profile=None):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         require(type(backend) is SQLiteReferenceBackend and type(service) is CompilerService and
@@ -67,6 +67,7 @@ class PaperPilot:
         self.catalog, self.backend, self.service, self.budget = catalog, backend, service, budget
         self.trust, self.current_access, self.token_counter = service.trust, current_access, token_counter
         self.config = loads(dumps(config))
+        self.semantic_profile = loads(dumps(semantic_profile))
         require(set(config) == {"run_id", "security_scope", "execution_mode", "documents", "questions",
                 "semantic_model", "answer_model", "cohort_manifest_sha256"}, "PILOT_CONFIG", "exact config fields required")
         require(config["execution_mode"] in {"LIVE", "SYNTHETIC"} and
@@ -89,6 +90,13 @@ class PaperPilot:
                     all(type(v) is str and v.strip() for v in model.values()), "PILOT_MODEL", "pinned model identity required")
         require(config["execution_mode"] != "LIVE" or callable(token_counter),
                 "PILOT_MODEL", "real semantic requests require application tokenizer")
+        if semantic_profile is not None:
+            from .semantic_profile import validate_profile
+            validate_profile(semantic_profile)
+            require(config["semantic_model"] == {"provider": semantic_profile["provider"],
+                    "model_id": semantic_profile["model_id"], "model_revision": semantic_profile["revision"],
+                    "tokenizer_id": "tokenizer-sha256:" + semantic_profile["tokenizer_sha256"]},
+                    "PILOT_MODEL", "local profile differs from frozen application model")
         self._identity = implementation_identity()
         self._mutex = threading.RLock()
         self._lock_file = (self.root / "controller.lock").open("a+b")
@@ -115,6 +123,7 @@ class PaperPilot:
             events = self.db.execute("SELECT seq,body,hash FROM events ORDER BY seq").fetchall()
             self._head = None
             expected = {"config": self.config, "implementation": self._identity,
+                        "semantic_profile": self.semantic_profile,
                         "budget_limits": budget.snapshot()["limits"], "schema_hash": backend.state()["schema_hash"],
                         "policy_hash": service.policy_hash, "population": service.population,
                         "policy_version": service.policy_version, "sandbox": backend.sandbox}
@@ -205,6 +214,7 @@ class PaperPilot:
                     self.service.scope == self.config["security_scope"] and self.service.publication_mode == "REVIEWED" and
                     self.budget.run_id == self.config["run_id"] and
                     digest({"config": self.config, "budget_limits": self.budget.snapshot()["limits"],
+                            "semantic_profile": self.semantic_profile,
                             "schema_hash": self.backend.state()["schema_hash"], "policy_hash": self.service.policy_hash,
                             "population": self.service.population, "policy_version": self.service.policy_version,
                             "sandbox": self.backend.sandbox}) == self._application_binding,
@@ -407,6 +417,20 @@ class PaperPilot:
         return result, pack
 
     @boundary
+    def semantic_execution_context(self, compile_id):
+        """Fresh application callback for a separately authorized local execution.
+
+        This does not reserve another model call, sign a response or run a model.
+        The durable COMPILE intent must already exist.
+        """
+        result, pack = self._pack_fresh(compile_id)
+        context = {"pack_sha256": self.catalog.hash(result["pack_id"]),
+                   "graph_version": pack["graph_version"], "schema_hash": pack["schema_hash"],
+                   "source_status": self.backend.statuses(), "graph_access": self._access()}
+        self._fresh(result["stamp"])
+        return context
+
+    @boundary
     def compile_candidates(self, id_, *, candidates):
         """Candidates are explicit application proposals, not inferred facts."""
         def compile_(created):
@@ -420,10 +444,12 @@ class PaperPilot:
                     run_id=self.config["run_id"], mode=self.config["execution_mode"],
                     generator="application-proposal-v1", **candidate))
             model = self.config["semantic_model"]
+            from .semantic_profile import model_version
+            pinned_model = model_version(self.semantic_profile) if self.semantic_profile is not None else model["model_id"]
             pack = compile_pack(self.catalog, id_=f"{self.config['run_id']}:{id_}:pack", run_id=self.config["run_id"],
                 candidate_ids=ids, questions=[question(ref, id_=f"q{i}") for i, ref in enumerate(ids)],
                 snapshot_id=stamp["snapshot_id"], security_scope=self.config["security_scope"],
-                execution_mode=self.config["execution_mode"], model_version=model["model_id"],
+                execution_mode=self.config["execution_mode"], model_version=pinned_model, model_profile=self.semantic_profile,
                 tokenizer_version=model["tokenizer_id"], token_counter=self.token_counter, created_at=created)
             self._fresh(stamp)
             body = self.catalog.get(pack, "pack")
@@ -436,21 +462,29 @@ class PaperPilot:
         return result
 
     def execution_payload(self, stage_id, *, kind, response_sha256, generated_at, usage, cost,
-                          response_source, provider_request_id):
+                          response_source, provider_request_id, local_execution_sha256=None):
         require(kind in {"SEMANTIC", "ANSWER"}, "PILOT_EXECUTION", "unsupported execution kind")
         result = self._result(stage_id, "COMPILE" if kind == "SEMANTIC" else "PREPARE_ANSWER")
+        extra = {}
+        if kind == "SEMANTIC" and self.semantic_profile is not None:
+            self._sha(local_execution_sha256)
+            extra = {"local_execution_sha256": local_execution_sha256, "model_profile_sha256": digest(self.semantic_profile)}
+        else:
+            require(local_execution_sha256 is None, "PILOT_EXECUTION", "unexpected local execution lineage")
         return self._payload(kind + "_RESPONSE", stage_id=stage_id,
             model=self.config["semantic_model" if kind == "SEMANTIC" else "answer_model"],
             pack_sha256=result.get("pack_sha256"), request_sha256=result["request_sha256"],
             response_sha256=response_sha256, generated_at=generated_at, usage=usage, cost=cost,
-            response_source=response_source, provider_request_id=provider_request_id)
+            response_source=response_source, provider_request_id=provider_request_id, **extra)
 
-    def _execution(self, stage_id, kind, response, receipt):
+    def _execution(self, stage_id, kind, response, receipt, local_execution=None):
         p = receipt["payload"]
         fields = ("generated_at", "usage", "cost", "response_source", "provider_request_id")
-        expected = self.execution_payload(stage_id, kind=kind, response_sha256=bytes_digest(response), **{k: p[k] for k in fields})
+        expected = self.execution_payload(stage_id, kind=kind, response_sha256=bytes_digest(response),
+            local_execution_sha256=digest(local_execution) if local_execution is not None else None, **{k: p[k] for k in fields})
         self._trusted(receipt, "OBSERVATION", kind + "_IMPORT", expected)
-        require(p["response_source"] == ("AUTHORED_SYNTHETIC" if self.config["execution_mode"] == "SYNTHETIC" else "ACTUAL_MODEL_EXECUTION"),
+        require(p["response_source"] == "ACTUAL_MODEL_EXECUTION" or
+                (self.config["execution_mode"] == "SYNTHETIC" and p["response_source"] == "AUTHORED_SYNTHETIC"),
                 "PILOT_EXECUTION", "real mode requires authenticated actual model output")
         require(type(p["provider_request_id"]) is str and bool(p["provider_request_id"]) and
                 set(p["usage"]) == {"input_tokens", "output_tokens"} and
@@ -458,6 +492,12 @@ class PaperPilot:
                 set(p["cost"]) == {"amount", "currency"} and p["cost"]["currency"] == "USD" and
                 type(p["cost"]["amount"]) in {int, float} and p["cost"]["amount"] >= 0,
                 "PILOT_EXECUTION", "actual usage, USD cost and execution identity required")
+        if local_execution is not None:
+            require(p["usage"] == {"input_tokens": local_execution["input_tokens"], "output_tokens": local_execution["output_tokens"]} and
+                    p["generated_at"] == local_execution["completed_at"] and
+                    p["response_source"] == local_execution["response_source"] and p["cost"]["amount"] == local_execution["cost_usd"] and
+                    local_execution["execution_preflight_sha256"] == digest(self.semantic_execution_context(stage_id)),
+                    "PILOT_EXECUTION", "signed execution receipt differs from local model readback")
         require(timestamp(self.requests[stage_id]["created_at"]) <= timestamp(p["generated_at"]) <= timestamp(receipt["issued_at"]),
                 "PILOT_EXECUTION", "execution time outside request/receipt interval")
 
@@ -467,32 +507,34 @@ class PaperPilot:
                 "one external outcome per exported request; unknown outcomes require reconciliation")
 
     @boundary
-    def record_semantic_response(self, id_, *, compile_id, response, execution_receipt):
+    def record_semantic_response(self, id_, *, compile_id, response, execution_receipt, local_execution=None):
         result, pack = self._pack_fresh(compile_id)
         require(type(response) is bytes, "PILOT_EXECUTION", "original response bytes required")
-        self._execution(compile_id, "SEMANTIC", response, execution_receipt)
+        self._execution(compile_id, "SEMANTIC", response, execution_receipt, local_execution)
         self._one_import(id_, "SEMANTIC_RESPONSE", "compile_id", compile_id)
         def record(_):
             ids = record_response(self.catalog, result["pack_id"], response,
-                                  completed_at=execution_receipt["payload"]["generated_at"])
-            if all(self.catalog.get(ref, "observation")["status"] == "OK" for ref in ids):
+                                  completed_at=execution_receipt["payload"]["generated_at"], local_execution=local_execution)
+            if local_execution is None and all(self.catalog.get(ref, "observation")["status"] == "OK" for ref in ids):
                 require(loads(response)["usage"] == execution_receipt["payload"]["usage"],
                         "PILOT_EXECUTION", "wire usage differs from execution receipt")
             # Execution receipts are private orchestration evidence. OBSERVATION
             # catalog receipts have the existing, narrower observation_hash contract.
             self._fresh(result["stamp"])
             return {"state": "WAIT_OBSERVATION_ATTESTATION", "observation_ids": ids, "compile_id": compile_id}
-        return self._step(id_, "SEMANTIC_RESPONSE", {"compile_id": compile_id,
-            "response_blob": self._blob(response), "execution_receipt": execution_receipt}, record)
+        arguments = {"compile_id": compile_id, "response_blob": self._blob(response), "execution_receipt": execution_receipt}
+        if local_execution is not None:
+            arguments["local_execution"] = local_execution
+        return self._step(id_, "SEMANTIC_RESPONSE", arguments, record)
 
     @boundary
     def resolve_plan(self, id_, *, response_id, attestations):
         response = self._result(response_id, "SEMANTIC_RESPONSE")
         imported = self.requests[response_id]["args"]
-        self._execution(response["compile_id"], "SEMANTIC", self._read_blob(imported["response_blob"]), imported["execution_receipt"])
+        self._execution(response["compile_id"], "SEMANTIC", self._read_blob(imported["response_blob"]), imported["execution_receipt"], imported.get("local_execution"))
         compiled, pack = self._pack_fresh(response["compile_id"])
         expected_ids = record_response(self.catalog, compiled["pack_id"], self._read_blob(imported["response_blob"]),
-                                       completed_at=imported["execution_receipt"]["payload"]["generated_at"])
+            completed_at=imported["execution_receipt"]["payload"]["generated_at"], local_execution=imported.get("local_execution"))
         require(response["compile_id"] == imported["compile_id"] and response["observation_ids"] == expected_ids,
                 "PILOT_EXECUTION", "checkpoint observations differ from authenticated model exchange")
         require(set(attestations) == set(response["observation_ids"]), "PILOT_ATTESTATION", "exact observation attestation coverage required")
