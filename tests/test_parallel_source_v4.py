@@ -76,9 +76,10 @@ class BoundaryTests(unittest.TestCase):
                  line(3, 'Conclusions: The method improves the reliability of transport analysis.', 170),
                  line(4, 'Keywords: transport; networks', 200)]
         result = assess(lines)
-        self.assertEqual(result['status'], 'uncertain')
-        self.assertFalse(result['proposal'])
-        self.assertEqual(result['reasons'], ['embedded_structured_section_requires_review'])
+        self.assert_prose(result, '\n'.join([lines[0]['text'][len('Abstract '):]]+[x['text'] for x in lines[1:4]]))
+        self.assertTrue(result['structured'])
+        self.assertEqual(result['closing_boundary']['kind'], 'metadata_or_nonabstract_region')
+        self.assertEqual(result['subsection_scope']['labels'], ['context', 'methods', 'results', 'conclusions'])
 
     def test_bold_inline_section_without_separator(self):
         text = 'Abstract '+ABSTRACT+' Overview '+BODY
