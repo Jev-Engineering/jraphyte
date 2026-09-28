@@ -795,6 +795,35 @@ def _collect(start: dict, ordered: list[dict], native: list[dict], explicit: boo
             gap = box[1]-prior_box[3]
             overlapping = box[1] < prior_box[3]-2 and x["coordinate_source"] != "native_alignment_estimate"
             if (narrowed and peers) or overlapping or gap > max(48, (prior_box[3]-prior_box[1])*.7):
+                # A figure label can start a few points above an inline body
+                # heading in the other lane. Resolve a unique, source-leading
+                # heading before treating that label as an ownership boundary.
+                # The paragraph after the heading is never admitted as abstract.
+                inline = []
+                diagram_label = (narrowed and len(text.split()) == 1
+                                 and len(canonical(text)) <= 24
+                                 and not re.search(r"[.!?]", text)
+                                 and box[2]-box[0] <= min(64, width*.25))
+                for h in local if diagram_label else ():
+                    if (h["ref"] in refs or h["ref"] == start["ref"] or h["label"] in EXCLUDED
+                            or not h["bbox"] or not prior_box[3]-2 <= h["bbox"][1] <= box[1]+8
+                            or h["bbox"][2] > box[0]-8):
+                        continue
+                    heading_prefix, embedded = _cut(h["text"], structured)
+                    if (heading_prefix.strip() or not embedded or embedded["kind"] != "embedded_body_section"
+                            or structured and normalize(embedded["label"]).lower().rstrip(": .") in INTERNAL):
+                        continue
+                    proof = _boundary_evidence({**h, "text": embedded["label"]}, native, embedded["kind"])
+                    if proof["source_location"] == "located":
+                        first = proof["source_spans"][0]
+                        first_line = next(n for n in native if str(n["id"]) == str(first["line_id"]))
+                        if not first_line["text"][:first["start"]].strip():
+                            inline.append({**proof, "source_text_scope": "source_leading_inline_heading_prefix"})
+                if len(inline) == 1:
+                    boundary = inline[0]
+                    ownership.append({"ref": boundary["ref"], "decision": "excluded",
+                                      "reason": "source_leading_inline_body_heading"})
+                    break
                 boundary = {"kind": "unresolved_section_ownership", "ref": x["ref"],
                             "reason": "multiple_body_lanes" if narrowed and peers else "overlapping_source_regions" if overlapping else "large_source_gap",
                             "region_boxes": x["boxes"], "peer_refs": [p["ref"] for p in peers]}
@@ -1304,6 +1333,28 @@ def assess_document(document: dict, *, page_size, source_sha256, page_sha256,
                 result.update(status="uncertain", reasons=["closing_boundary_with_unresolved_terminal_notation"])
             else:
                 result.update(status="complete", complete_candidate=True, reasons=["bounded_source_located_proposal"])
+        if result["status"] == "complete" and result["spans"] and (selected["boundary"] or {}).get("source_spans"):
+            # A narrow converter region outside the inferred content lane can
+            # still be a final abstract sentence. Do not let a later located
+            # body heading certify a proposal while that intervening source
+            # prose has no reviewed owner.
+            abstract_bottom = max(s["bbox"][3] for s in result["spans"])
+            boundary_top = min(s["bbox"][1] for s in selected["boundary"]["source_spans"])
+            outside_refs = {entry["ref"] for entry in selected["ownership"]
+                            if entry.get("decision") == "excluded" and entry.get("reason") == "outside_content_lane"}
+            for region in ordered:
+                if (region["ref"] not in outside_refs or region["label"] in EXCLUDED
+                        or len(re.findall(r"[A-Za-z]+", region["text"])) < 3
+                        or not SENTENCE_END.search(region["text"])):
+                    continue
+                witness = locate(region["text"], native, region_boxes=region["boxes"])
+                if (witness["status"] == "located" and witness["spans"] and not witness.get("column_change")
+                        and abstract_bottom-2 <= min(s["bbox"][1] for s in witness["spans"]) <= boundary_top+2):
+                    result.update(status="uncertain", complete_candidate=False, section_owner=None,
+                                  reasons=["unowned_source_prose_requires_review"])
+                    result["region_ownership"].append({"ref": region["ref"], "decision": "held",
+                        "reason": "source_prose_between_abstract_and_boundary", "source_spans": witness["spans"]})
+                    break
         if basis == "source_frontmatter_paragraph_requires_review" and result["status"] == "complete":
             result.update(status="uncertain", complete_candidate=False,
                           reasons=["unlabelled_frontmatter_ownership_requires_source_review"])
@@ -1316,7 +1367,10 @@ def assess_document(document: dict, *, page_size, source_sha256, page_sha256,
         result["proposal"] = result["status"] == "complete" and within_budget
         result["section_owner"] = "abstract" if result["status"] == "complete" and result["complete_candidate"] else None
         result["math_review_required"] = bool(re.search(r"[√∫∑∏≤≥∞]|\\(?:frac|sqrt|sum)|\$", text) or
-            any(x["label"] == "formula" and x["ref"] in selected["refs"] for x in ordered))
+            any(x["label"] == "formula" and x["ref"] in selected["refs"] for x in ordered) or
+            result.get("source_alignment", {}).get("logical_geometry", {}).get("notation_review_required") or
+            any(entry.get("source_alignment", {}).get("logical_geometry", {}).get("notation_review_required")
+                for entry in selected["ownership"] if entry.get("decision") == "included"))
         result["scholarly_alignment"] = compare(text, scholarly_abstract) if scholarly_abstract else None
         result = _interior_footnotes(result, native, ordered)
         if result.get("interior_footnote_exclusion", {}).get("applied"):

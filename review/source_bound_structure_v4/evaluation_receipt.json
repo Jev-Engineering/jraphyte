@@ -1,0 +1,35 @@
+{
+  "version": "source-bound-structure-followup-v1",
+  "status": "IMPLEMENTATION_VALIDATED_NOT_CORPUS_QUALIFICATION",
+  "base_commit": "d7af9575b93e78f16ac09cb47d25a7a043d47553",
+  "source_file": "trace_gc/pdf_structure_parallel_v4.py",
+  "source_sha256": "0826f1c19148b5f6c0edfa93c60fcc6dcc119e1f0c445b66b80c0ccaf7b305c5",
+  "validation": {
+    "command": "python tools/run_validation.py",
+    "status": "PASS_WITH_EXTERNAL_GATES",
+    "tests_run": 967,
+    "tests_passed": 962,
+    "tests_skipped": 5,
+    "failures": 0,
+    "errors": 0,
+    "report_sha256": "c975a6404381ff78a031d11ad03583ff454d9c35df1dc75e5a4e5fa7d5132946"
+  },
+  "focused_boundary_tests": {
+    "run": 32,
+    "passed": 32
+  },
+  "actual_cached_f142": {
+    "closing_boundary": "source-leading Introduction at native line 18 offsets 0:12",
+    "status": "uncertain",
+    "reason": "unverified_multi_column_continuation",
+    "proposal": false
+  },
+  "peer_review": "PASS after two false-truncation counterexamples were fixed",
+  "new_paid_api_calls": 0,
+  "production_graph_writes": 0,
+  "remaining_gates": [
+    "Merge with source-bound mathematical row geometry and rerun integrated tests.",
+    "Run final fresh 200-paper/four-arm regression and source-fidelity assessment.",
+    "Keep mathematical notation and image review held until full-region evidence is reviewed."
+  ]
+}

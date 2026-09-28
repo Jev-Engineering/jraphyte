@@ -96,6 +96,72 @@ class SectionOwnershipTests(unittest.TestCase):
         self.assertTrue(result['proposal'])
         validate_source_spans(result['closing_boundary']['source_spans'], native)
 
+    def test_inline_source_heading_behind_earlier_figure_label_closes_abstract(self):
+        native = [line(0, 'Abstract '+ABSTRACT, 100, 100, 500),
+                  line(1, 'Introduction – '+BODY, 160, 50, 290),
+                  line(2, 'Bulk-like', 155, 339, 368),
+                  line(3, BODY, 180, 50, 290), line(4, BODY, 180, 320, 560)]
+        for order in ([0, 1, 2, 3, 4], [4, 2, 0, 3, 1]):
+            with self.subTest(order=order):
+                result = assess(native, doc(native, order=order))
+                self.assert_text(result)
+                self.assertTrue(result['proposal'], result)
+                self.assertEqual(result['closing_boundary']['ref'], '#/texts/1')
+                self.assertEqual(result['closing_boundary']['source_text_scope'],
+                                 'source_leading_inline_heading_prefix')
+                validate_source_spans(result['closing_boundary']['source_spans'], native)
+
+    def test_unverified_inline_heading_cannot_override_layout_hold(self):
+        native = [line(0, 'Abstract '+ABSTRACT, 100, 100, 500),
+                  line(1, 'Our introduction to the measurements '+BODY, 160, 50, 290),
+                  line(2, 'Bulk-like', 155, 339, 368),
+                  line(3, BODY, 180, 50, 290), line(4, BODY, 180, 320, 560)]
+        source_doc = doc(native)
+        source_doc['texts'][1]['text'] = 'Introduction – '+BODY
+        result = assess(native, source_doc)
+        self.assert_text(result)
+        self.assertFalse(result['proposal'])
+        self.assertEqual(result['closing_boundary']['reason'], 'multiple_body_lanes')
+
+    def test_converter_stripped_native_prose_before_inline_heading_stays_held(self):
+        native = [line(0, 'Abstract '+ABSTRACT, 100, 100, 500),
+                  line(1, 'An omitted final abstract sentence. Introduction – '+BODY, 160, 50, 290),
+                  line(2, 'Bulk-like', 155, 339, 368),
+                  line(3, BODY, 180, 50, 290), line(4, BODY, 180, 320, 560)]
+        source_doc = doc(native)
+        source_doc['texts'][1]['text'] = 'Introduction – '+BODY
+        result = assess(native, source_doc)
+        self.assert_text(result)
+        self.assertFalse(result['proposal'])
+        self.assertEqual(result['closing_boundary']['reason'], 'multiple_body_lanes')
+
+    def test_earlier_other_lane_abstract_prose_is_not_a_figure_label(self):
+        for continuation in (
+            'A final abstract sentence adds a material limitation to our result.',
+            'Our result is limited.',
+        ):
+            with self.subTest(continuation=continuation):
+                native = [line(0, 'Abstract '+ABSTRACT, 100, 100, 500),
+                          line(1, 'Introduction – '+BODY, 160, 320, 560),
+                          line(2, continuation, 155, 50, 290),
+                          line(3, BODY, 180, 320, 560)]
+                result = assess(native)
+                self.assert_text(result)
+                self.assertFalse(result['proposal'])
+                self.assertEqual(result['closing_boundary']['reason'], 'multiple_body_lanes')
+
+    def test_source_prose_excluded_by_lane_geometry_blocks_later_heading(self):
+        native = [line(0, 'Abstract '+ABSTRACT, 100, 100, 500),
+                  line(1, 'Introduction – '+BODY, 160, 320, 560),
+                  line(2, 'Our result is limited.', 155, 50, 105),
+                  line(3, BODY, 180, 320, 560)]
+        result = assess(native)
+        self.assert_text(result)
+        self.assertFalse(result['proposal'])
+        self.assertEqual(result['reasons'], ['unowned_source_prose_requires_review'])
+        self.assertTrue(any(entry.get('reason') == 'source_prose_between_abstract_and_boundary'
+                            for entry in result['region_ownership']))
+
     def test_metadata_label_remains_source_evidence_when_converter_body_drifts(self):
         native = [line(0, 'Abstract '+ABSTRACT, 100),
                   line(1, 'Keywords: networks and transport', 160)]
