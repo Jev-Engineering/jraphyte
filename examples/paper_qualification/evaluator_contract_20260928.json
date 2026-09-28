@@ -1,0 +1,68 @@
+{
+  "claim": "Evaluator contract implementation only. Authored tests do not close issue20 or establish real-paper performance.",
+  "cohort_selected": false,
+  "composed_authored_fixture": {
+    "challenge": 80,
+    "external_ports": "Explicitly substituted; separate adapter tests use rendered fixtures and deterministic replay.",
+    "primary": 400,
+    "qualification_pass": false,
+    "screened": 1200
+  },
+  "focused_tests": {
+    "passed": 44,
+    "scope": "Authored protocol, statistical, lineage and adversarial contract tests.",
+    "seconds": 12.747
+  },
+  "full_validation": {
+    "errors": 0,
+    "failures": 0,
+    "production_graph_writes": 0,
+    "provider_calls": 0,
+    "skipped": 7,
+    "status": "PASS_WITH_EXTERNAL_GATES",
+    "tests_passed": 829,
+    "tests_run": 836
+  },
+  "graph_qualification_registered": false,
+  "independent_human_qualification": false,
+  "internal_peer_code_review": {
+    "focused_tests_passed": 28,
+    "source_sha256": "7e12a562c66e0b4a30bc092a767cdb55f7d36613cf46aea7c7a648745a75b41a",
+    "status": "PASS"
+  },
+  "legacy_package_validator": {
+    "graph_commits": 0,
+    "model_calls": 0,
+    "records": 17,
+    "schemas": 12,
+    "status": "PASS"
+  },
+  "metadata_frame_counts": {
+    "historical": 2000,
+    "recent": 2000
+  },
+  "owned_source_sha256": {
+    "docs/paper_qualification_v1.md": "9894813e8ff1ddb0ba929829454f885363c120b889983b8b993c1785c4ccb25d",
+    "src/paper_qualification_v1.py": "7e12a562c66e0b4a30bc092a767cdb55f7d36613cf46aea7c7a648745a75b41a",
+    "tests/test_paper_qualification_v1.py": "9656bb800a5e9641f66b5d207c43a8709fcf9aaade48f9bf7a57a5562ea3f83c"
+  },
+  "preregistration_pointer_sha256": "67b60858db0a77363613bb4e9accf5a568433ffc79de6259fc402567b2903806",
+  "preselection_clarification_sha256": "4bb5974a59253d94c255a0cf3ca0a37bf37fb7ac33f3924be18a0a8e9287dd1c",
+  "protocol_artifacts_verified": 14,
+  "qualification_pass": false,
+  "remaining_gates": [
+    "Exact final-tree image-enabled issue19 PASS",
+    "Genuine all-four-converter access and execution records",
+    "Prospective frozen source-first references and signed phases",
+    "Identity-replacement proof adapter if needed",
+    "Prospective native-closure or image-title-page adapter if needed",
+    "Final integrated validation after merge"
+  ],
+  "tested_base_commit": "ed2b5638f8b46a4149173f4e8d173a79b976c5eb",
+  "unseen_images_opened": 0,
+  "unseen_pdfs_opened": 0,
+  "unseen_predictions_opened": 0,
+  "validation_log_sha256": "3ecd0f7f35b0849c25d81c6cefc0bded3266b660f3980c771ec9615b77250613",
+  "validation_report_sha256": "14809f24daa25823c7d3ecea1e7b4e63123877ff06c4750b28dfc23f414e27b4",
+  "version": "paper-qualification-contract-validation-v1"
+}
