@@ -16,6 +16,7 @@ from typing import Iterable, Mapping, Sequence
 from .pdf_geometry_parallel_v4 import logical_rows, transition_evidence
 
 VERSION = "page-one-parallel-source-v4"
+SLICE_VERSION = "native-requested-leading-prefix-v1"
 
 
 def canonical(text: str) -> str:
@@ -182,6 +183,50 @@ def _slices(chain: list[dict], mapping: list[tuple[int, int]], start: int, end: 
     return output
 
 
+def _bind_leading_prefix(text: str, match: dict, native_lines: list[dict]) -> dict:
+    """Bind a requested prefix after canonical occurrence ambiguity is resolved.
+
+    This changes raw offsets only. It does not infer glyph mappings, attach a
+    separate native line, or certify internal/trailing scientific notation.
+    """
+    requested = text.lstrip()
+    anchor = next(i for i, char in enumerate(requested) if canonical(char))
+    prefix = requested[:anchor]
+    if not prefix:
+        return match
+    evidence = {"version": SLICE_VERSION, "scope": "requested_leading_prefix_only",
+                "requested_prefix_sha256": hashlib.sha256(prefix.encode("utf-8")).hexdigest(),
+                "requested_prefix_characters": len(prefix)}
+
+    def held(reason: str) -> dict:
+        return {"status": "unlocated", "reason": "requested_leading_prefix_not_source_bound", "spans": [],
+                "slice_evidence": {**evidence, "status": "unresolved", "reason": reason},
+                "candidate_native_extent": {"status": "canonical_extent_only", "accepted": False,
+                    "spans": match["spans"], "column_change": match["column_change"],
+                    "precision": match["precision"], "recall": match["recall"]}}
+
+    # Only visible punctuation/symbols and horizontal spaces belong to this
+    # repair. Controls, line breaks and combining glyph mappings need separate
+    # representation evidence, even if identical raw bytes appear nearby.
+    if any(unicodedata.category(char)[0] not in "PS" and unicodedata.category(char) != "Zs"
+           for char in prefix):
+        return held("unsupported_prefix_character")
+    first = match["spans"][0]
+    line = next(line for line in native_lines if str(line["id"]) == str(first["line_id"]))
+    start, end = first["start"], first["end"]
+    if canonical(requested[anchor]) != canonical(line["text"][start]):
+        return held("requested_anchor_not_selected_native_anchor")
+    extended_start = start - len(prefix)
+    if extended_start < 0 or line["text"][extended_start:start] != prefix:
+        return held("prefix_not_contiguous_on_selected_native_line")
+    spans = [{**first, "start": extended_start, "text": line["text"][extended_start:end]},
+             *match["spans"][1:]]
+    return {**match, "spans": spans, "text": "\n".join(span["text"] for span in spans),
+            "slice_evidence": {**evidence, "status": "exact_raw_prefix",
+                               "line_id": first["line_id"], "start": extended_start,
+                               "canonical_start": start, "end": end}}
+
+
 def locate(text: str, native_lines: list[dict], *, region_boxes: list[list[float]] | None = None,
            threshold: float = .98) -> dict:
     """Find a unique contiguous source transcription; never relax the 98% gate.
@@ -267,7 +312,9 @@ def locate(text: str, native_lines: list[dict], *, region_boxes: list[list[float
             occurrences.append((value, positions))
     if len(occurrences) != 1:
         return {"status": "ambiguous", "reason": "multiple_source_occurrences", "spans": [], "matches": len(occurrences)}
-    return occurrences[0][0]
+    # Prefix punctuation must never silently select one canonical occurrence
+    # over another. It is bound only after the existing ambiguity gate passes.
+    return _bind_leading_prefix(text, occurrences[0][0], native_lines)
 
 
 def validate_source_spans(spans: list[dict], native_lines: list[dict]) -> None:

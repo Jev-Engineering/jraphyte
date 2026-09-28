@@ -14,6 +14,7 @@ from .pdf_source_parallel_v4 import (canonical, compare, digest_value, locate, n
 VERSION = "page-one-parallel-structure-v4"
 SECTION_OWNERSHIP_VERSION = "source-section-ownership-v1"
 ABSTRACT_STRUCTURE_VERSION = "source-abstract-sections-v2"
+PREFIX_RETENTION_VERSION = "source-prefix-hold-retention-v1"
 ABSTRACT = re.compile(r"^\s*a\s*b\s*s\s*t\s*r\s*a\s*c\s*t\b\s*[.:—–-]?\s*", re.I)
 EXCLUDED = {"page_header", "page_footer", "footnote", "caption", "picture", "table", "document_index"}
 BODY_WORDS = r"(?:overview|introduction|background|preliminaries|related\s+work|methods?|materials\s+and\s+methods|results|discussion|conclusions?|references|contents|table\s+of\s+contents)"
@@ -496,6 +497,71 @@ def _publication_footer(region: dict, ordered: list[dict], native: list[dict]) -
             "legal_source_spans": [legal_span], "scope_evidence": "source_proceedings_date_and_legal_footer"}
 
 
+def _prefix_hold_continuity(start: dict, region: dict, local: list[dict], ownership: list[dict],
+                            alignment: dict, native: list[dict]) -> dict | None:
+    """Retain review text between source witnesses, never accepted notation.
+
+    The candidate extent proves only where canonical characters occur. A failed
+    prefix stays failed, including a separate numerator or broken glyph map.
+    """
+    candidate = alignment.get("candidate_native_extent", {})
+    spans = candidate.get("spans", [])
+    if (alignment.get("reason") != "requested_leading_prefix_not_source_bound"
+            or candidate.get("status") != "canonical_extent_only"
+            or candidate.get("accepted") is not False or not spans):
+        return None
+    heading = _abstract_heading(start, native)
+    if not _heading_context(heading, native, abstract=True):
+        return None
+    prior = [entry for entry in ownership if entry.get("decision") == "included" and entry.get("source_spans")]
+    if not prior or prior[-1].get("source_alignment", {}).get("column_change"):
+        return None
+    tail = local[next(i for i, item in enumerate(local) if item["ref"] == region["ref"])+1:]
+    following = next((item for item in tail if item["label"] not in {"page_header", "page_footer", "footnote"}), None)
+    if (not following or following["label"] in EXCLUDED or following["label"] == "section_header"
+            or _header(following["text"]) or _role_rejected(following["text"])):
+        return None
+    after = locate(following["text"], native, region_boxes=None
+                   if following["coordinate_source"] == "native_alignment_estimate" else following["boxes"])
+    if after["status"] != "located" or after.get("column_change") or not after["spans"]:
+        return None
+    closing = next((item for item in tail if item["label"] not in EXCLUDED
+                    and (item["label"] == "section_header" or _header(item["text"])
+                         or _role_rejected(item["text"]))), None)
+    if not closing:
+        return None
+    proof = _boundary_evidence(closing, native, "metadata_or_nonabstract_region"
+                               if _role_rejected(closing["text"]) else "body_section")
+    if proof["source_location"] != "located" or not proof.get("source_spans"):
+        return None
+    before = [span for entry in prior for span in entry["source_spans"]]
+    try:
+        for group in (before, spans, after["spans"]):
+            validate_source_spans(group, native)
+    except (KeyError, ValueError, TypeError, IndexError):
+        return None
+    box = lambda group: [min(s["bbox"][0] for s in group), min(s["bbox"][1] for s in group),
+                         max(s["bbox"][2] for s in group), max(s["bbox"][3] for s in group)]
+    before_box, current_box, after_box = box(before), box(spans), box(after["spans"])
+    widths = [b[2]-b[0] for b in (before_box, after_box)]
+    if overlap(before_box, after_box) < .8 or min(widths) < max(widths)*.75:
+        return None
+    left, right = min(before_box[0], after_box[0]), max(before_box[2], after_box[2])
+    if any(s["bbox"][0] < left-2 or s["bbox"][2] > right+2 for s in spans):
+        return None
+    centers = lambda group: [(s["bbox"][1]+s["bbox"][3])/2 for s in group]
+    if (min(centers(spans)) <= max(centers(prior[-1]["source_spans"]))
+            or min(centers(after["spans"])) <= max(centers(spans))
+            or current_box[1]-before_box[3] > 48 or after_box[1]-current_box[3] > 48
+            or min(centers(proof["source_spans"])) <= max(centers(after["spans"]))):
+        return None
+    return {"version": PREFIX_RETENTION_VERSION, "accepted": False,
+            "scope": "uncertain_candidate_continuation_only",
+            "heading_source_spans": heading["spans"], "prior_ref": prior[-1]["ref"],
+            "prior_source_spans": prior[-1]["source_spans"], "following_ref": following["ref"],
+            "following_source_spans": after["spans"], "closing_boundary": proof}
+
+
 def _collect(start: dict, ordered: list[dict], native: list[dict], explicit: bool) -> dict:
     if start["unlocated"]:
         return {"text": ABSTRACT.sub("", start["text"]), "boundary": None, "refs": [start["ref"]], "alignment_failure": "unlocated_ocr_paragraph"}
@@ -509,6 +575,7 @@ def _collect(start: dict, ordered: list[dict], native: list[dict], explicit: boo
     structured = bool(subsection_scope["labels"]) or (_structured(initial_text) if explicit else False)
     internal_refs = {e["ref"] for e in subsection_scope["evidence"]} if structured else set()
     pieces, refs, boundary, failure = [], [], None, None
+    prefix_hold = False
     if explicit:
         heading = _abstract_heading(start, native)
         ownership.append({"ref": start["ref"], "decision": "heading", "reason": "explicit_abstract_start",
@@ -599,6 +666,15 @@ def _collect(start: dict, ordered: list[dict], native: list[dict], explicit: boo
             pieces.append(text)
             refs.append(x["ref"])
             failure = alignment.get("reason", "unlocated_source")
+            continuity = (_prefix_hold_continuity(start, x, local, ownership, alignment, native)
+                          if explicit and not structured else None)
+            if continuity:
+                prefix_hold = True
+                ownership.append({"ref": x["ref"], "decision": "held", "reason": failure,
+                                  "candidate_native_extent": alignment["candidate_native_extent"],
+                                  "slice_evidence": alignment["slice_evidence"], "continuity": continuity})
+                previous_region = x
+                continue
             break
         if alignment.get("column_change"):
             failure = "unverified_multi_column_continuation"
@@ -705,7 +781,8 @@ def _collect(start: dict, ordered: list[dict], native: list[dict], explicit: boo
             ownership.append({"ref": region["ref"], "decision": "deferred",
                               "reason": "outside_verified_abstract_content"})
     return {"text": "\n".join(pieces), "boundary": boundary, "refs": refs,
-            "alignment_failure": failure, "structured": structured, "ownership": ownership,
+            "alignment_failure": "requested_leading_prefix_not_source_bound" if prefix_hold else failure,
+            "structured": structured, "ownership": ownership,
             "subsection_scope": subsection_scope}
 
 
