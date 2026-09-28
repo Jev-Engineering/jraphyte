@@ -13,10 +13,11 @@ import re
 import unicodedata
 from collections import defaultdict
 from typing import Iterable, Mapping, Sequence
-from .pdf_geometry_parallel_v4 import logical_rows, transition_evidence
+from .pdf_geometry_parallel_v4 import logical_rows, transition_evidence, _horizontal
 
 VERSION = "page-one-parallel-source-v4"
 SLICE_VERSION = "native-requested-leading-prefix-v1"
+CHAIN_VERSION = "native-terminal-wrap-chain-v1"
 
 
 def canonical(text: str) -> str:
@@ -127,19 +128,102 @@ def style(line: Mapping) -> dict:
     return {"color": color, "bold": bold, "size": size, "fraction": weight/sum(weights.values())}
 
 
-def _chains(lines: list[dict], rows: list[dict] | None = None) -> list[list[dict]]:
+def _paragraph_font(line: dict) -> tuple | None:
+    weights = defaultdict(int)
+    for run in line.get("spans", []):
+        if (not isinstance(run.get("font"), str) or not run["font"]
+                or type(run.get("size")) not in (int, float) or not math.isfinite(run["size"])
+                or run["size"] <= 0 or type(run.get("flags")) is not int or type(run.get("color")) is not int):
+            return None
+        weights[(run["font"], float(run["size"]), run["flags"] & 18, run["color"])] += len(canonical(run.get("text", "")))
+    if not weights or not sum(weights.values()):
+        return None
+    signature, weight = max(weights.items(), key=lambda item: item[1])
+    return signature if weight/sum(weights.values()) >= .8 else None
+
+
+def _terminal_wraps(source_rows: list[dict]) -> list[tuple[dict, dict]]:
+    """Corroborate only a native block's short final sentence row.
+
+    Two immediate full-width predecessors must agree on paragraph typography,
+    native ownership, left edge and line spacing. Full-page context prevents a
+    model crop from hiding a later owner line or a competing adjacent lane.
+    """
+    by_block = defaultdict(list)
+    by_line = {}
+    for row in source_rows:
+        for line in row["lines"]:
+            by_line[str(line["id"])] = row
+            if type(line.get("block_id")) is int and type(line.get("line_in_block")) is int:
+                by_block[line["block_id"]].append(line)
+    candidates = []
+    for owner, lines in by_block.items():
+        indices = {line["line_in_block"]: line for line in lines}
+        if len(indices) != len(lines) or len(indices) < 3:
+            continue
+        final_index = max(indices)
+        if final_index-1 not in indices or final_index-2 not in indices:
+            continue
+        before, prior, final = (indices[i] for i in (final_index-2, final_index-1, final_index))
+        rows = [by_line[str(line["id"])] for line in (before, prior, final)]
+        if (any(len(row["lines"]) != 1 for row in rows) or not all(_horizontal(line) for line in (before, prior, final))
+                or len(canonical(final["text"])) < 4 or not re.search(r"[.!?][\s\)\]\}’\"']*$", final["text"])):
+            continue
+        fonts = [_paragraph_font(line) for line in (before, prior, final)]
+        if not fonts[0] or any(font != fonts[0] for font in fonts[1:]):
+            continue
+        em = fonts[0][1]
+        a, b, c = (line["bbox"] for line in (before, prior, final))
+        widths = [box[2]-box[0] for box in (a, b, c)]
+        centers = [(box[1]+box[3])/2 for box in (a, b, c)]
+        steps = [centers[1]-centers[0], centers[2]-centers[1]]
+        if (min(widths[:2]) < 10*em or not 2*em <= widths[2] < min(widths[:2])/1.65
+                or abs(a[0]-b[0]) > .25*em or abs(b[0]-c[0]) > .25*em
+                or abs(a[2]-b[2]) > .5*em or any(not .8*em <= step <= 1.8*em for step in steps)
+                or abs(steps[0]-steps[1]) > .25*em):
+            continue
+        # An intervening row or simultaneous neighboring column contradicts a
+        # terminal wrap, even if the native extractor reused one block ID.
+        if any(row not in rows and overlap(b, row["bbox"]) >= .1
+               and centers[1] < (row["bbox"][1]+row["bbox"][3])/2 <= c[3]
+               for row in source_rows):
+            continue
+        proof = {"version": CHAIN_VERSION, "reason": "source_owned_short_final_wrap",
+                 "block_id": owner, "final_native_line_id": final["id"],
+                 "support_native_line_ids": [before["id"], prior["id"]],
+                 "native_line_indices": [final_index-2, final_index-1, final_index],
+                 "source_boxes": [list(box) for box in (a, b, c)],
+                 "dominant_font": {"font": fonts[0][0], "size": em, "flags": fonts[0][2], "color": fonts[0][3]},
+                 "scope": "raw_reading_order_only"}
+        candidates.append((rows[-1], proof))
+    return candidates
+
+
+def _chains(lines: list[dict], rows: list[dict] | None = None, *, source_rows=None,
+            evidence: dict | None = None) -> list[list[dict]]:
     """Column-local order plus original order; never a global y-sort only.
 
     Requiring high horizontal overlap prevents the wrong-column projection.
     Full-width lines are not used to connect two narrow columns transitively.
     """
     rows = logical_rows(lines) if rows is None else rows
+    wraps = _terminal_wraps(rows if source_rows is None else source_rows)
+    eligible = {str(line["id"]) for line in lines}
     result = []
     for anchor in rows:
         a = anchor["bbox"]
         local = [x for x in rows if overlap(a, x["bbox"]) >= .8 and
                  max(a[2]-a[0], x["bbox"][2]-x["bbox"][0]) <= 1.65*max(1, min(a[2]-a[0], x["bbox"][2]-x["bbox"][0]))]
         local.sort(key=lambda x: (round(x["bbox"][1], 1), x["bbox"][0], str(x["id"])))
+        local_ids = {str(line["id"]) for row in local for line in row["lines"]}
+        added = [(row, proof) for row, proof in wraps if str(proof["final_native_line_id"]) in eligible-local_ids
+                 and all(str(sid) in local_ids for sid in proof["support_native_line_ids"])]
+        if added:
+            extended = sorted(local+[row for row, _ in added], key=lambda x: (round(x["bbox"][1], 1), x["bbox"][0], str(x["id"])))
+            chain = [line for row in extended for line in row["lines"]]
+            result.append(chain)
+            if evidence is not None:
+                evidence[tuple(str(line["id"]) for line in chain)] = [proof for _, proof in added]
         result.append([line for row in local for line in row["lines"]])
     # Native original order can encode legitimate multi-column continuation.
     # Such a match is returned but held by the caller unless layout corroborates it.
@@ -250,8 +334,8 @@ def locate(text: str, native_lines: list[dict], *, region_boxes: list[list[float
     eligible_ids = {str(line["id"]) for line in eligible}
     eligible_rows = [{**row, "lines": [line for line in row["lines"] if str(line["id"]) in eligible_ids]}
                      for row in rows if any(str(line["id"]) in eligible_ids for line in row["lines"])]
-    matches = {}
-    for chain in _chains(eligible, eligible_rows):
+    matches, chain_proofs = {}, {}
+    for chain in _chains(eligible, eligible_rows, source_rows=rows, evidence=chain_proofs):
         haystack, mapping = _mapped(chain)
         if not haystack:
             continue
@@ -303,6 +387,11 @@ def locate(text: str, native_lines: list[dict], *, region_boxes: list[list[float
                             "precision": score["precision"], "recall": score["recall"],
                             "column_change": column_change, "coordinate_source": "native_pdf_lines",
                             "logical_geometry": geometry}
+            selected_ids = {str(span["line_id"]) for span in spans}
+            proof = [value for value in chain_proofs.get(tuple(str(line["id"]) for line in chain), [])
+                     if str(value["final_native_line_id"]) in selected_ids]
+            if proof:
+                matches[key]["chain_evidence"] = proof
     if not matches:
         return {"status": "unlocated", "reason": "no_98_percent_source_alignment", "spans": []}
     occurrences = []

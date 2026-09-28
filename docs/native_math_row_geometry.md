@@ -1,5 +1,9 @@
 # Source-bound math row geometry
 
+The subsequent [short final-wrap chain rule](native_terminal_wrap_chains.md)
+addresses a case in which correct row metadata alone did not preserve an operator
+in the selected whole-paragraph text.
+
 `native-logical-rows-v2` adds two bounded raw-order rules for issues
 [#15](https://github.com/CompleteDotTech/jraphyte/issues/15) and
 [#16](https://github.com/CompleteDotTech/jraphyte/issues/16). This supplements the
