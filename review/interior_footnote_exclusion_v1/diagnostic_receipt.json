@@ -1,0 +1,472 @@
+{
+  "version": "source-linked-interior-footnote-exclusion-diagnostic-v1",
+  "status": "BOUNDED_DIAGNOSTIC_COMPLETE_NOT_QUALIFICATION",
+  "implementation_base_commit": "a6d25b5ad33f22ed7784a2ea4d69db19cfe99c10",
+  "evidence_scope": "Previously exposed development cases, source-bound native deletion and consumer replay; no independent human qualification.",
+  "public_test_command": "python -m unittest discover -s tests -p test_parallel_source_interior_footnotes_v4.py -v",
+  "authored_tests": {
+    "run": 25,
+    "passed": 25,
+    "peer_review": "PASS; read-only code and authored-test review"
+  },
+  "diagnostic": {
+    "result_relative": "validation_v3_private/issue17-interior-footnote-20260928-01/targeted04/results.json",
+    "result_sha256": "fe735ba7417374316217127d37fd787b8b670bad547ad644c7db6b31805fc405",
+    "runner_relative": "validation_v3_private/issue17-interior-footnote-20260928-01/targeted_runner04.py",
+    "runner_sha256": "6630c335ae742bba3059e6b261783e72d9a8ac7804a0706abc4bc7577607ca64",
+    "runtime_seconds": 128.10899999999674,
+    "preflight": "all 200 source/cache/label/runtime/native identities checked before the targeted 64 assessments",
+    "case_ids": [
+      "f026",
+      "f059",
+      "f079",
+      "f081",
+      "f111",
+      "f122",
+      "f131",
+      "f142",
+      "f153",
+      "f149",
+      "f195",
+      "f006",
+      "f014",
+      "f018",
+      "f103",
+      "f166"
+    ],
+    "methods": [
+      "parallel_grobid_v4",
+      "parallel_mineru_v4",
+      "parallel_olmocr_v4",
+      "parallel_structure_v4"
+    ],
+    "assessments": 64,
+    "unchanged_assessments": 60,
+    "changed_ids": [
+      "f149"
+    ],
+    "protected_f195": "all four arms unchanged",
+    "final_input_recheck": "PASS",
+    "baseline_result_sha256": "5eba6f1e0128059a838ed4819e4c5ee0916ac1472a0268ef98c17243c8103591"
+  },
+  "execution_identity": {
+    "extractor_identity": {
+      "provenance_limit": "historical_report_incomplete_runtime_identity_not_current_reextraction",
+      "reported_environment": {
+        "pymupdf": "1.28.2",
+        "python": "3.12.10"
+      },
+      "reported_method_hashes": {
+        "src/parallel_source_v4/__init__.py": "7c433293ab7d45eba066ccf6a6351239b985a89621471403c4dabdbff0d48ae4",
+        "src/parallel_source_v4/adapters.py": "6279ace17b17372a784318741e03e977b7d9a1ace6c0562b0c44d6b454a8b7d9",
+        "src/parallel_source_v4/common.py": "d1ba0d0baa081ef1bd3280cc009b03121701b3b49184d6ee6ed98600af7c8f1f",
+        "src/parallel_source_v4/extraction.py": "bda230bece7a4b3cda308f9bebed3991e421d074b82d1770e21f748a4e17415b",
+        "src/parallel_source_v4/fields.py": "ee50cf230f4b7cba92a20b42a93fd66154a93439ec7ef2fb3b49854b5bab562a",
+        "src/parallel_source_v4/freeze.py": "2d84e014233b6c1e4cb4720a3344e26d3d86f002f73d558a61c6b2b2b19f18b6",
+        "src/parallel_source_v4/metrics.py": "da671b664c34598022c5fc1d20ab0ba77d004551909e49c3d0eaaf61285a8751",
+        "src/parallel_source_v4/prepare.py": "6197dadc16509d6cff7088dd79970126f4e18c75623da10f9668b33fc526bd98",
+        "src/parallel_source_v4/retrieval.py": "cbf0e2087b4fe0f728b98ef5ea08dea74d6426c462f07fc34a26c617e1ef1c9f",
+        "trace_gc/pdf_source_parallel_v4.py": "df31e8d09cfe1502153ded6e87ca8ac9aad6d1b46012a6e7bf10b099a840f7e5",
+        "trace_gc/pdf_structure_parallel_v4.py": "9818f1ff0afda2350dc1a7e39fbe503c4ff8d9d23f7a2dcaea54b374f42258e7"
+      }
+    },
+    "method_hashes": {
+      "src/abstract_validation/__init__.py": "48ab6fdca264cd5adea8aed4ff0eeb0df6437ba2e39a5495796c13e6ee63e5ea",
+      "src/abstract_validation/common.py": "7467ceba1ba6e20676836ee0a78287eba2bf872612f5799e67d2258790cf74ce",
+      "src/abstract_validation/embedding_batch.py": "6a41c7d495fa2c7002d462689e8062704334d1f316a73f1bbc0da8b15c5a21cd",
+      "src/abstract_validation/evaluate.py": "cf39399a0002100993ac0082a781793aeadb400f2717b043906f31566a70276d",
+      "src/abstract_validation/references.py": "effa1097ea2b63126107802845bb82ed78429331347ebf4fd2d4ba22cdbfd56a",
+      "src/abstract_validation/retrieval_trial.py": "329b4d7914486edaef885ec0008322da8067741524b78fa5917d30b3d578c380",
+      "src/abstract_validation_expanded/__init__.py": "2bd42541638dd71ef94c9b62989502552f5b7417e277aad591d3f7fb389ad3bc",
+      "src/abstract_validation_expanded/common.py": "6d6231660815870e6d9bf91ac75a663ee0ea4e7aab56065011015b4b46bc08b6",
+      "src/abstract_validation_expanded/extraction.py": "ca65267a81d695acc8ee95d5c81ba26556158adce3310bee72f188ed4d663f91",
+      "src/abstract_validation_expanded/references.py": "bdacf227f73f978aa14d27ef0dc95677ed481a6f514ee59b3fd57a8a6a785200",
+      "src/abstract_validation_v2/__init__.py": "b5b85b87c62d863629131b3aa2fe459bbc68c64b04cc787a1b0cdb4b87d1d199",
+      "src/abstract_validation_v2/adapters.py": "8dfc22b20476196be3c2ca207491821c3d9c67c665cde2c73ab58071ba7e7ec8",
+      "src/abstract_validation_v2/common.py": "33389d0d7b9aba97e8fa5d32117a408b97c0fbc5031e7f7f60bad09f50497aa7",
+      "src/abstract_validation_v2/convert.py": "c9891bfcab3eeaba47ae378f654ddff1afc71e8c88dd00e6a3b83bbc638d9fc7",
+      "src/abstract_validation_v2/extraction.py": "f3359aeba1715edda8d3e0c1557f979de7ab70202ed6bc9986e13611f3573ae7",
+      "src/abstract_validation_v2/references.py": "d04ff70d1f44ea6431339cbb22c8a4056598707291053d078ee924a92ed6e4ad",
+      "src/parallel_source_v4/__init__.py": "7c433293ab7d45eba066ccf6a6351239b985a89621471403c4dabdbff0d48ae4",
+      "src/parallel_source_v4/adapters.py": "6279ace17b17372a784318741e03e977b7d9a1ace6c0562b0c44d6b454a8b7d9",
+      "src/parallel_source_v4/common.py": "61dc7718ea930175da49b45de6a30a64a67b4c24deb68c6700c52f6668e77c1d",
+      "src/parallel_source_v4/extraction.py": "d7a758102638e9664a33b6a1cd036a54e857a57a68a17e259c599d20b48865ae",
+      "src/parallel_source_v4/fidelity.py": "076fb4d0f3efbc3dc229c9d8d9df4d4333c44ed05fb6438daffe1ee4065c2d45",
+      "src/parallel_source_v4/fidelity_report.py": "b149688d9c7c28fe198bac60d79a8c5f112106d60e1b1ced0b53e35284e0e2d4",
+      "src/parallel_source_v4/fields.py": "7dda023a04982104660df6d8a5196b804f4d4bef14d904a4e3e207175d9a572f",
+      "src/parallel_source_v4/freeze.py": "2d84e014233b6c1e4cb4720a3344e26d3d86f002f73d558a61c6b2b2b19f18b6",
+      "src/parallel_source_v4/geometry_probe.py": "067dc6f65014f1ccbba9ef4f5055cb7bafd32d9d3bb05af155d1a9b9c4ea5e13",
+      "src/parallel_source_v4/image_ocr.py": "e9e30ea9d49bb500f834d48c6d61152a8b6a41c1cd6980e9aeebef78aead6387",
+      "src/parallel_source_v4/metrics.py": "d31dadb0c98cb891a1fc8d186a4d7179111a1f4a6acb1ec7615c83b4b7fe7f89",
+      "src/parallel_source_v4/notation.py": "159d01896b528898253a1b3e098757833cf8d8d58d3ac28cbffb225614c076f9",
+      "src/parallel_source_v4/prepare.py": "9e2c08fab51443c6b4c46e06314a374f5269f56de3ce7d0c1b614ae56ba7ccb7",
+      "src/parallel_source_v4/promotion.py": "38af9e98e7012abc600f0c3123364043e50110a7bf444352d580e347ef9254c3",
+      "src/parallel_source_v4/promotion_image.py": "202b215c2abc7e1de0e35ddaeb96036d61ffefd98c363a1c389a2eee83a5e760",
+      "src/parallel_source_v4/promotion_io.py": "71652986a4967a285a27dff5ce29efe880890d17727d0a050547ef6ad1bb4107",
+      "src/parallel_source_v4/promotion_observation.py": "b9f789b3c91767cca2641428d147ef5da1ee38ac53fb1eccc4a290122cb902f6",
+      "src/parallel_source_v4/promotion_review.py": "a04057b4557b7e11730cc5a1920c0187cad5a493045144cb2d0a0239a7144ba8",
+      "src/parallel_source_v4/requirements-replay.txt": "be2103397c49886a844f0576732bb3bbf5626d8862f336f4fbd2a2b7f8a1a89e",
+      "src/parallel_source_v4/retrieval.py": "20947caf9ab37221c020cbd91d1bfe8e1cb78d6cf62bb97e5ae20ac9535fb4d3",
+      "src/parallel_source_v4/retrieval_prepare.py": "a2418a8680436af7cc0b900059e3fbc22f180f6faf7765f01bc45be636310e4c",
+      "src/parallel_source_v4/retrieval_trial.py": "33e00aec149f064b7e2f4fda536f7a32bc564583caa1b6bd7c7c12ad71973953",
+      "src/parallel_source_v4/runtime-windows-py312.lock.json": "be4f6dde6556f22d321870dd91b7bb6311b891ce699e4ecb5e52f7710b31632b",
+      "src/parallel_source_v4/runtime.py": "35ca58be2a29669c8972555562e268bd4e11a163444f76ff070ceddf5eea6a5e",
+      "src/parallel_source_v4/specter2_cache.py": "d87bcd1bac62d772a134ef4057d9c311b1cf7b30f599975ac01bbef4ef753451",
+      "trace_gc/__init__.py": "2129ff6e56d1d2b10c8c630bebc73440d5356a49eaa62e4a50f1e143997d3812",
+      "trace_gc/adapter.py": "adb1336e07cf05aa882698d21c5dba85ac25c06d8c3861a192aebf1cd72a5874",
+      "trace_gc/budget.py": "cbb9e7cb4e15bbcafdc37e89d9eb95938580dcce6b20c67d7c5bd84d4a08aa88",
+      "trace_gc/canonical.py": "2ab85ad82e4a193306ecd3b485d559634a0a870f22a1385ce0512b7cc6cfe7df",
+      "trace_gc/catalog.py": "5cd2091e57a1d6e959c8433aac23d610f889d7b9e9a0586c2725974b50b8fa6f",
+      "trace_gc/compiler.py": "78a4d9e12827fbea6226b89e787f72f7f0d4dc3d5c6fb174c780e433d2355e39",
+      "trace_gc/errors.py": "383af80f7faa7b05b63c2bb07d48bca0edccb1657e73ed1bc47d7a722010d29e",
+      "trace_gc/local_generation.py": "d4217b7bd358b0ff35cc6ac4cd70053134e05a0a3d7997b80e0436f13fa45175",
+      "trace_gc/local_semantics.py": "c00fb37892c700919ac17cb011e7399daf3a584a9ac3dabe4bd14f9c528289e2",
+      "trace_gc/paper_ingestion.py": "20a613f00b74fef5e7dc5ea3365b496d059bddb83fb81edfb9597b48cf02ca98",
+      "trace_gc/pdf_evidence.py": "5a76e52b0cc27e8e9c61ee28eb11b41b29d5b78233b7a4e91f0d93c8ff710aeb",
+      "trace_gc/pdf_geometry_parallel_v4.py": "e72e785c31f1b71039e0c27207c867a923232b749044f9a381fac7203cfa55b1",
+      "trace_gc/pdf_image_evidence.py": "c22983af8a506a8be67c67c62c1cf2694be86c96c0630c7af4e2a5689d45c64f",
+      "trace_gc/pdf_notation_parallel_v4.py": "6dabc505fce71324587d91146731a3fab2c5d7794053e5a5b77a10b0d3187910",
+      "trace_gc/pdf_source_parallel_v4.py": "9141f4424d21240ad24beb43df9fb50a97490bf8aca494a6ec191d7ef87f4da0",
+      "trace_gc/pdf_structure.py": "ff84ed19946281f5d93d8cad3845ef1af0bccb03672ce71d05c80e23b03227f8",
+      "trace_gc/pdf_structure_parallel_v4.py": "eb83d9b051bb58e56d24097188f4bc3c515256f4526a1a1a6dacff8cc59832eb",
+      "trace_gc/programs.py": "7a0155324e571a65bff06c27e537d2b34e12e7e1af0ab18b7ef0abe439695965",
+      "trace_gc/references.py": "3b3d19164c92ec61845ba182dbb907a293c949cceff2f640d0a6a767854471dc",
+      "trace_gc/retrieval/__init__.py": "9898bc4c217cf0f6e396e30e62b908d13a25c8ff635d8da04a6bf8b5129a1df9",
+      "trace_gc/retrieval/budget.py": "de388e95f2e0db0af2e906875e319754194fc8980c1f93ebb905d55222f031e1",
+      "trace_gc/retrieval/contracts.py": "9e675ad86d7d7fb4cbd6d88ef0aa438de3c9fba8654f0167b3ea1cce1532b5ff",
+      "trace_gc/retrieval/integration.py": "5e274caa41b18ad58b10b48021e6ac27c0bbb3462adbf52f6e552bac736bc519",
+      "trace_gc/retrieval/items.py": "657969af61c0ea8fbe49ba84cd4b681356c8261c83099452399a6317b182a9ab",
+      "trace_gc/retrieval/reranker.py": "0c5e79476304a57a06ffcb30f82662851b95900194a31791dbb2711682b6bf53",
+      "trace_gc/retrieval/security.py": "9b02083be3721315b4074e753dec4c6c93c156d09099b6b1248e5a57e7f6df9c",
+      "trace_gc/retrieval/service.py": "28aa8b292914238bb9c760cd19ee0b575a3c94eecd832514d7c1612a52f57f38",
+      "trace_gc/retrieval/store.py": "7069dfa30bf16816f00e87fd0e87b0f2f95c7dc1a4031bc185b12c744f1b54cf",
+      "trace_gc/retrieval/strategies.py": "7c333af28c48867bfa72b2f63a6411a17b42445a653dae16f5fd38df777f67c8",
+      "trace_gc/retrieval/vector.py": "47684d9349d159932848b77811abecec3ad60a3cbd02feb7afe495b4775ba415",
+      "trace_gc/schema.py": "0512e0b0b5a1bf9dc50537e5dbf2b85deaf04f9adebd58fc9e9020376ce84dbf",
+      "trace_gc/semantic_profile.py": "894e5612e5066ef5efb40c09793a0c79a0ac242b5dbf849d4202f36c608771b7",
+      "trace_gc/trust.py": "966be0404d57cb2abf551feaa27d0636b52788d83672200fb8bf854ccbf4b16d"
+    },
+    "native_comparison": {
+      "changed_ids": [],
+      "status": "COMPARED"
+    },
+    "native_manifest_sha256": "954f7a4d1aa76174f68a3ea2acc37a3a59daf5a386c4507380ebb95cdea20126",
+    "native_mode": "replay",
+    "runtime": {
+      "distribution_identities": {
+        "Pillow": {
+          "metadata_sha256": "bad86c8831119efa06d44ff851682faa5f6a012f55a1a011fe04f8d5f31eece8",
+          "native_libraries": {
+            "PIL/_avif.cp312-win_amd64.pyd": "38b5ca8582752f4f25b4a68dede6653573c37697d9c8100a82e52ecde282e573",
+            "PIL/_imaging.cp312-win_amd64.pyd": "6dfd10a98bc81a1999e2b5ddb8be8c1cfb9a2c8e10258c56a52ee0d8930d3d7f",
+            "PIL/_imagingcms.cp312-win_amd64.pyd": "46c59cf197b74954dfa01036d97938291573fa9ec339cd34f90fc7c870001cac",
+            "PIL/_imagingft.cp312-win_amd64.pyd": "fe615fedf586c7206a74bedecddbf58623ffdf57e90ca2f8bca062aebae138c0",
+            "PIL/_imagingmath.cp312-win_amd64.pyd": "e1b3e6bc361fd8735df2c920c9878238dabaf797fbc13041ffaa26f635888d3a",
+            "PIL/_imagingmorph.cp312-win_amd64.pyd": "4b4c11011504a690bc1f55c50adf048fd7fee4d3d0e2ff606bdb891feb3f2db1",
+            "PIL/_imagingtk.cp312-win_amd64.pyd": "b7de0c367e22ada46a61a156023cc0d30187b45946f4154e077d630f161e2f0e",
+            "PIL/_webp.cp312-win_amd64.pyd": "6af926fd1a58f3912b6f5e290ef37768c26017988bdd2217c0daa8e1107d4f71"
+          },
+          "version": "12.2.0",
+          "wheel_sha256": "df8993a210fd08e447aadc632e702a16567cac55b350f77b762c3a1a6e8ee6ad"
+        },
+        "PyMuPDF": {
+          "metadata_sha256": "1e61a826f6761da51244028c4018397a6e95105b2b1157380e47300adde42103",
+          "native_libraries": {
+            "pymupdf/_extra.pyd": "2f40b8c8c1ea0e76e3443f1c7b0cc7830dac61667537ce4c6bc92d495a5a94d8",
+            "pymupdf/_mupdf.pyd": "000d93f313bd541de0a302e3c17b8a4ce51afe788c6062b225b2d02d52cea7ec",
+            "pymupdf/mupdfcpp64.dll": "6d26bbdcbbb2489fd1343a7f317aecd5614243b98d6db5c3776db170a6edfea7"
+          },
+          "version": "1.28.0",
+          "wheel_sha256": "86932e8271b0dd96deea2b7946cb448a1a56dc0ab2523d8bad9ad37a4874bb89"
+        },
+        "attrs": {
+          "metadata_sha256": "568114284921d8ec1e39fc66882ae808c82660049891bd54c20bd032e678af44",
+          "native_libraries": {},
+          "version": "26.1.0",
+          "wheel_sha256": "688f1ddd28c6a0605158a5ba86caca640720402db0efcae0c208b62977ea6ae8"
+        },
+        "cffi": {
+          "metadata_sha256": "b4abf1bcf1c1d8e0272d8007fc974499ea59e5f2a5b98af3c78a5e67515a9d87",
+          "native_libraries": {
+            "_cffi_backend.cp312-win_amd64.pyd": "9af5e4f68a41f26b726f2e9424f9d58a4f5666189f6a48be95f406b257102aec"
+          },
+          "version": "2.1.1",
+          "wheel_sha256": "b975f2fdbc071f1d9b6c8e5d8b82008b3170490b4dbace4c050a78691ada1675"
+        },
+        "cryptography": {
+          "metadata_sha256": "c1a6cdb81ea7ae597d5cc4a81ea34c32102b2b96945863a7c079099ae17b8af2",
+          "native_libraries": {
+            "cryptography/hazmat/bindings/_rust.pyd": "6aaa6418aeb6b063fe94d0f9ff240c60918ccaa9f95d21ec666719b248835233"
+          },
+          "version": "46.0.4",
+          "wheel_sha256": "40146b18ac1022816b30252d8e9421b35a6e58277ab52a442fcb9d3dab18507d"
+        },
+        "jsonschema": {
+          "metadata_sha256": "1794b647e1fe1320bf364bd4753c632d345d1fa5e623569c6f2701e2703e0633",
+          "native_libraries": {},
+          "version": "4.26.0",
+          "wheel_sha256": "d1582f83e3d4e95cae79cad4d81aecac05d284549383e7ead551be6bcc543a85"
+        },
+        "jsonschema-specifications": {
+          "metadata_sha256": "aaa6cd66f423729e8da397c9d533b7d731f6b25f3d6371b9338c36bdb9be74a0",
+          "native_libraries": {},
+          "version": "2025.9.1",
+          "wheel_sha256": "f5345aa5d3a6de7ffaa7351ae436ce87a4b800a918ce0f4901bdb86168bf9124"
+        },
+        "pycparser": {
+          "metadata_sha256": "a1e33542883c249bf6c263b0023b9ea8a6131a77d9cb2cbc88316968e5eada83",
+          "native_libraries": {},
+          "version": "3.0",
+          "wheel_sha256": "9646f5a89507f8a59214a02957cd739cf77a5a10ef2db61e0db491547288aeeb"
+        },
+        "referencing": {
+          "metadata_sha256": "c50d8b3ff4d113925b60dc47d1d28e87248a3338024241b0a3a66c8794fbce0c",
+          "native_libraries": {},
+          "version": "0.37.0",
+          "wheel_sha256": "f5345aa5d3a6de7ffaa7351ae436ce87a4b800a918ce0f4901bdb86168bf9124"
+        },
+        "rpds-py": {
+          "metadata_sha256": "5e54dd00b4ad336c5161d47de2a5c2212090c44629c28b6538b156256e49282d",
+          "native_libraries": {
+            "rpds/rpds.cp312-win_amd64.pyd": "8b4b68653e93ffc61124c96fa85fcb3c4f9c8e3059a3706dcfc671af1f0caa1c"
+          },
+          "version": "2026.6.3",
+          "wheel_sha256": "7f029d679b286bfde3a3ff0b0d18151aca481e3aa0d634cfe8cb94c21ca2fa86"
+        },
+        "typing-extensions": {
+          "metadata_sha256": "707868b88e0acdd6784073ecc8533d933cfab1f9bc296df19f5a29e19f69c495",
+          "native_libraries": {},
+          "version": "4.16.0",
+          "wheel_sha256": "a2678411204eb1e6c0443fba7504d948579f8cca6d02b0e6c74916d60f015667"
+        }
+      },
+      "environment": {
+        "implementation": "CPython",
+        "machine": "AMD64",
+        "mupdf": "1.29.0",
+        "packages": {
+          "Pillow": "12.2.0",
+          "PyMuPDF": "1.28.0",
+          "attrs": "26.1.0",
+          "cffi": "2.1.1",
+          "cryptography": "46.0.4",
+          "jsonschema": "4.26.0",
+          "jsonschema-specifications": "2025.9.1",
+          "pycparser": "3.0",
+          "referencing": "0.37.0",
+          "rpds-py": "2026.6.3",
+          "typing-extensions": "4.16.0"
+        },
+        "platform": "Windows-11-10.0.26200-SP0",
+        "pointer_bits": 64,
+        "python": "3.12.10",
+        "python_build": [
+          "tags/v3.12.10:0cc8128",
+          "Apr  8 2025 12:21:36"
+        ],
+        "system": "Windows",
+        "unicode": "15.0.0"
+      },
+      "lock_sha256": "be4f6dde6556f22d321870dd91b7bb6311b891ce699e4ecb5e52f7710b31632b",
+      "runtime_sha256": "f091b827709308eb9f30695b100a798c67355ad1e6e506e393b49e7021026a67",
+      "schema_version": 1,
+      "scope": "cached_conversion_experiment_runtime_not_model_or_quality_qualification"
+    }
+  },
+  "changed_states": [
+    {
+      "id": "f149",
+      "method": "parallel_structure_v4",
+      "before_status": "complete",
+      "after_status": "complete",
+      "before_proposal": true,
+      "after_proposal": true,
+      "text_changed": true,
+      "exclusion_applied": true
+    },
+    {
+      "id": "f149",
+      "method": "parallel_grobid_v4",
+      "before_status": "complete",
+      "after_status": "complete",
+      "before_proposal": true,
+      "after_proposal": true,
+      "text_changed": true,
+      "exclusion_applied": true
+    },
+    {
+      "id": "f149",
+      "method": "parallel_mineru_v4",
+      "before_status": "complete",
+      "after_status": "uncertain",
+      "before_proposal": true,
+      "after_proposal": false,
+      "text_changed": false,
+      "exclusion_applied": false
+    },
+    {
+      "id": "f149",
+      "method": "parallel_olmocr_v4",
+      "before_status": "complete",
+      "after_status": "uncertain",
+      "before_proposal": true,
+      "after_proposal": false,
+      "text_changed": false,
+      "exclusion_applied": false
+    }
+  ],
+  "f149_effect": {
+    "primary": "one linked source marker excluded; all other native positions unchanged",
+    "grobid": "same bounded exclusion",
+    "mineru": "held; text retained",
+    "olmocr": "held; text retained"
+  },
+  "actual_field_builder": {
+    "case_id": "f149",
+    "source_verification": "original PDF, saved first-page PDF/image/native, and sealed assessments",
+    "arms": {
+      "parallel_grobid_v4": {
+        "abstract_characters": 1510,
+        "field_count": 1,
+        "file_sha256": "5c9deb494c8346c2da7f8cc1ad7de5f19b8c071c4233bdb2917bf2c7605853d7",
+        "retrieval_only": true,
+        "source_native_readback": "all_source_page_image_native_hashes_match"
+      },
+      "parallel_mineru_v4": {
+        "abstract_characters": 0,
+        "field_count": 1,
+        "file_sha256": "dce6d1ddc0b710169005c6df3516bcd8615fe962ab33bd04717f437771409ee7",
+        "retrieval_only": true,
+        "source_native_readback": "all_source_page_image_native_hashes_match"
+      },
+      "parallel_olmocr_v4": {
+        "abstract_characters": 0,
+        "field_count": 1,
+        "file_sha256": "afe23df15835d1f823b6820302ee94063e6c9f9b89983666de1d02a17bb4e17d",
+        "retrieval_only": true,
+        "source_native_readback": "all_source_page_image_native_hashes_match"
+      },
+      "parallel_structure_v4": {
+        "abstract_characters": 1510,
+        "field_count": 1,
+        "file_sha256": "614cab2a8609bb6176981dc36a647c1707203626dac0a30b1f26b829665e5546",
+        "retrieval_only": true,
+        "source_native_readback": "all_source_page_image_native_hashes_match"
+      }
+    },
+    "source_reviewed": false,
+    "retrieval_only": true
+  },
+  "legacy_metrics_not_notation_certification": {
+    "parallel_grobid_v4": {
+      "proposed": 6,
+      "boundary_and_98_correct_proposals": 6,
+      "false_proposals": 0,
+      "withheld_complete_ids": [
+        "f006",
+        "f026",
+        "f059",
+        "f079",
+        "f081",
+        "f111",
+        "f122",
+        "f131",
+        "f142",
+        "f153"
+      ]
+    },
+    "parallel_mineru_v4": {
+      "proposed": 3,
+      "boundary_and_98_correct_proposals": 3,
+      "false_proposals": 0,
+      "withheld_complete_ids": [
+        "f014",
+        "f026",
+        "f059",
+        "f079",
+        "f081",
+        "f103",
+        "f111",
+        "f122",
+        "f131",
+        "f142",
+        "f149",
+        "f153",
+        "f166"
+      ]
+    },
+    "parallel_olmocr_v4": {
+      "proposed": 3,
+      "boundary_and_98_correct_proposals": 3,
+      "false_proposals": 0,
+      "withheld_complete_ids": [
+        "f014",
+        "f026",
+        "f059",
+        "f079",
+        "f081",
+        "f111",
+        "f122",
+        "f131",
+        "f142",
+        "f149",
+        "f153",
+        "f166",
+        "f195"
+      ]
+    },
+    "parallel_structure_v4": {
+      "proposed": 7,
+      "boundary_and_98_correct_proposals": 7,
+      "false_proposals": 0,
+      "withheld_complete_ids": [
+        "f026",
+        "f059",
+        "f079",
+        "f081",
+        "f111",
+        "f122",
+        "f131",
+        "f142",
+        "f153"
+      ]
+    }
+  },
+  "preserved_attempts": [
+    {
+      "result_relative": "validation_v3_private/issue17-interior-footnote-20260928-01/targeted02/results.json",
+      "result_sha256": "e0339f73a93ba1931eac24993c2a8232642fefa80600c35c20235facdb864d14",
+      "purpose": "pre-page-footer rule; all f149 arms held"
+    },
+    {
+      "result_relative": "validation_v3_private/issue17-interior-footnote-20260928-01/targeted03/results.json",
+      "result_sha256": "5780d03be3fb3ecd474d6ea5da7906e991c37a99af903ce00a5828f42276819f",
+      "purpose": "source correction before consumer adapter; not field-builder validated"
+    }
+  ],
+  "local_validation": {
+    "command": "python tools/run_validation.py",
+    "report_relative": "validation_v3_private/issue17-interior-footnote-20260928-01/validation04/VALIDATION_REPORT.json",
+    "report_sha256": "e4ad6734f5b641e1bbabc59456633c3acbe5421dea5b21b4e6d1768e5c347423",
+    "status": "PASS_WITH_EXTERNAL_GATES",
+    "tests_run": 884,
+    "tests_passed": 877,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 7
+  },
+  "package": {
+    "command": "uv build --wheel --offline; isolated uv install; trace-gc --version",
+    "wheel_sha256": "c93cc0fd118897aefa1b52ab02ac0e468e3ce184240f635238bcb4e9056e5a9f",
+    "installed_version": "TRACE-GC 0.4.0",
+    "runtime_note": "Pinned empirical/test environment unchanged; package installation used a separate environment."
+  },
+  "remaining_gates": [
+    "integrated full 200 by all four methods on final merged code identity",
+    "source-reviewed scientific fidelity; historical text98 is not notation certification",
+    "the nine historical math/geometry/closure holds remain held"
+  ],
+  "new_paid_api_calls": 0,
+  "production_graph_writes": 0,
+  "verified_admissions": 0
+}

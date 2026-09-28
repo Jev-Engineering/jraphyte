@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 
 from trace_gc.pdf_source_parallel_v4 import digest_value, json_bytes, validate_source_spans
-from trace_gc.pdf_structure_parallel_v4 import verify_assessment
+from trace_gc.pdf_structure_parallel_v4 import verify_assessment, verify_interior_footnote_exclusion
 from . import extraction
 from .common import REPO, child, data_root, digest, method_hashes, verify_files, write_once
 from .fidelity import compare_notation, evaluate_fidelity, FIDELITY_METRIC_VERSION, LEGACY_METRIC_VERSION
@@ -202,6 +202,7 @@ def _analyze(root: Path, *, run_relative: str, run_sha256: str, configuration_re
                 if prediction.get("status") not in {"error", "truncated"} or prediction["proposal"] or prediction["spans"]:
                     raise ValueError("assessment_native_identity_missing_or_mismatched")
             validate_source_spans(prediction["spans"], native)
+            verify_interior_footnote_exclusion(prediction, native)
             for evidence in [prediction.get("closing_boundary") or {}, *prediction.get("region_ownership", [])]:
                 validate_source_spans(evidence.get("source_spans", []), native)
                 if evidence.get("marker_span"):

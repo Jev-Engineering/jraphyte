@@ -14,7 +14,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Callable, Sequence
 from trace_gc.pdf_source_parallel_v4 import canonical, digest_value, locate, normalize, style, validate_lines, validate_source_spans
-from trace_gc.pdf_structure_parallel_v4 import METADATA_START, VERSION as ASSESSMENT_VERSION, _author_like, verify_assessment
+from trace_gc.pdf_structure_parallel_v4 import (METADATA_START, VERSION as ASSESSMENT_VERSION,
+    _author_like, verify_assessment, verify_interior_footnote_exclusion)
 from .adapters import conversion_state
 from .common import child, data_root, digest, read, write_once
 from .metrics import ranking_metrics
@@ -46,6 +47,11 @@ def verify_source_bound_assessment(assessment: dict, native: list[dict], *, page
             assessment.get("physical_page") != 1 or
             assessment.get("page_size") != page_size):
         raise ValueError("abstract_field_source_mismatch")
+    if "interior_footnote_exclusion" in assessment:
+        # Replays the unique unsplit parent and exact source-owned deletion;
+        # arbitrary rewritten text or caller-supplied joiners are not accepted.
+        verify_interior_footnote_exclusion(assessment, native)
+        return
     if not assessment.get("proposal"):
         return
     if (assessment.get("status") != "complete" or

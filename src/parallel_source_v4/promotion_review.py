@@ -142,6 +142,10 @@ def apply_closure_review(prediction: dict, review: dict, *, native: list[dict],
     """
     import fitz
     verify_assessment(prediction)
+    if "interior_footnote_exclusion" in prediction:
+        # This adapter may certify closure of unchanged held native prose; it
+        # cannot settle an unresolved marker or replace an existing exclusion.
+        raise ValueError("closure_review_cannot_resolve_interior_footnote")
     if not isinstance(review, dict) or set(review) != FIELDS or review["version"] != VERSION:
         raise ValueError("invalid_native_closure_review_contract")
     if (prediction.get("status") != "uncertain" or prediction.get("proposal") is not False or

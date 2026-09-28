@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+from copy import deepcopy
 from .pdf_source_parallel_v4 import (canonical, compare, digest_value, locate, normalize, overlap,
                             style, validate_box, validate_lines, validate_source_spans)
 
@@ -15,6 +16,7 @@ VERSION = "page-one-parallel-structure-v4"
 SECTION_OWNERSHIP_VERSION = "source-section-ownership-v1"
 ABSTRACT_STRUCTURE_VERSION = "source-abstract-sections-v2"
 PREFIX_RETENTION_VERSION = "source-prefix-hold-retention-v1"
+INTERIOR_FOOTNOTE_VERSION = "source-linked-interior-footnote-exclusion-v1"
 ABSTRACT = re.compile(r"^\s*a\s*b\s*s\s*t\s*r\s*a\s*c\s*t\b\s*[.:—–-]?\s*", re.I)
 EXCLUDED = {"page_header", "page_footer", "footnote", "caption", "picture", "table", "document_index"}
 BODY_WORDS = r"(?:overview|introduction|background|preliminaries|related\s+work|methods?|materials\s+and\s+methods|results|discussion|conclusions?|references|contents|table\s+of\s+contents)"
@@ -381,6 +383,145 @@ def _terminal_footnote(alignment: dict, native: list[dict], ordered: list[dict])
         return prefix, {**note, "marker_span": {**last, "start": run["start"], "text": token},
                         "decision": "excluded", "reason": "source_superscript_linked_to_footnote"}
     return text, None
+
+
+def _interior_footnotes(result: dict, native: list[dict], ordered: list[dict]) -> dict:
+    """Exclude linked prose footnotes only after the unsplit proposal succeeds.
+
+    The original sealed assessment remains evidence. Splitting a selected span
+    removes a source character; it cannot repair alignment, ownership or closure,
+    and never synthesizes a notation character or changes native offsets.
+    """
+    if not result.get("proposal") or result.get("status") != "complete":
+        return result
+    spans = result["spans"]
+    if not spans or result["text"] != "\n".join(s["text"] for s in spans):
+        return result
+    by_id = {str(n["id"]): n for n in native}
+    bottom = max(s["bbox"][3] for s in spans)
+
+    def attached(script, after, before=None):
+        flanks = [after] if before is None else [before, after]
+        sizes = [s.get("size", 0) or 0 for s in flanks]
+        boxes = [s.get("bbox") for s in [*flanks, script]]
+        if (not all(boxes) or min(sizes) <= 0 or max(sizes) > min(sizes)*1.05
+                or any(s.get("flags", 0) & 3 for s in flanks)
+                or not 0 < (script.get("size", 0) or 0) <= min(sizes)*.85):
+            return False
+        size, box = min(sizes), script["bbox"]
+        if not (0 < box[2]-box[0] <= size*max(1, script["end"]-script["start"])
+                and 0 < box[3]-box[1] <= size*.9
+                and min(s["bbox"][3] for s in flanks)-size*.9 <= box[3]
+                    <= min(s["bbox"][3] for s in flanks)-size*.1
+                and box[1] >= min(s["bbox"][1] for s in flanks)-size*.6
+                and -size*.15 <= after["bbox"][0]-box[2] <= size*.65):
+            return False
+        return before is None or (abs(box[0]-before["bbox"][2]) <= size*.15
+            and abs(before["bbox"][3]-after["bbox"][3]) <= size*.12)
+
+    note_regions = deepcopy([x for x in ordered if x["label"] in {"footnote", "page_footer"}])
+    evidence, failures = [], []
+    for selected in spans:
+        line = by_id[str(selected["line_id"])]
+        for run in line.get("spans", []):
+            a, b = run["start"], run["end"]
+            token = line["text"][a:b]
+            if (not selected["start"] < a < b < selected["end"] or not run.get("flags", 0) & 1
+                    or not re.fullmatch(r"[0-9*†‡]{1,3}", token)):
+                continue
+            prefix, suffix = line["text"][selected["start"]:a], line["text"][b:selected["end"]]
+            notes = [x for x in note_regions if x["bbox"]
+                     and x["bbox"][1] > bottom and re.match(re.escape(token)+r"(?:\s|\D)", x["text"].lstrip())]
+            # Only a prose-punctuation attachment or a matching note creates a
+            # footnote question. Ordinary scientific scripts remain untouched.
+            punctuation = bool(prefix and prefix[-1] in ".!?")
+            if not punctuation and not notes:
+                continue
+            marker = {**selected, "start": a, "end": b, "text": token}
+            failure = {"kind": "unresolved_interior_marker", "marker_span": marker,
+                       "decision": "held", "reason": "interior_footnote_marker_requires_source_review"}
+            next_offset = b + len(suffix)-len(suffix.lstrip())
+            before = next((s for s in line["spans"] if s["start"] <= a-1 < s["end"]), {})
+            after = next((s for s in line["spans"] if s["start"] <= next_offset < s["end"]), {})
+            sizes = [s.get("size", 0) or 0 for s in (before, after)]
+            context = (re.search(r"\b[A-Za-z]{3,}[.!?]$", prefix) and suffix[:1].isspace()
+                and re.match(r"\s+[A-Z][A-Za-z]+\s+[A-Za-z]+\b", suffix)
+                and attached(run, after, before))
+            if not context or len(notes) != 1:
+                failures.append(failure)
+                continue
+            # A converter may omit the other note's label. Require uniqueness
+            # among all raw footer-line starting tokens, independently of it.
+            source_notes = [n for n in native if n["bbox"][1] >= result["page_size"][1]*.75
+                and (m := re.match(r"\s*([0-9]+[a-z]?|[*†‡]+)", n["text"]))
+                and m.group(1) == token]
+            if len(source_notes) != 1:
+                failures.append(failure)
+                continue
+            note = _boundary_evidence(notes[0], native, "linked_interior_footnote")
+            if note["source_location"] != "located" or len(note["source_spans"]) != 1:
+                failures.append(failure)
+                continue
+            first = note["source_spans"][0]
+            note_line = by_id[str(first["line_id"])]
+            note_marker = re.match(r"\s*([0-9]+[a-z]?|[*†‡]+)", note_line["text"])
+            note_style = style(note_line)
+            note_run = next((s for s in note_line.get("spans", []) if note_marker
+                and s["start"] == note_marker.start(1) and s["end"] == note_marker.end(1)), {})
+            following_offset = note_marker.end(1) if note_marker else 0
+            while following_offset < len(note_line["text"]) and note_line["text"][following_offset].isspace():
+                following_offset += 1
+            following = next((s for s in note_line.get("spans", [])
+                if s["start"] <= following_offset < s["end"]), {})
+            if (note_line["text"][:first["start"]].strip() or not note_marker or note_marker.group(1) != token
+                    or first["end"] < len(note_line["text"].rstrip()) or not attached(note_run, following)
+                    or note_line["bbox"][1] < result["page_size"][1]*.75
+                    or not 0 < note_style.get("size", 0) <= min(sizes)*.95
+                    or re.match(r"\s*[0-9]+\s*"+BODY_WORDS+r"\b", note_line["text"], re.I)):
+                failures.append(failure)
+                continue
+            evidence.append({**note, "marker_span": marker, "decision": "excluded",
+                "note_marker_span": {**first, "start": note_marker.start(1), "end": note_marker.end(1), "text": token},
+                "attachment_geometry": {"before_bbox": before["bbox"], "marker_bbox": run["bbox"],
+                    "after_bbox": after["bbox"], "note_marker_bbox": note_run["bbox"],
+                    "note_prose_bbox": following["bbox"], "coordinate_scope": "native_font_runs"},
+                "reason": "source_superscript_after_prose_sentence_linked_to_footnote"})
+    if not evidence and not failures:
+        return result
+    result["interior_footnote_inputs_sha256"] = digest_value(note_regions)
+    parent = seal(deepcopy(result))
+    result["interior_footnote_exclusion"] = {"version": INTERIOR_FOOTNOTE_VERSION,
+        "original_assessment": parent, "original_assessment_sha256": parent["assessment_sha256"],
+        "note_regions": note_regions, "decisions": evidence+failures, "applied": False}
+    if failures:
+        result.update(status="uncertain", proposal=False, complete_candidate=False, section_owner=None,
+                      reasons=["interior_footnote_marker_requires_source_review"])
+        return result
+    removed = {(str(e["marker_span"]["line_id"]), i) for e in evidence
+               for i in range(e["marker_span"]["start"], e["marker_span"]["end"])}
+    kept, text_parts, joiners = [], [], []
+    for selected in spans:
+        runs, start = [], selected["start"]
+        for i in range(selected["start"], selected["end"]+1):
+            if i == selected["end"] or (str(selected["line_id"]), i) in removed:
+                if start < i:
+                    text = by_id[str(selected["line_id"])]["text"][start:i]
+                    runs.append({**selected, "start": start, "end": i, "text": text})
+                start = i+1
+        text_parts.append("".join(s["text"] for s in runs))
+        for index, span in enumerate(runs):
+            if kept:
+                joiners.append("\n" if index == 0 else "")
+            kept.append(span)
+    validate_source_spans(kept, native)
+    positions = lambda items: [(str(s["line_id"]), i) for s in items for i in range(s["start"], s["end"])]
+    if positions(kept) != [p for p in positions(spans) if p not in removed]:
+        raise ValueError("footnote_exclusion_changed_other_source_positions")
+    result.update(text="\n".join(text_parts), spans=kept)
+    result["interior_footnote_exclusion"].update(applied=True, span_joiners=joiners,
+        excluded_spans=[e["marker_span"] for e in evidence])
+    result["request_budget"] = {**result["request_budget"], "characters": len(result["text"])}
+    return result
 
 
 def _abstract_heading(start: dict, native: list[dict]) -> dict:
@@ -808,6 +949,61 @@ def verify_assessment(result: dict) -> None:
         raise ValueError("selector_is_not_publication_authority")
 
 
+def verify_interior_footnote_exclusion(result: dict, native: list[dict]) -> None:
+    """Replay only this exact native exclusion, including a held decision.
+
+    A seal alone cannot prove source ownership. The unsplit parent's unique raw
+    source extent is checked before the same geometry rule is replayed. Outer
+    harness conversion receipts may be added later; they cannot change the
+    parent, note inputs, exclusion proof, text, source positions or closure.
+    """
+    if "interior_footnote_exclusion" not in result:
+        return
+    proof = result["interior_footnote_exclusion"]
+    verify_assessment(result)
+    if (not isinstance(proof, dict) or proof.get("version") != INTERIOR_FOOTNOTE_VERSION
+            or type(proof.get("applied")) is not bool):
+        raise ValueError("unsupported_interior_footnote_exclusion")
+    parent = proof.get("original_assessment")
+    if not isinstance(parent, dict) or "interior_footnote_exclusion" in parent:
+        raise ValueError("footnote_exclusion_requires_unsplit_parent")
+    verify_assessment(parent)
+    if (proof.get("original_assessment_sha256") != parent["assessment_sha256"]
+            or parent.get("schema_version") != 3 or parent.get("extractor_version") != VERSION
+            or parent.get("status") != "complete" or parent.get("proposal") is not True
+            or parent.get("complete_candidate") is not True or parent.get("section_owner") != "abstract"
+            or parent.get("transcription") != "native_pdf" or not parent.get("closing_boundary")
+            or type(parent.get("physical_page")) is not int or parent["physical_page"] != 1
+            or any(result.get(k) != parent.get(k) for k in
+                   ("source_sha256", "page_sha256", "native_sha256", "physical_page", "page_size"))
+            or parent.get("native_sha256") != digest_value(native)):
+        raise ValueError("footnote_exclusion_parent_scope_or_source_mismatch")
+    validate_lines(native, parent["page_size"])
+    spans = parent.get("spans", [])
+    validate_source_spans(spans, native)
+    if not spans or "\n".join(s["text"] for s in spans) != parent.get("text"):
+        raise ValueError("footnote_exclusion_parent_text_not_source_spans")
+    relocated = locate(parent["text"], native)
+    if relocated["status"] != "located" or digest_value(relocated["spans"]) != digest_value(spans):
+        raise ValueError("footnote_exclusion_parent_not_unique_or_current")
+    notes = proof.get("note_regions")
+    if not isinstance(notes, list) or digest_value(notes) != parent.get("interior_footnote_inputs_sha256"):
+        raise ValueError("footnote_exclusion_note_inputs_changed")
+    replay = _interior_footnotes(deepcopy(parent), native, deepcopy(notes))
+    if digest_value(replay.get("interior_footnote_exclusion")) != digest_value(proof):
+        raise ValueError("footnote_exclusion_proof_does_not_replay")
+    # These fields are independently sealed by the outer producer. Scholarly
+    # similarity is only diagnostic and is recomputed after this transformation.
+    external = {"assessment_sha256", "text_sha256", "evidence_sha256", "scholarly_alignment",
+                "conversion_stage", "source_hash_verification", "field_candidate", "field_sha256",
+                "field_source_verified", "coordinate_source", "unlocated_paragraphs",
+                "interfering_unlocated_paragraphs", "paragraph_alignments", "raw_output_sha256", "generation"}
+    observed = {k: v for k, v in result.items() if k not in external}
+    expected = {k: v for k, v in replay.items() if k not in external}
+    if digest_value(observed) != digest_value(expected):
+        raise ValueError("footnote_exclusion_changed_unapproved_assessment_fields")
+
+
 def _adjacent_group(first: dict, later: dict, selected: dict, ordered: list[dict], native: list[dict]) -> bool:
     """Collapse paragraph candidates only inside a contiguous source-style group."""
     if later["ref"] not in selected["refs"] or first["ref"] == later["ref"]:
@@ -1122,6 +1318,9 @@ def assess_document(document: dict, *, page_size, source_sha256, page_sha256,
         result["math_review_required"] = bool(re.search(r"[√∫∑∏≤≥∞]|\\(?:frac|sqrt|sum)|\$", text) or
             any(x["label"] == "formula" and x["ref"] in selected["refs"] for x in ordered))
         result["scholarly_alignment"] = compare(text, scholarly_abstract) if scholarly_abstract else None
+        result = _interior_footnotes(result, native, ordered)
+        if result.get("interior_footnote_exclusion", {}).get("applied"):
+            result["scholarly_alignment"] = compare(result["text"], scholarly_abstract) if scholarly_abstract else None
     except (KeyError, ValueError, TypeError, OverflowError, IndexError) as exc:
         # Do not echo arbitrary upstream exception strings containing private paths.
         result.update(status="error", proposal=False, complete_candidate=False, reasons=["invalid_evidence:"+type(exc).__name__], error_code=str(exc) if isinstance(exc, ValueError) else type(exc).__name__)
