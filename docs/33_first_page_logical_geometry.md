@@ -1,5 +1,9 @@
 # Native logical rows for first-page alignment
 
+The bounded [math row geometry extension](native_math_row_geometry.md) versions
+the current derived view as `native-logical-rows-v2`. The v1 measurements below
+remain the original historical evidence.
+
 Issue [#15](https://github.com/CompleteDotTech/jraphyte/issues/15) separates
 PDF extraction units from visual rows. A PyMuPDF native line can be one fragment
 of a sentence, split at a font change or an inline formula. The previous

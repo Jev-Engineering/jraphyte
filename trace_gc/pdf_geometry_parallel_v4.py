@@ -7,7 +7,10 @@ geometry evidence, not a semantic section boundary or a recovered text direction
 """
 from __future__ import annotations
 
-VERSION = "native-logical-rows-v1"
+import math
+import unicodedata
+
+VERSION = "native-logical-rows-v2"
 
 
 def _size(line: dict) -> float:
@@ -75,6 +78,129 @@ def _script_flank(compact: dict, baseline: dict, lines: list[dict], em: float) -
     return None
 
 
+def _gutter(left: dict, right: dict, nearby: list[dict], em: float) -> bool:
+    """One paired neighboring row is counterevidence to a math seam."""
+    x, y = left["bbox"], right["bbox"]
+    left_rows = [line for line in nearby if line["bbox"][2] <= y[0]
+                 and line["bbox"][0] < x[2]-em]
+    right_rows = [line for line in nearby if line["bbox"][0] >= x[2]
+                  and line["bbox"][2] > y[0]+em]
+    return any(_same_row(a, b) for a in left_rows for b in right_rows)
+
+
+def _math_operator_join(a: dict, b: dict, lines: list[dict], em: float) -> dict | None:
+    """Place a separately extracted symbol between two source-owned flanks.
+
+    This establishes raw reading order only. In particular, a radical's scope
+    or a fraction's semantic representation still needs notation review.
+    """
+    compact = min((a, b), key=lambda line: line["bbox"][2]-line["bbox"][0])
+    text, c = compact["text"], compact["bbox"]
+    baseline = b if compact is a else a
+    if (len(text) != 1 or unicodedata.category(text) != "Sm" or len(_exact_runs(compact)) != 1
+            or c[2]-c[0] > 1.2*em
+            or _size(compact) < .8*_size(baseline)
+            or not .2*em <= _mid(baseline)-_mid(compact) <= em):
+        return None
+    candidates = []
+    for other in lines:
+        if other is compact or other is baseline or not _same_row(other, baseline):
+            continue
+        left, right = sorted((baseline, other), key=lambda line: line["bbox"][0])
+        x, y = left["bbox"], right["bbox"]
+        owners = {left.get("block_id"), right.get("block_id")}
+        if (None in owners or min(x[2]-x[0], y[2]-y[0]) < 4*em
+                or abs(_mid(left)-_mid(right)) > .3*em
+                or min(_size(left), _size(right)) < .85*max(_size(left), _size(right))
+                or abs(c[0]-x[2]) > .15*em or abs(y[0]-c[2]) > .15*em):
+            continue
+        center = (_mid(left)+_mid(right))/2
+        nearby = [line for line in lines if line is not compact and line is not left and line is not right
+                  and _horizontal(line) and .7*em < abs(_mid(line)-center) <= 3.2*em]
+        if _gutter(left, right, nearby, em):
+            continue
+        extent = {"bbox": [x[0], min(x[1], y[1]), y[2], max(x[3], y[3])]}
+        support = [line for line in nearby if line.get("block_id") in owners and _similar_extent(line, extent)
+                   and line["bbox"][0] <= c[0]-em and line["bbox"][2] >= c[2]+em]
+        if not any(_mid(line) < center for line in support) or not any(_mid(line) > center for line in support):
+            continue
+        candidates.append({"reason": "source_flanked_math_operator", "ownership_cue": "two_sided_owned_paragraph_rows",
+                           "operator": _source_evidence([compact])[0], "flanks": _source_evidence([left, right]),
+                           "support": _source_evidence(support), "notation_review_required": True})
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _exact_runs(line: dict) -> list[dict]:
+    """Use only a complete, ordered native font-run partition with finite boxes."""
+    runs, cursor = line.get("spans", []), 0
+    for run in runs:
+        box, size = run.get("bbox"), run.get("size")
+        if (type(run.get("start")) is not int or type(run.get("end")) is not int
+                or run["start"] != cursor or not cursor < run["end"] <= len(line["text"])
+                or run.get("text") != line["text"][cursor:run["end"]]
+                or not isinstance(box, (list, tuple)) or len(box) != 4
+                or any(type(v) not in (int, float) or not math.isfinite(v) for v in box)
+                or not box[0] < box[2] or not box[1] < box[3]
+                or type(size) not in (int, float) or not math.isfinite(size) or size <= 0
+                or type(run.get("flags")) is not int or run["flags"] < 0):
+            return []
+        if any(box[i] < line["bbox"][i]-.05 for i in (0, 1)) or any(box[i] > line["bbox"][i]+.05 for i in (2, 3)):
+            return []
+        cursor = run["end"]
+    return runs if cursor == len(line["text"]) else []
+
+
+def _stacked_math_join(left: dict, right: dict, lines: list[dict], em: float) -> dict | None:
+    """Resolve a block split through an upper/lower script column at row start.
+
+    No Unicode script relation or transcription is inferred from these runs.
+    Both native blocks start here and two following owned rows must corroborate
+    the combined paragraph extent; a lone title or short fraction cannot do so.
+    """
+    if (left.get("line_in_block") != 0 or right.get("line_in_block") != 0
+            or None in (left.get("block_id"), right.get("block_id"))
+            or left.get("block_id") == right.get("block_id")):
+        return None
+    lr, rr = _exact_runs(left), _exact_runs(right)
+    if len(lr) < 3 or len(rr) < 2:
+        return None
+    base, upper, lower, tail = lr[-2], lr[-1], rr[0], rr[1]
+    if (len(base["text"]) != 1 or not base["text"].isalpha() or not base["flags"] & 2
+            or len(upper["text"]) != 1 or not upper["text"].isalnum() or not upper["flags"] & 1
+            or len(lower["text"]) != 1 or not lower["text"].isalnum()
+            or not .5*base["size"] <= upper["size"] <= .8*base["size"]
+            or not .5*base["size"] <= lower["size"] <= .8*base["size"]
+            or abs(upper["size"]-lower["size"]) > .1*em
+            or min(base["size"], tail["size"]) < .9*max(base["size"], tail["size"])):
+        return None
+    b, u, lo, t = (run["bbox"] for run in (base, upper, lower, tail))
+    mid = lambda box: (box[1]+box[3])/2
+    if (abs(b[2]-u[0]) > .15*em or abs(u[0]-lo[0]) > .15*em
+            or abs(t[0]-max(u[2], lo[2])) > .35*em or abs(mid(t)-mid(b)) > .15*em
+            or not .15*em <= mid(b)-mid(u) <= .6*em
+            or not .15*em <= mid(lo)-mid(b) <= .6*em):
+        return None
+    center = mid(b)
+    nearby = [line for line in lines if line is not left and line is not right and _horizontal(line)
+              and .7*em < abs(_mid(line)-center) <= 3.2*em]
+    if _gutter(left, right, nearby, em):
+        return None
+    extent = {"bbox": [left["bbox"][0], left["bbox"][1], right["bbox"][2], right["bbox"][3]]}
+    support = [line for line in nearby if _mid(line) > center and line.get("block_id") == right.get("block_id")
+               and type(line.get("line_in_block")) is int and line["line_in_block"] > 0 and _similar_extent(line, extent)]
+    levels = []
+    for line in sorted(support, key=_mid):
+        if not levels or _mid(line)-levels[-1] > .5*em:
+            levels.append(_mid(line))
+    if len(levels) < 2:
+        return None
+    return {"reason": "source_stacked_script_seam", "ownership_cue": "two_native_block_starts_and_following_rows",
+            "support": _source_evidence(support), "notation_review_required": True,
+            "native_runs": [{"line_id": line["id"], "start": run["start"], "end": run["end"],
+                             "bbox": list(run["bbox"])}
+                            for line, run in ((left, base), (left, upper), (right, lower), (right, tail))]}
+
+
 def _join_reason(a: dict, b: dict, lines: list[dict], *, context: list[dict] | tuple[dict, ...] = ()) -> dict | None:
     if not _same_row(a, b):
         return None
@@ -85,6 +211,9 @@ def _join_reason(a: dict, b: dict, lines: list[dict], *, context: list[dict] | t
     # Large overlaps are separate overprints/occurrences, not inline fragments.
     if gap < -.9*em or gap > 1.25*em:
         return None
+    math_reason = _math_operator_join(a, b, lines, em) or _stacked_math_join(left, right, lines, em)
+    if math_reason:
+        return math_reason
     center = (max(x[1], y[1])+min(x[3], y[3]))/2
     nearby = [line for line in lines if line is not a and line is not b and _horizontal(line)
               and .7*em < abs(_mid(line)-center) <= 3.2*em]
@@ -193,4 +322,6 @@ def transition_evidence(spans: list[dict], rows: list[dict]) -> dict:
             jumps.append({"from_row": a["id"], "to_row": b["id"], "reason": "unsupported_horizontal_transition"})
     return {"version": VERSION, "rows": [{"id": row["id"], "bbox": row["bbox"],
              "native_line_ids": [line["id"] for line in row["lines"]], "joins": row["joins"]}
-            for row in selected], "unsupported_transitions": jumps}
+            for row in selected], "unsupported_transitions": jumps,
+            "notation_review_required": any(join.get("notation_review_required", False)
+                                            for row in selected for join in row["joins"])}
