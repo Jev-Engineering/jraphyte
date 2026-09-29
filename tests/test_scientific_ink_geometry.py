@@ -2,6 +2,8 @@ import copy
 import hashlib
 import json
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
 
 try:
     import pymupdf
@@ -76,6 +78,22 @@ class ScientificInkGeometryTests(unittest.TestCase):
         for timeout in (True, 0, -1, float("nan"), float("inf"), "60"):
             with self.subTest(timeout=timeout), self.assertRaises(InkGeometryError):
                 capture_accurate_glyph_bounds(self.pdf, self.native, self.sidecar, timeout=timeout)
+
+    def test_rejects_malformed_child_response_without_leaking_stderr(self):
+        for response in ([], None, {"source": []}, {"source": {}}):
+            process = SimpleNamespace(returncode=0, stdout=json.dumps(response).encode(),
+                                      stderr=b"private source content")
+            with self.subTest(response=response), patch(
+                    "trace_gc.scientific_ink_geometry.subprocess.run", return_value=process):
+                with self.assertRaisesRegex(InkGeometryError, "invalid_isolated_capture_response"):
+                    capture_accurate_glyph_bounds(self.pdf, self.native, self.sidecar)
+
+    def test_rejects_code_mutation_during_original_capture(self):
+        process = SimpleNamespace(returncode=0, stdout=b"{}", stderr=b"")
+        with patch("trace_gc.scientific_ink_geometry.subprocess.run", return_value=process), patch(
+                "trace_gc.scientific_ink_geometry._code_identity", side_effect=[{"code": "a"}, {"code": "b"}]):
+            with self.assertRaisesRegex(InkGeometryError, "glyph_capture_code_changed"):
+                capture_accurate_glyph_bounds(self.pdf, self.native, self.sidecar)
 
 
 if __name__ == "__main__":
