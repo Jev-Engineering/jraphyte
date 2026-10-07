@@ -21,6 +21,7 @@ jobs:
   windows-fence:
     runs-on: windows-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ['3.12', '3.13']
     steps:
@@ -37,3 +38,23 @@ jobs:
           # A bare "OK" means every case executed; skips would print "OK (skipped=N)".
           grep -Eq '^Ran 9 tests in ' "$RUNNER_TEMP/windows-fence.log"
           grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-fence.log"
+      - name: Run the fourteen Windows SID/SDDL trustee-alias regression cases
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_paper_pilot_phase_cutover_guarded_v2_trustees.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-fence-trustees.log"
+          grep -Eq '^Ran 14 tests in ' "$RUNNER_TEMP/windows-fence-trustees.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-fence-trustees.log"
+      - name: Run the eight diagnostics-tool sanitization and cleanup cases
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_windows_fence_diagnostics.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
+          grep -Eq '^Ran 8 tests in ' "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
+      - name: Sanitized Windows trustee serialization diagnostics
+        if: always()
+        continue-on-error: true
+        run: python tools/windows_fence_diagnostics.py

@@ -215,6 +215,11 @@ class GuardedFenceTests(unittest.TestCase):
                                "*" + self.sid + ":(X)").returncode, 0)
         prior = guarded.directory_dacl_sddl(self.root)
         self.parent_acl_sha = hashlib.sha256(prior.encode()).hexdigest()
+        # Changing the parent ACL makes Windows re-propagate inheritance to the
+        # children (adding AI). Re-pin them so only the owner deny can reject.
+        self.file_acl_sha = {name: hashlib.sha256(
+            guarded.directory_dacl_sddl(self.old / name).encode()).hexdigest()
+            for name in guarded.NAMES}
         with self.assertRaisesRegex(Exception, "existing owner deny"):
             self.invoke()
         self.assertEqual(guarded.directory_dacl_sddl(self.root), prior)
