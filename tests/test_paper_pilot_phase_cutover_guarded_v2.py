@@ -1,4 +1,8 @@
-"""Windows-only owned disposable tests for the historical admission barrier."""
+"""Windows-only owned disposable tests for the historical admission barrier.
+
+Every case builds its own fixture inside a unique temporary directory created
+by this test, so it never depends on (or creates) any historical task state.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -17,7 +21,7 @@ from src.paper_pilot_phase_cutover import _current_sid
 from trace_gc.budget import RunBudget
 
 
-OWNED = Path(r"D:\codex-task-runs\issue90-real-historical-transition-disabled-plan-20260930-01\fence-owned-tests")
+TEMP_PREFIX = "jraphyte-fence-"
 LIMITS = {"retrieval_requests": 1, "model_calls": 1, "retries": 0,
           "solver_expansions": 1, "review_actions": 1, "request_bytes": 1000}
 
@@ -38,11 +42,14 @@ class GuardedFenceTests(unittest.TestCase):
     def setUp(self):
         if os.name != "nt":
             self.skipTest("Windows ACL contract")
-        OWNED.mkdir(exist_ok=True)
-        self.temp = tempfile.TemporaryDirectory(dir=OWNED)
+        self.sid = _current_sid()
+        self.temp = tempfile.TemporaryDirectory(prefix=TEMP_PREFIX)
         self.addCleanup(self._cleanup)
         self.base = Path(self.temp.name)
-        self.assertEqual(self.base.resolve().parent, OWNED.resolve())
+        # The fixture owns this fresh directory; only paths beneath it are ever
+        # given a barrier ACL or have one removed again.
+        self.assertTrue(self.base.is_dir())
+        self.assertTrue(self.base.name.startswith(TEMP_PREFIX))
         self.root = self.base / "old-app"
         self.root.mkdir()
         self.old = self.root / "state"
@@ -73,14 +80,25 @@ class GuardedFenceTests(unittest.TestCase):
             guarded.directory_dacl_sddl(self.old / name).encode()).hexdigest()
             for name in guarded.NAMES}
 
+    def _owned(self, path: Path) -> Path:
+        resolved = Path(path).resolve()
+        if not resolved.is_relative_to(self.base.resolve()):
+            raise AssertionError(f"refusing ACL change outside fixture: {path}")
+        return resolved
+
     def _cleanup(self):
+        # Lift only this test's own deny ACEs so the owned tree can be removed;
+        # no ancestor of the temporary directory has its ACL touched.
         if hasattr(self, "root") and self.root.exists():
-            _call("icacls.exe", str(self.root), "/remove:d", "*" + self.sid)
+            _call("icacls.exe", str(self._owned(self.root)), "/remove:d", "*" + self.sid)
         for root in (getattr(self, "old", None), getattr(self, "archive", None)):
             if root is not None and root.exists():
                 for name in guarded.NAMES:
-                    _call("icacls.exe", str(root / name), "/remove:d", "*" + self.sid)
+                    if (root / name).exists():
+                        _call("icacls.exe", str(self._owned(root / name)),
+                              "/remove:d", "*" + self.sid)
         self.temp.cleanup()
+        self.assertFalse(self.base.exists())
 
     def invoke(self):
         return guarded.fence_closed_old_phase_guarded(
