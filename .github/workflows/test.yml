@@ -15,6 +15,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install -r requirements.txt
       - run: python -m pip install Pillow==12.2.0 PyMuPDF==1.28.0
+      - name: Provision the declared build backend that the generated-sdist test imports
+        run: python -m pip install "setuptools>=68" wheel
       - run: python tools/run_validation.py
       - run: python -m pip install --no-deps .
       - run: trace-gc --version
@@ -70,6 +72,61 @@ jobs:
           python -m unittest discover -s tests -p "test_windows_fence_diagnostics.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
           grep -Eq '^Ran 18 tests in ' "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
           grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
+      - name: Run the forty-four native v1/v4 fence, receipt-validator and phase-ownership trustee cases
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_paper_pilot_phase_trustees_v1_v4.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-phase-trustees.log"
+          grep -Eq '^Ran 44 tests in ' "$RUNNER_TEMP/windows-phase-trustees.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-phase-trustees.log"
+      - name: Run the existing three v1 and eight v4 native fence cases as the runner identity
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_paper_pilot_phase_fence.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-phase-v1.log"
+          grep -Eq '^Ran 3 tests in ' "$RUNNER_TEMP/windows-phase-v1.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-phase-v1.log"
+          python -m unittest discover -s tests -p "test_paper_pilot_phase_cutover_guarded_v4.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-phase-v4.log"
+          grep -Eq '^Ran 8 tests in ' "$RUNNER_TEMP/windows-phase-v4.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-phase-v4.log"
+      - name: Build the sdist and the wheel from it, run the shipped affected tests from the extracted sdist, then check the installed wheel outside the checkout
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install build "setuptools>=68" wheel
+          python -m build --outdir "$RUNNER_TEMP/dist" .
+          python -c "import sys,tarfile,glob;tarfile.open(glob.glob(sys.argv[1]+'/dist/trace_gc-*.tar.gz')[0]).extractall(sys.argv[1]+'/sdist')" "$RUNNER_TEMP"
+          SDIST="$(python -c "import sys,glob;print(glob.glob(sys.argv[1]+'/sdist/trace_gc-*')[0])" "$RUNNER_TEMP")"
+          (
+            cd "$SDIST"
+            python -m unittest discover -s tests -p "test_sdist_phase_distribution.py" -v 2>&1 | tee "$RUNNER_TEMP/sdist-distribution.log"
+            grep -Eq '^Ran 3 tests in ' "$RUNNER_TEMP/sdist-distribution.log"
+            grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/sdist-distribution.log"
+            python -m unittest discover -s tests -p "test_paper_pilot_phase_trustees_v1_v4.py" -v 2>&1 | tee "$RUNNER_TEMP/sdist-phase-trustees.log"
+            grep -Eq '^Ran 44 tests in ' "$RUNNER_TEMP/sdist-phase-trustees.log"
+            grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/sdist-phase-trustees.log"
+            python -m unittest discover -s tests -p "test_paper_pilot_phase_fence.py" -v 2>&1 | tee "$RUNNER_TEMP/sdist-phase-v1.log"
+            grep -Eq '^Ran 3 tests in ' "$RUNNER_TEMP/sdist-phase-v1.log"
+            grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/sdist-phase-v1.log"
+            python -m unittest discover -s tests -p "test_paper_pilot_phase_cutover_guarded_v4.py" -v 2>&1 | tee "$RUNNER_TEMP/sdist-phase-v4.log"
+            grep -Eq '^Ran 8 tests in ' "$RUNNER_TEMP/sdist-phase-v4.log"
+            grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/sdist-phase-v4.log"
+          )
+          python -m venv "$RUNNER_TEMP/installed-venv"
+          INSTALLED="$RUNNER_TEMP/installed-venv/Scripts/python.exe"
+          "$INSTALLED" -m pip install -r requirements.txt
+          "$INSTALLED" -m pip install --no-deps "$RUNNER_TEMP"/dist/trace_gc-*.whl
+          DECLARED=()
+          for NAME in phase_authority.py budget.py canonical.py trust.py; do
+            DECLARED+=(--declared-source "$NAME=$(python -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1]+'/trace_gc/'+sys.argv[2],'rb').read()).hexdigest())" "$SDIST" "$NAME")")
+          done
+          mkdir "$RUNNER_TEMP/outside-checkout"
+          cd "$RUNNER_TEMP/outside-checkout"
+          "$INSTALLED" -I "$SDIST/tools/installed_phase_authority_check.py" --require-windows "${DECLARED[@]}" | tee "$RUNNER_TEMP/installed-phase-check.json"
+          python -c "import json,os;d=json.load(open(os.environ['RUNNER_TEMP']+'/installed-phase-check.json'));assert d['native_windows']=='RUN' and len(d['portable_checks'])==13 and len(d['windows_checks'])==29 and all(d['portable_checks'].values()) and all(d['windows_checks'].values()),d"
       - name: Sanitized Windows trustee serialization diagnostics
         if: always()
         continue-on-error: true

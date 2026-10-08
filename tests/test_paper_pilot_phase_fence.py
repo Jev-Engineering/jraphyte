@@ -10,8 +10,10 @@ import unittest
 
 from trace_gc.canonical import bytes_digest
 from trace_gc.errors import ContractError
-from trace_gc.phase_authority import directory_dacl_sddl
+from trace_gc.phase_authority import dacl_has_ace, directory_dacl_sddl
 from src.paper_pilot_phase_cutover import NAMES, _current_sid, fence_closed_old_phase
+
+PARENT_DENY = "(D;;LC;;;{sid})"
 
 
 @unittest.skipUnless(os.name == "nt", "requires disposable NTFS DACL fixture")
@@ -47,14 +49,14 @@ class PhaseNamespaceFenceTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_exact_replay_after_closed_directory_move(self):
-        self.assertNotIn(f"(D;;LC;;;{self.sid})", directory_dacl_sddl(self.old.parent))
+        self.assertFalse(dacl_has_ace(directory_dacl_sddl(self.old.parent), PARENT_DENY, self.sid))
         first = fence_closed_old_phase(old_root=self.old, archived_root=self.archived,
             expected_file_sha256=self.expected, deny_sid=self.sid, receipt_path=self.receipt)
         self.assertEqual(first["status"], "OLD_PATH_FENCED_NEW_PHASE_ALLOWED")
         self.assertFalse(self.old.exists())
         self.assertEqual({name: bytes_digest((self.archived / name).read_bytes())
                           for name in NAMES}, self.expected)
-        self.assertIn(f"(D;;LC;;;{self.sid})", directory_dacl_sddl(self.old.parent))
+        self.assertTrue(dacl_has_ace(directory_dacl_sddl(self.old.parent), PARENT_DENY, self.sid))
         with self.assertRaises((PermissionError, OSError)):
             self.old.mkdir()
         second = fence_closed_old_phase(old_root=self.old, archived_root=self.archived,
@@ -74,7 +76,7 @@ class PhaseNamespaceFenceTests(unittest.TestCase):
                 expected_file_sha256=wrong, deny_sid=self.sid, receipt_path=self.receipt)
         self.assertTrue(self.old.exists())
         self.assertFalse(self.archived.exists())
-        self.assertNotIn(f"(D;;LC;;;{self.sid})", directory_dacl_sddl(self.old.parent))
+        self.assertFalse(dacl_has_ace(directory_dacl_sddl(self.old.parent), PARENT_DENY, self.sid))
 
     def test_junction_archive_parent_holds_before_acl_or_rename(self):
         junction = self.root / "redirected-archive"

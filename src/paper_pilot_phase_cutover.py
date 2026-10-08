@@ -13,10 +13,11 @@ import subprocess
 
 from trace_gc.canonical import bytes_digest, dumps, loads
 from trace_gc.errors import require
-from trace_gc.phase_authority import _plain_absolute_path, directory_dacl_sddl
+from trace_gc.phase_authority import _plain_absolute_path, dacl_has_ace, directory_dacl_sddl
 
 NAMES = {"checkpoint.sqlite3", "graph.sqlite3", "budget.sqlite3",
          "application-journal.sqlite3", "controller.lock"}
+DENY_PARENT_ACE = "(D;;LC;;;{sid})"
 
 
 def _current_sid() -> str:
@@ -89,14 +90,16 @@ def fence_closed_old_phase(*, old_root: str | Path, archived_root: str | Path,
     else:
         _pinned_files(archived, expected_file_sha256)
     sddl = directory_dacl_sddl(old.parent)
-    deny = f"(D;;LC;;;{deny_sid})"
-    if deny not in sddl:
+    # Windows may spell this SID as a DACL alias (for example LA); the exact
+    # deny-create ACE is recognized under either spelling.
+    if not dacl_has_ace(sddl, DENY_PARENT_ACE, deny_sid):
         require(old.exists(), "PHASE_FENCE", "archive moved without durable parent deny")
         command = subprocess.run(["icacls.exe", str(old.parent), "/deny", "*" + deny_sid + ":(AD)"],
                                  capture_output=True, text=True, timeout=30)
         require(command.returncode == 0, "PHASE_FENCE", "could not deny old state recreation")
         sddl = directory_dacl_sddl(old.parent)
-    require(deny in sddl, "PHASE_FENCE", "old parent lacks exact deny-create ACE")
+    require(dacl_has_ace(sddl, DENY_PARENT_ACE, deny_sid), "PHASE_FENCE",
+            "old parent lacks exact deny-create ACE")
     if old.exists():
         # No COPY_ALLOWED: same-volume directory rename or HOLD. Application has
         # already closed every old database/lock handle; a leaked handle fails.

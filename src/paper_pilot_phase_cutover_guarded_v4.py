@@ -17,12 +17,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
 
 from trace_gc.canonical import bytes_digest, dumps, loads
 from trace_gc.errors import require
-from trace_gc.phase_authority import _plain_absolute_path, directory_dacl_sddl
+from trace_gc.phase_authority import (_plain_absolute_path, canonical_dacl_ace,
+                                      canonical_dacl_aces, dacl_has_ace,
+                                      dacl_has_deny_trustee, directory_dacl_sddl)
 from src.paper_pilot_phase_cutover import NAMES, _current_sid
 
 DENY_FILE_ACE = "(D;;DCLC;;;{sid})"
@@ -74,7 +75,7 @@ def _icacls(path: Path, *args: str) -> None:
 
 
 def _file_deny(path: Path, sid: str) -> bool:
-    return DENY_FILE_ACE.format(sid=sid) in directory_dacl_sddl(path)
+    return dacl_has_ace(directory_dacl_sddl(path), DENY_FILE_ACE, sid)
 
 
 def _readable_pins(root: Path, expected: dict[str, str]) -> None:
@@ -95,14 +96,13 @@ def _same_effective_dacl(before: str, after: str) -> bool:
     before_flags = before.split("(", 1)[0].removeprefix("D:").replace("AI", "")
     after_flags = after.split("(", 1)[0].removeprefix("D:").replace("AI", "")
     return (before_flags == after_flags and
-            re.findall(r"\([^)]*\)", before) ==
-            re.findall(r"\([^)]*\)", after))
+            canonical_dacl_aces(before) == canonical_dacl_aces(after))
 
 
 def _only_admission_dacl_added(original: str, current: str, sid: str) -> bool:
-    old_aces = re.findall(r"\([^)]*\)", original)
-    now_aces = re.findall(r"\([^)]*\)", current)
-    deny = DENY_FILE_ACE.format(sid=sid)
+    old_aces = canonical_dacl_aces(original)
+    now_aces = canonical_dacl_aces(current)
+    deny = canonical_dacl_ace(DENY_FILE_ACE.format(sid=sid))
     if deny in now_aces:
         now_aces.remove(deny)
     old_flags = original.split("(", 1)[0].removeprefix("D:").replace("AI", "")
@@ -111,14 +111,13 @@ def _only_admission_dacl_added(original: str, current: str, sid: str) -> bool:
 
 
 def _owner_deny_present(sddl: str, sid: str) -> bool:
-    return any(ace.startswith("(D;") and ace.endswith(";;;" + sid + ")")
-               for ace in re.findall(r"\([^)]*\)", sddl))
+    return dacl_has_deny_trustee(sddl, sid)
 
 
 def _only_parent_admission_added(original: str, current: str, sid: str) -> bool:
-    old_aces = re.findall(r"\([^)]*\)", original)
-    now_aces = re.findall(r"\([^)]*\)", current)
-    deny = DENY_PARENT_ACE.format(sid=sid)
+    old_aces = canonical_dacl_aces(original)
+    now_aces = canonical_dacl_aces(current)
+    deny = canonical_dacl_ace(DENY_PARENT_ACE.format(sid=sid))
     if deny in now_aces:
         now_aces.remove(deny)
     old_flags = original.split("(", 1)[0].removeprefix("D:").replace("AI", "")
@@ -231,7 +230,7 @@ def fence_closed_old_phase_guarded(*, old_root: str | Path,
                     {name: bytes_digest(value.encode()) for name, value in
                      original.items()} == expected_file_dacl_sha256,
                     "PHASE_FENCE", "original Windows DACL identity changed")
-            require(all(DENY_FILE_ACE.format(sid=deny_sid) not in value
+            require(all(not dacl_has_ace(value, DENY_FILE_ACE, deny_sid)
                         for value in original.values()),
                     "PHASE_FENCE", "unreviewed preexisting file deny")
             recorded = {"version": "paper-pilot-admission-barrier-v1",
@@ -278,11 +277,11 @@ def fence_closed_old_phase_guarded(*, old_root: str | Path,
                     require(_file_deny(path, deny_sid), "PHASE_FENCE",
                             "new old-state write open not denied")
                 parent_sddl = directory_dacl_sddl(old.parent)
-                if DENY_PARENT_ACE.format(sid=deny_sid) not in parent_sddl:
+                if not dacl_has_ace(parent_sddl, DENY_PARENT_ACE, deny_sid):
                     _icacls(old.parent, "/deny", "*" + deny_sid + ":(AD)")
-                require(DENY_PARENT_ACE.format(sid=deny_sid) in
-                    directory_dacl_sddl(old.parent), "PHASE_FENCE",
-                    "old state recreation remains possible")
+                require(dacl_has_ace(directory_dacl_sddl(old.parent), DENY_PARENT_ACE,
+                                     deny_sid), "PHASE_FENCE",
+                        "old state recreation remains possible")
                 require(_only_parent_admission_added(
                             recorded["original_parent_dacl_sddl"],
                             directory_dacl_sddl(old.parent), deny_sid),
@@ -317,9 +316,8 @@ def fence_closed_old_phase_guarded(*, old_root: str | Path,
             require(not _file_deny(path, deny_sid), "PHASE_FENCE",
                     "archived readback still denied")
         _readable_pins(archived, expected_file_sha256)
-        require(DENY_PARENT_ACE.format(sid=deny_sid) in
-                directory_dacl_sddl(old.parent), "PHASE_FENCE",
-                "old fixed path admission reopened")
+        require(dacl_has_ace(directory_dacl_sddl(old.parent), DENY_PARENT_ACE, deny_sid),
+                "PHASE_FENCE", "old fixed path admission reopened")
         require(_only_parent_admission_added(
                     recorded["original_parent_dacl_sddl"],
                     directory_dacl_sddl(old.parent), deny_sid),
