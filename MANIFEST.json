@@ -7,8 +7,8 @@
   "files": [
     {
       "path": ".github/workflows/test.yml",
-      "bytes": 3588,
-      "sha256": "6b5dfbc1cbdf7e6fad4da3f51eec30bef6514a32809701047f61b7d8391fec89"
+      "bytes": 3589,
+      "sha256": "9c147d3ff67e4bc298c4376bcef076390c1a86d25ee9333ddf1d01ff861f4b23"
     },
     {
       "path": ".gitignore",
@@ -2962,8 +2962,8 @@
     },
     {
       "path": "tests/test_windows_fixture_acl.py",
-      "bytes": 11278,
-      "sha256": "704d60ecffa1aa3ad6146d20ad8da719db7ad9b34ad52cc48979323add43a546"
+      "bytes": 11977,
+      "sha256": "438d68653cd88d60f4376f1bda7cb33e443d32059e0b86ef0f32b788ba5b4563"
     },
     {
       "path": "tools/build_schemas.py",

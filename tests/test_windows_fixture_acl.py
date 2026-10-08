@@ -46,6 +46,15 @@ class ProblemCodeTests(unittest.TestCase):
                 ("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA)", False, ["MALFORMED_ACE", "UNREVIEWED_TRUSTEES"])):
             self.assertEqual(fixture.fixture_acl_problems(sddl, is_dir), expected, sddl)
 
+    def test_an_added_everyone_read_allow_reports_both_rights_and_trustee(self):
+        # The shape icacls /grant *S-1-1-0:(R) leaves behind: a read-only ACE for a trustee outside the trio.
+        self.assertEqual(fixture.fixture_acl_problems(FILE_OK + "(A;;FR;;;WD)", False),
+                         ["UNREVIEWED_RIGHTS", "UNREVIEWED_TRUSTEES"])
+        self.assertEqual(fixture.fixture_acl_problems(DIR_OK + "(A;OICI;FR;;;WD)", True),
+                         ["UNREVIEWED_RIGHTS", "UNREVIEWED_TRUSTEES"])
+        self.assertEqual(fixture.fixture_acl_problems("D:P(A;;FR;;;WD)" + FILE_OK[3:], False),
+                         ["UNREVIEWED_RIGHTS", "UNREVIEWED_TRUSTEES"])
+
     def test_a_barrier_deny_is_never_part_of_the_stabilized_shape(self):
         self.assertEqual(fixture.fixture_acl_problems("D:P(D;;DCLC;;;BU)" + FILE_OK[3:], False),
                          ["NON_ALLOW_ACE", "UNREVIEWED_RIGHTS", "UNREVIEWED_TRUSTEES"])
@@ -190,7 +199,7 @@ class NativeStabilizedFixtureTests(unittest.TestCase):
         self.stabilize()
         _icacls(str(self.file), "/grant", "*S-1-1-0:(R)")
         self.assertEqual(fixture.fixture_acl_problems(guarded.directory_dacl_sddl(self.file), False),
-                         ["UNREVIEWED_TRUSTEES"])
+                         ["UNREVIEWED_RIGHTS", "UNREVIEWED_TRUSTEES"])
 
     def test_the_fixture_base_itself_is_never_touched(self):
         before = guarded.directory_dacl_sddl(self.base)
