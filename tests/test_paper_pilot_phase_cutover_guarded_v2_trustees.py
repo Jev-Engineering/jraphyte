@@ -19,6 +19,7 @@ from unittest.mock import patch
 
 from src import paper_pilot_phase_cutover_guarded_v2 as guarded
 from src.paper_pilot_phase_cutover import _current_sid
+from tools import windows_fixture_acl
 
 
 USERS_SID = "S-1-5-32-545"      # serialized by Windows as the alias BU
@@ -236,6 +237,11 @@ class AliasIdentityFenceTests(unittest.TestCase):
             self.content[name] = hashlib.sha256(body).hexdigest()
         for name in ("source-stage.lock", "phase-stage.lock"):
             (self.root / name).write_bytes(b"0")
+        # Explicit, protected and verified before the first pin (see tools/windows_fixture_acl.py).
+        windows_fixture_acl.stabilize_owned_fixture(
+            self.base, [("parent", self.root), ("state", self.old)]
+            + [("file:" + name, self.old / name) for name in sorted(guarded.NAMES)],
+            read=guarded.directory_dacl_sddl)
         self._pin()
 
     def _pin(self):

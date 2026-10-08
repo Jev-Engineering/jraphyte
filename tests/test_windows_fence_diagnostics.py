@@ -127,7 +127,29 @@ class ProbeCleanupTests(unittest.TestCase):
         self.assertNotIn(os.environ.get("USERNAME", "\0"), rendered)
         self.assertNotIn(self.sid.rsplit("-", 1)[0], rendered)   # machine sub-authorities redacted
 
-    def test_dacl_query_failure_still_removes_probe_deny_without_leaking(self):
+    def test_post_deny_dacl_query_failure_still_removes_probe_deny_without_leaking(self):
+        # collect() reads the probe DACL first before the deny (recorded separately), then after it.
+        calls = {"count": 0}
+
+        def fail_second_read(path):
+            calls["count"] += 1
+            if calls["count"] == 2:
+                raise RuntimeError(SECRET_TEXT)
+            return self.real_dacl(path)
+        with patch.object(self.guarded, "directory_dacl_sddl", side_effect=fail_second_read):
+            report, cleanup_ok = self._collect()
+        self.assertGreaterEqual(calls["count"], 3)
+        self.assertIn("probe_dacl_before_runner_deny", report)
+        self.assertNotIn("probe_before_error", report)
+        self.assertEqual(report["diagnostic_error"],
+                         {"type": "RuntimeError", "category": "unspecified"})
+        self.assertEqual(report["probe_cleanup"],
+                         {"icacls_remove_exit": 0, "deny_absent_verified": True})
+        self.assertTrue(cleanup_ok)
+        self.assertIs(self.at_exit["deny_present"], False)
+        self.assertNotIn("private-account", json.dumps(report))
+
+    def test_first_dacl_query_failure_is_recorded_separately_and_the_probe_continues(self):
         calls = {"count": 0}
 
         def fail_first_read(path):
@@ -137,10 +159,11 @@ class ProbeCleanupTests(unittest.TestCase):
             return self.real_dacl(path)
         with patch.object(self.guarded, "directory_dacl_sddl", side_effect=fail_first_read):
             report, cleanup_ok = self._collect()
-        self.assertEqual(report["diagnostic_error"],
-                         {"type": "RuntimeError", "category": "unspecified"})
-        self.assertEqual(report["probe_cleanup"],
-                         {"icacls_remove_exit": 0, "deny_absent_verified": True})
+        self.assertEqual(report["probe_before_error"], {"type": "RuntimeError", "category": "unspecified"})
+        self.assertNotIn("probe_dacl_before_runner_deny", report)
+        self.assertNotIn("diagnostic_error", report)
+        self.assertTrue(report["barrier_recognizes_deny"])
+        self.assertEqual(report["probe_cleanup"], {"icacls_remove_exit": 0, "deny_absent_verified": True})
         self.assertTrue(cleanup_ok)
         self.assertIs(self.at_exit["deny_present"], False)
         self.assertNotIn("private-account", json.dumps(report))
@@ -154,6 +177,34 @@ class ProbeCleanupTests(unittest.TestCase):
         self.assertTrue(cleanup_ok)
         self.assertIs(self.at_exit["deny_present"], False)
         self.assertNotIn("secret-dir", json.dumps(report))
+
+    def test_probe_directory_removal_failure_alone_is_not_clean_and_main_is_nonzero(self):
+        outer = self.factory
+
+        class ProbeDirectoryFailsOnRemoval(outer):
+            def __init__(self, *args, prefix=None, **options):
+                super().__init__(*args, prefix=prefix, **options)
+                self.fails = prefix == "jraphyte-fence-diag-"
+
+            def __exit__(self, *exc):
+                super().__exit__(*exc)
+                if self.fails:
+                    raise OSError(SECRET_TEXT)
+        report, cleanup_ok = diagnostics.collect(self.guarded, temp_factory=ProbeDirectoryFailsOnRemoval)
+        self.assertFalse(cleanup_ok)
+        # Only the probe directory's removal failed: the probe deny and the trace are clean.
+        self.assertEqual(report["probe_cleanup"], {"icacls_remove_exit": 0, "deny_absent_verified": True})
+        self.assertEqual(report["probe_directory_removal"], "failed")
+        self.assertEqual(report["probe_directory_removal_error"], {"type": "OSError", "category": "unspecified"})
+        self.assertNotIn("diagnostic_error", report)
+        self.assertEqual(report["fence_trace"]["cleanup"]["directory_removal"], "ok")
+        self.assertEqual(report["fence_trace"]["cleanup"]["denies_remaining"], 0)
+        self.assertNotIn("private-account", json.dumps(report))
+        buffer = io.StringIO()
+        with patch.object(diagnostics.collect, "__kwdefaults__", {"temp_factory": ProbeDirectoryFailsOnRemoval}), \
+                redirect_stdout(buffer):
+            self.assertEqual(diagnostics.main(), 1)
+        self.assertEqual(json.loads(buffer.getvalue())["probe_directory_removal"], "failed")
 
     def test_failed_probe_cleanup_is_reported_and_nonzero(self):
         real_run = subprocess.run
@@ -181,13 +232,18 @@ class ProbeCleanupTests(unittest.TestCase):
         self.assertTrue(outcome == {"status": "OLD_PATH_FENCED_NEW_PHASE_ALLOWED"} or "error" in outcome,
                         outcome)
         labels = {"temp_parent", "base", "parent", "state"} | {"file:" + n for n in self.guarded.NAMES}
-        for phase in ("setup", "at_end", "after_remove_d"):
+        for phase in ("setup_as_created", "setup", "at_end", "after_remove_d"):
             self.assertEqual(set(trace[phase]), labels, phase)
+        self.assertEqual(trace["fixture_acl"], {"status": "stabilized", "targets": 2 + len(self.guarded.NAMES)})
         for label in labels:
             entry = trace["setup"][label]
             self.assertTrue(entry["sddl"].startswith("D:"), label)
             self.assertEqual(set(entry) & {"protected", "auto_inherited", "ace_count"},
                              {"protected", "auto_inherited", "ace_count"}, label)
+        for label in ("parent", "state") + tuple("file:" + n for n in self.guarded.NAMES):
+            entry = trace["setup"][label]
+            self.assertEqual((entry["protected"], entry["inherited_allow"], entry["explicit_allow"],
+                              entry["explicit_copies_of_inherited"]), (True, 0, 3, 0), label)
         self.assertEqual(trace["cleanup"]["denies_remaining"], 0)
         self.assertIs(self.at_exit["tree_denies"], 0)
         rendered = json.dumps(trace)

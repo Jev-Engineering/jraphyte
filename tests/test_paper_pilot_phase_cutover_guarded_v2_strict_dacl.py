@@ -7,12 +7,14 @@ and the ``AI`` control flag tolerated). An explicit allow ACE is not equivalent
 to an inherited one: it survives a later revocation or removal of the parent
 grant, so an unexpected explicit allow copy must fail closed, never be absorbed.
 
-Hosted Windows Server 2025 logs show the fence parent and state files carrying explicit
-copies of the inherited allows. Which step produced them (fixture creation, inheritance
-propagation, or the guard's own ``icacls`` calls) is not established, and fixture
-stabilization is not claimed to fix it; hosted before/after traces are still required.
-These cases pin the strict behavior and use real ``icacls`` grants on disposable
-fixtures only to build that shape; they do not bless it.
+Hosted Windows Server 2025 traces show that ``icacls /deny`` on an unprotected object that
+carries inherited allows leaves explicit copies of those allows behind, which this strict
+comparison rejects. Native fixtures therefore start from a deterministic owned ACL: protected,
+with only the explicit allows of the CPython 0o700 base (tools/windows_fixture_acl.py), made
+and verified before anything is pinned. That stabilization is not claimed sufficient until a
+hosted run shows it. The one case that needs inherited allows (the declared explicit-plus-
+inherited source) declares and verifies that shape itself before pinning. No case relaxes or
+blesses anything: the negatives still require a changed ACE list to fail closed.
 """
 from __future__ import annotations
 
@@ -26,6 +28,7 @@ import unittest
 from unittest.mock import patch
 
 from src import paper_pilot_phase_cutover_guarded_v2 as guarded
+from tools import windows_fixture_acl
 
 
 ALIAS = "BU"    # an already-serialized trustee keeps the text cases off ctypes
@@ -37,6 +40,7 @@ PARENT_WITH_COPIES = ("D:AI(D;;LC;;;BU)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;F
                       "(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;OW)")
 TRUSTEE_SIDS = {"SY": "S-1-5-18", "BA": "S-1-5-32-544", "OW": "S-1-3-4"}
 EVERYONE_SID = "S-1-1-0"
+USERS_SID = "S-1-5-32-545"
 TEMP_PREFIX = "jraphyte-fence-strict-"
 OPEN_FOR_WRITE = "from pathlib import Path; import sys; Path(sys.argv[1]).open('a+b').close()"
 
@@ -135,6 +139,21 @@ def _grant_explicit_copies(path: Path) -> None:
     assert _explicit_twins(guarded.directory_dacl_sddl(path)), "hosted shape not reached"
 
 
+def _grant_unexpected_explicit_allow(path: Path) -> None:
+    """Add one explicit allow ACE that the pinned DACL does not contain (a real icacls grant)."""
+    before = guarded._aces(guarded.directory_dacl_sddl(path))
+    if path.is_dir():
+        # Same trustee and rights as a pinned inheritable allow, minus the inheritance flags.
+        _icacls(str(path), "/grant", "*" + TRUSTEE_SIDS["SY"] + ":(F)")
+    else:
+        # A file has no flag variants of an allow; a new reviewed-looking trustee is the copy.
+        _icacls(str(path), "/grant", "*" + USERS_SID + ":(R)")
+    after = guarded._aces(guarded.directory_dacl_sddl(path))
+    added = [ace for ace in after if ace not in before]
+    assert len(after) == len(before) + 1 and len(added) == 1 and added[0].startswith("(A;"), \
+        "the unexpected explicit allow was not added as exactly one new ACE"
+
+
 @unittest.skipUnless(os.name == "nt", "Windows ACL contract")
 class StrictAclFenceTests(unittest.TestCase):
     def setUp(self):
@@ -156,6 +175,10 @@ class StrictAclFenceTests(unittest.TestCase):
             self.content[name] = hashlib.sha256(body).hexdigest()
         for name in ("source-stage.lock", "phase-stage.lock"):
             (self.root / name).write_bytes(b"0")
+        windows_fixture_acl.stabilize_owned_fixture(
+            self.base, [("parent", self.root), ("state", self.old)]
+            + [("file:" + name, self.old / name) for name in sorted(guarded.NAMES)],
+            read=guarded.directory_dacl_sddl)
         self.pin()
 
     def pin(self):
@@ -221,6 +244,9 @@ class StrictAclFenceTests(unittest.TestCase):
 
     def test_declared_explicit_and_inherited_source_is_preserved_exactly(self):
         # Fixture ACL declared (and verified) before pinning: explicit + inherited allows.
+        # Reset to inheritance-only, parent first, then add the explicit copies.
+        for path in (self.root, self.old, *(self.old / name for name in guarded.NAMES)):
+            _icacls(str(path), "/reset")
         _grant_explicit_copies(self.root)
         for name in guarded.NAMES:
             _grant_explicit_copies(self.old / name)
@@ -245,22 +271,27 @@ class StrictAclFenceTests(unittest.TestCase):
         self.assertEqual({name: hashlib.sha256((self.archive / name).read_bytes()).hexdigest()
                           for name in guarded.NAMES}, self.content)
 
-    def test_unexpected_explicit_copies_on_the_parent_fail_closed_before_the_rename(self):
-        def copies_on_parent(path):
+    def test_unexpected_explicit_allow_copy_on_the_parent_fails_closed_before_the_rename(self):
+        # The deterministic baseline is protected and explicit; the copy is injected after the
+        # guard's own deny, so it is the only change besides the deny.
+        self.assertEqual(windows_fixture_acl.fixture_acl_problems(self.original_parent, True), [])
+
+        def copy_on_parent(path):
             if path == self.root:
-                _grant_explicit_copies(path)
-        with self.after_guard_deny(copies_on_parent), \
+                _grant_unexpected_explicit_allow(path)
+        with self.after_guard_deny(copy_on_parent), \
                 patch.object(guarded.os, "rename", wraps=os.rename) as rename:
             with self.assertRaisesRegex(Exception, "old parent DACL broadened"):
                 self.invoke()
             rename.assert_not_called()
         self.assert_failed_closed("parent")
 
-    def test_unexpected_explicit_copies_on_a_denied_file_fail_closed_on_replay(self):
+    def test_unexpected_explicit_allow_on_a_denied_file_fails_closed_on_replay(self):
+        self.assertEqual(windows_fixture_acl.fixture_acl_problems(self.original_files["controller.lock"], False), [])
         calls = {"count": 0}
 
         def copies_then_crash(path):
-            _grant_explicit_copies(path)
+            _grant_unexpected_explicit_allow(path)
             calls["count"] += 1
             if calls["count"] == 1:
                 raise RuntimeError("injected post-controller-deny crash")

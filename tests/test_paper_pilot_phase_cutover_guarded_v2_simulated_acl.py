@@ -24,6 +24,7 @@ import unittest
 from unittest.mock import patch
 
 from src import paper_pilot_phase_cutover_guarded_v2 as guarded
+from tools import windows_fixture_acl
 from trace_gc.errors import ContractError
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +63,7 @@ class SimulatedDacls:
 
     PROTECTED_BASE = ["(A;OICI;FA;;;SY)", "(A;OICI;FA;;;BA)", "(A;OICI;FA;;;OW)"]
     MASKS = {"(WD,AD)": "DCLC", "(AD)": "LC"}
+    ALIASES = {"S-1-5-18": "SY", "S-1-5-32-544": "BA", "S-1-3-4": "OW"}
 
     def __init__(self):
         self.entries: dict[str, dict] = {}
@@ -109,6 +111,23 @@ class SimulatedDacls:
             trustee = args[1].lstrip("*")
             entry["aces"] = [ace for ace in entry["aces"]
                              if not (ace.startswith("(D;") and ace.endswith(";;;" + trustee + ")"))]
+        elif args[0] == "/inheritance:r":
+            if args[1] != "/grant:r":
+                raise AssertionError("unmodelled icacls operation")
+            entry["control"] = "P" + entry["control"].replace("P", "")
+            entry["aces"] = [ace for ace in entry["aces"]
+                             if "ID" not in _tokens(ace[1:-1].split(";")[1])]
+            for grant in args[2:]:
+                trustee, rights = grant.split(":", 1)
+                flags = "OICI" if rights == "(OI)(CI)(F)" else ""
+                if rights not in ("(OI)(CI)(F)", "(F)"):
+                    raise AssertionError("unmodelled icacls rights")
+                alias = self.ALIASES[trustee.lstrip("*")]
+                ace = "(A;" + flags + ";FA;;;" + alias + ")"
+                entry["aces"] = [a for a in entry["aces"]
+                                 if not (a.startswith("(A;") and "ID" not in _tokens(a[1:-1].split(";")[1])
+                                         and a.endswith(";;;" + alias + ")"))]
+                entry["aces"].append(ace)
         else:
             raise AssertionError("unmodelled icacls operation")
         for hook in list(self.hooks):
@@ -130,6 +149,15 @@ class SimulatedDacls:
     def broaden(self, path) -> None:
         entry = self.ensure(path)
         entry["aces"].insert(self._leading_denies(entry), "(A;;FR;;;WD)")
+
+    def duplicate_first_allow(self, path, flags: str | None = None) -> None:
+        """Insert one more explicit allow equal to the first allow (optionally with other flags)."""
+        entry = self.ensure(path)
+        first = next(ace for ace in entry["aces"] if ace.startswith("(A;"))
+        fields = first[1:-1].split(";")
+        if flags is not None:
+            fields[1] = flags
+        entry["aces"].insert(self._leading_denies(entry), "(" + ";".join(fields) + ")")
 
     def materialize_tree(self, path) -> None:
         self.ensure(path)
@@ -236,6 +264,15 @@ class SimulatedFenceCase(unittest.TestCase):
             self.content[name] = hashlib.sha256(body).hexdigest()
         for name in ("source-stage.lock", "phase-stage.lock"):
             (self.root / name).write_bytes(b"0")
+
+    def stabilize(self):
+        targets = [("parent", self.root), ("state", self.old)] + [
+            ("file:" + name, self.old / name) for name in sorted(guarded.NAMES)]
+
+        def run(command, **options):
+            self.model.icacls(Path(command[1]), *command[2:])
+            return subprocess.CompletedProcess(command, 0, "", "")
+        windows_fixture_acl.stabilize_owned_fixture(self.base, targets, read=self.model.read, run=run)
 
     def pin(self):
         self.original_parent = self.model.read(self.root)
@@ -353,18 +390,91 @@ class SimulatedGuardTests(SimulatedFenceCase):
         self.assert_failed_closed()
 
 
+class SimulatedStabilizedFixtureTests(SimulatedFenceCase):
+    """The owned fixture made explicit and protected before it is pinned (model, not Windows)."""
+
+    def test_stabilized_fixture_has_only_the_reviewed_explicit_allows_and_no_inherited_ace(self):
+        self.stabilize()
+        self.assertEqual(self.model.read(self.root),
+                         "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)")
+        self.assertEqual(self.model.read(self.old),
+                         "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)")
+        for name in guarded.NAMES:
+            self.assertEqual(self.model.read(self.old / name),
+                             "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;OW)", name)
+        for path in (self.root, self.old, *(self.old / name for name in guarded.NAMES)):
+            self.assertNotIn("ID", self.model.read(path).replace("D:", ""), path)
+
+    def test_the_unchanged_guard_rejects_the_hosted_shape_on_an_unstabilized_fixture(self):
+        self.pin()
+        self.model.deny_adds_explicit_copies = True
+        with self.assertRaisesRegex(ContractError, "old parent DACL broadened during fence"):
+            self.invoke()
+        self.assertEqual(self.proxy.renames, [])
+
+    def test_the_same_switch_leaves_a_stabilized_fixture_exactly_preserved(self):
+        self.stabilize()
+        self.pin()
+        self.model.deny_adds_explicit_copies = True
+        result = self.invoke()
+        self.assertEqual(result["status"], "OLD_PATH_FENCED_NEW_PHASE_ALLOWED")
+        self.assertEqual(len(self.proxy.renames), 1)
+        parent_now = guarded._aces(self.model.read(self.root))
+        parent_now.remove("(D;;LC;;;" + SID + ")")
+        self.assertEqual(parent_now, guarded._aces(self.original_parent))
+        for name in guarded.NAMES:
+            self.assertEqual(guarded._aces(self.model.read(self.archive / name)),
+                             guarded._aces(self.original_files[name]), name)
+            self.assertFalse(guarded._file_deny(self.archive / name, SID))
+
+    def test_an_unexpected_explicit_allow_copy_on_the_parent_still_fails_closed(self):
+        self.stabilize()
+        self.pin()
+        self.model.hooks.append(lambda path, args: self.model.duplicate_first_allow(path, flags="")
+                                if path == self.root and args[0] == "/deny" else None)
+        with self.assertRaisesRegex(ContractError, "old parent DACL broadened during fence"):
+            self.invoke()
+        self.assertIn("(A;;FA;;;SY)", guarded._aces(self.model.read(self.root)))
+        self.assert_failed_closed()
+
+    def test_an_unexpected_explicit_allow_copy_on_a_denied_file_still_fails_closed_on_replay(self):
+        self.stabilize()
+        self.pin()
+        self.crash_after_first_deny(also=self.model.duplicate_first_allow)
+        with self.assertRaisesRegex(RuntimeError, CRASH):
+            self.invoke()
+        self.model.hooks.clear()
+        with self.assertRaisesRegex(ContractError, "unreviewed old file DACL drift"):
+            self.invoke()
+        self.assert_failed_closed()
+
+    def test_real_broadening_still_fails_closed_on_a_stabilized_fixture(self):
+        self.stabilize()
+        self.pin()
+        self.model.hooks.append(lambda path, args: self.model.broaden(path)
+                                if path == self.root and args[0] == "/deny" else None)
+        with self.assertRaisesRegex(ContractError, "old parent DACL broadened during fence"):
+            self.invoke()
+        self.assert_failed_closed()
+
+
 class SimulatedTraceTests(SimulatedFenceCase):
     """The real trace_fence, run on its own fixture, against the same simulated layer."""
 
     LABELS = {"temp_parent", "base", "parent", "state"} | {"file:" + n for n in guarded.NAMES}
     SECRET = r"C:\Users\private-account\secret S-1-5-21-1-2-3-1001"
 
-    def run_trace(self, *, remove_exit=0, factory=tempfile.TemporaryDirectory, timeouts=(), on_cleanup=None):
+    def run_trace(self, *, remove_exit=0, factory=tempfile.TemporaryDirectory, timeouts=(), on_cleanup=None,
+                  protect_exit=0):
         """Cleanup-time ``icacls.exe`` calls (numbered from 1) listed in ``timeouts`` time out."""
         real_run = subprocess.run
         calls = {"cleanup": 0}
 
         def fake_run(args, *rest, **options):
+            if args and args[0] == "icacls.exe" and "/inheritance:r" in args:
+                if protect_exit == 0:
+                    self.model.icacls(Path(args[1]), *args[2:])
+                return subprocess.CompletedProcess(args, protect_exit, "", "")
             if args and args[0] == "icacls.exe":
                 calls["cleanup"] += 1
                 if calls["cleanup"] == 1 and on_cleanup is not None:
@@ -389,14 +499,20 @@ class SimulatedTraceTests(SimulatedFenceCase):
         trace, ok = self.run_trace()
         self.assertTrue(ok, trace)
         self.assertEqual(trace["outcome"], {"status": "OLD_PATH_FENCED_NEW_PHASE_ALLOWED"})
-        for phase in ("setup", "at_end", "after_remove_d"):
+        for phase in ("setup_as_created", "setup", "at_end", "after_remove_d"):
             self.assertEqual(set(trace[phase]), self.LABELS, phase)
+        self.assertEqual(trace["fixture_acl"], {"status": "stabilized", "targets": 2 + len(guarded.NAMES)})
+        created = trace["setup_as_created"]
+        self.assertEqual((created["parent"]["control"], created["parent"]["inherited_allow"],
+                          created["parent"]["explicit_allow"]), ("", 3, 0))
+        self.assertEqual(created["file:controller.lock"]["inherited_allow"], 3)
         setup = trace["setup"]
         self.assertTrue(setup["base"]["protected"])
-        self.assertEqual((setup["parent"]["control"], setup["parent"]["inherited_allow"],
-                          setup["parent"]["explicit_allow"], setup["parent"]["deny"]), ("", 3, 0, 0))
-        self.assertEqual(setup["state"]["inherited_allow"], 3)
-        self.assertEqual(setup["file:controller.lock"]["explicit_copies_of_inherited"], 0)
+        for label in ("parent", "state") + tuple("file:" + name for name in guarded.NAMES):
+            self.assertEqual((setup[label]["protected"], setup[label]["inherited_allow"],
+                              setup[label]["explicit_allow"], setup[label]["ace_count"],
+                              setup[label]["explicit_copies_of_inherited"], setup[label]["deny"]),
+                             (True, 0, 3, 3, 0, 0), label)
         self.assertNotIn("strict", setup["parent"])
 
         steps = {(step["target"], step["operation"]): step for step in trace["steps"]}
@@ -435,8 +551,11 @@ class SimulatedTraceTests(SimulatedFenceCase):
         self.assertEqual(set(parent_cleanup["before"]), self.LABELS)
 
     def test_explicit_copies_are_reported_as_a_strict_failure_and_still_cleaned_up(self):
+        # A stand-in that leaves the fixture exactly as created (inheriting, unprotected), so the
+        # hosted shape can be reported; the real stabilization is covered by the other tests.
         self.model.deny_adds_explicit_copies = True
-        trace, ok = self.run_trace()
+        with patch.object(windows_fixture_acl, "stabilize_owned_fixture", lambda *args, **kwargs: None):
+            trace, ok = self.run_trace()
         self.assertTrue(ok, trace)
         self.assertEqual(trace["outcome"], {"error": {
             "type": "ContractError", "category": "PHASE_FENCE",
@@ -591,6 +710,32 @@ class SimulatedTraceTests(SimulatedFenceCase):
         self.assertEqual(trace["outcome"], {"status": "OLD_PATH_FENCED_NEW_PHASE_ALLOWED"})
         self.assertNotIn("private-account", json.dumps(trace))
 
+    def test_a_fixture_that_cannot_be_stabilized_is_reported_and_the_fence_is_not_run(self):
+        with patch.object(guarded, "fence_closed_old_phase_guarded") as fence:
+            trace, ok = self.run_trace(protect_exit=5)
+        fence.assert_not_called()
+        self.assertFalse(ok)
+        self.assertEqual(trace["fixture_acl"]["status"], "failed")
+        self.assertEqual({problem["code"] for problem in trace["fixture_acl"]["problems"]}, {"ICACLS_FAILED"})
+        self.assertEqual(trace["outcome"], {"error": {"type": "FixtureAclError", "category": "unspecified"}})
+        self.assertEqual(trace["steps"], [])
+        self.assertEqual(trace["cleanup"]["denies_remaining"], 0)
+        self.assertEqual(trace["cleanup"]["directory_removal"], "ok")
+
+    def test_an_unverifiable_stabilized_dacl_is_reported_with_fixed_codes_only(self):
+        real_read = self.model.read
+
+        def inherited_again(path):
+            return real_read(path).replace("(A;;FA;;;SY)", "(A;ID;FA;;;SY)")
+        with patch.object(guarded, "directory_dacl_sddl", inherited_again):
+            trace, ok = self.run_trace()
+        self.assertFalse(ok)
+        problems = trace["fixture_acl"]["problems"]
+        self.assertTrue(problems)
+        self.assertTrue(all(problem["code"] in ("INHERITED_ACE",) for problem in problems), problems)
+        self.assertEqual({problem["target"] for problem in problems}, {"file:" + n for n in guarded.NAMES})
+        self.assertNotIn("private-account", json.dumps(trace))
+
     def test_a_failed_setup_is_not_clean(self):
         class FailsToCreate(tempfile.TemporaryDirectory):
             def __enter__(self):
@@ -609,6 +754,130 @@ class SimulatedTraceTests(SimulatedFenceCase):
         self.assertEqual(recorded, 4)
         self.assertEqual(trace["operations_dropped"], 11 + 6 - 4)
         self.assertTrue(ok, trace)
+
+
+class SimulatedCollectTests(SimulatedFenceCase):
+    """The real collect() (probe deny, probe cleanup, probe directory removal, then the trace)."""
+
+    SECRET = SimulatedTraceTests.SECRET
+
+    def run_collect(self, *, factory=tempfile.TemporaryDirectory, read=None):
+        real_run = subprocess.run
+
+        def fake_run(args, *rest, **options):
+            if args and args[0] == "icacls.exe":
+                self.model.icacls(Path(args[1]), *args[2:])
+                return subprocess.CompletedProcess(args, 0, "", "")
+            return real_run(args, *rest, **options)
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(diagnostics.subprocess, "run", side_effect=fake_run))
+            if read is not None:
+                stack.enter_context(patch.object(guarded, "directory_dacl_sddl", read))
+            return diagnostics.collect(guarded, temp_factory=factory)
+
+    @staticmethod
+    def removal_fails_for(prefix):
+        class FailsOnRemoval(tempfile.TemporaryDirectory):
+            def __init__(self, *args, prefix=None, **options):
+                super().__init__(*args, prefix=prefix, **options)
+                self.fails = prefix == fail_prefix
+
+            def __exit__(self, *exc):
+                super().__exit__(*exc)
+                if self.fails:
+                    raise OSError(SimulatedCollectTests.SECRET)
+        fail_prefix = prefix
+        return FailsOnRemoval
+
+    def test_a_clean_run_reports_every_cleanup_ok(self):
+        report, ok = self.run_collect()
+        self.assertTrue(ok, report)
+        self.assertEqual(report["probe_cleanup"], {"icacls_remove_exit": 0, "deny_absent_verified": True})
+        self.assertEqual(report["probe_directory_removal"], "ok")
+        self.assertEqual(report["fence_trace"]["fixture_acl"]["status"], "stabilized")
+        self.assertNotIn("diagnostic_error", report)
+
+    def test_only_the_probe_directory_removal_failing_makes_the_status_not_clean(self):
+        report, ok = self.run_collect(factory=self.removal_fails_for("jraphyte-fence-diag-"))
+        self.assertFalse(ok)
+        self.assertEqual(report["probe_cleanup"], {"icacls_remove_exit": 0, "deny_absent_verified": True})
+        self.assertEqual(report["probe_directory_removal"], "failed")
+        self.assertEqual(report["probe_directory_removal_error"], {"type": "OSError", "category": "unspecified"})
+        self.assertNotIn("diagnostic_error", report)
+        # The separate fence trace was entirely clean, so it is the probe directory alone.
+        self.assertEqual(report["fence_trace"]["cleanup"]["directory_removal"], "ok")
+        self.assertEqual(report["fence_trace"]["cleanup"]["denies_remaining"], 0)
+        self.assertEqual(report["fence_trace"]["outcome"], {"status": "OLD_PATH_FENCED_NEW_PHASE_ALLOWED"})
+        self.assertNotIn("private-account", json.dumps(report))
+
+    def test_main_exits_nonzero_when_only_the_probe_directory_removal_fails(self):
+        import io
+        from contextlib import redirect_stdout
+        for fails, expected in (("jraphyte-fence-diag-", 1), ("no-such-prefix", 0)):
+            factory = self.removal_fails_for(fails)
+            real_run = subprocess.run
+
+            def fake_run(args, *rest, **options):
+                if args and args[0] == "icacls.exe":
+                    self.model.icacls(Path(args[1]), *args[2:])
+                    return subprocess.CompletedProcess(args, 0, "", "")
+                return real_run(args, *rest, **options)
+            buffer = io.StringIO()
+            with patch.object(diagnostics.subprocess, "run", side_effect=fake_run), \
+                    patch.object(diagnostics.collect, "__kwdefaults__", {"temp_factory": factory}), \
+                    redirect_stdout(buffer):
+                self.assertEqual(diagnostics.main(), expected, fails)
+            self.assertEqual(json.loads(buffer.getvalue())["probe_directory_removal"],
+                             "failed" if expected else "ok")
+
+    def test_a_probe_body_failure_and_the_probe_directory_removal_failure_are_both_reported(self):
+        reads = {"count": 0}
+        real_read = self.model.read
+
+        def fail_second_read(path):
+            reads["count"] += 1
+            if reads["count"] == 2:
+                raise RuntimeError(self.SECRET)
+            return real_read(path)
+        report, ok = self.run_collect(factory=self.removal_fails_for("jraphyte-fence-diag-"), read=fail_second_read)
+        self.assertFalse(ok)
+        self.assertEqual(report["diagnostic_error"], {"type": "RuntimeError", "category": "unspecified"})
+        self.assertEqual(report["probe_cleanup"], {"icacls_remove_exit": 0, "deny_absent_verified": True})
+        self.assertEqual(report["probe_directory_removal"], "failed")
+        self.assertNotIn("private-account", json.dumps(report))
+
+    def test_the_first_dacl_read_failing_is_recorded_before_the_deny_and_the_probe_continues(self):
+        reads = {"count": 0}
+        real_read = self.model.read
+
+        def fail_first_read(path):
+            reads["count"] += 1
+            if reads["count"] == 1:
+                raise RuntimeError(self.SECRET)
+            return real_read(path)
+        report, ok = self.run_collect(read=fail_first_read)
+        self.assertTrue(ok, report)
+        self.assertEqual(report["probe_before_error"], {"type": "RuntimeError", "category": "unspecified"})
+        self.assertNotIn("probe_dacl_before_runner_deny", report)
+        self.assertNotIn("diagnostic_error", report)
+        self.assertTrue(report["barrier_recognizes_deny"])
+        self.assertEqual(report["probe_cleanup"], {"icacls_remove_exit": 0, "deny_absent_verified": True})
+
+    def test_a_post_deny_dacl_read_failing_is_a_diagnostic_error_and_the_deny_is_still_removed(self):
+        reads = {"count": 0}
+        real_read = self.model.read
+
+        def fail_second_read(path):
+            reads["count"] += 1
+            if reads["count"] == 2:
+                raise RuntimeError(self.SECRET)
+            return real_read(path)
+        report, ok = self.run_collect(read=fail_second_read)
+        self.assertTrue(ok, report)
+        self.assertIn("probe_dacl_before_runner_deny", report)
+        self.assertEqual(report["diagnostic_error"], {"type": "RuntimeError", "category": "unspecified"})
+        self.assertEqual(report["probe_cleanup"], {"icacls_remove_exit": 0, "deny_absent_verified": True})
+        self.assertNotIn("private-account", json.dumps(report))
 
 
 class DescribeDaclTests(unittest.TestCase):

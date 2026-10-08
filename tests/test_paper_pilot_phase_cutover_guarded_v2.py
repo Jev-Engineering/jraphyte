@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 from src import paper_pilot_phase_cutover_guarded_v2 as guarded
 from src.paper_pilot_phase_cutover import _current_sid
+from tools import windows_fixture_acl
 from trace_gc.budget import RunBudget
 
 
@@ -74,6 +75,12 @@ class GuardedFenceTests(unittest.TestCase):
             (self.old / "budget.sqlite3").read_bytes()).hexdigest()
         for name in ("source-stage.lock", "phase-stage.lock"):
             (self.root / name).write_bytes(b"0")
+        # The fixture ACL is made explicit, protected and verified before any pin is taken, so
+        # nothing depends on what the temporary parent happens to pass down.
+        windows_fixture_acl.stabilize_owned_fixture(
+            self.base, [("parent", self.root), ("state", self.old)]
+            + [("file:" + name, self.old / name) for name in sorted(guarded.NAMES)],
+            read=guarded.directory_dacl_sddl)
         self.parent_acl_sha = hashlib.sha256(
             guarded.directory_dacl_sddl(self.root).encode()).hexdigest()
         self.file_acl_sha = {name: hashlib.sha256(

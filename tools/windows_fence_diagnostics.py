@@ -5,12 +5,14 @@ Prints one JSON object describing how this runner's own SID is written in a real
 DACL string and whether the admission barrier recognizes it. Machine and domain
 sub-authorities are redacted; no account name, path or exception text is emitted.
 The owned probe deny is always removed again and the removal is verified and
-reported; the exit status is nonzero only when that cleanup is not verified.
+reported, as is the probe directory's own removal; the exit status is nonzero only when
+a cleanup is not verified.
 
 It also runs the real guarded fence once on a disposable owned fixture and prints
 sanitized DACL descriptions (control flags P/AI, ACE counts, explicit vs. inherited
 allows, and the production strict-comparison verdicts) for the fixture's temp parent,
-base, fence parent, state directory and state files: after setup and before any pin,
+base, fence parent, state directory and state files: as created, after the owned fixture
+ACL is made explicit and protected (windows_fixture_acl), and before any pin,
 immediately before and after every icacls call (including failed calls), around each
 cleanup removal, at the end of the run and after cleanup. Recording is capped at
 MAX_RECORDED_OPERATIONS. It only observes: it changes no production behavior and
@@ -31,6 +33,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+from tools import windows_fixture_acl  # noqa: E402
 
 
 def redact(text: str) -> str:
@@ -257,8 +261,10 @@ def _lift_and_verify(guarded, read, sid: str, targets: list, observe, record, cl
 def trace_fence(guarded, *, temp_factory=tempfile.TemporaryDirectory) -> tuple[dict, bool]:
     """Run the real guarded fence on an owned fixture, observing sanitized DACL descriptions.
 
-    Returns (trace, clean). clean is False for a failed setup, a failed or unverified
-    removal on any target, or a failed temp-directory removal.
+    The fixture is recorded as created, then given the verified explicit, protected
+    ACL of windows_fixture_acl, then pinned. Returns (trace, clean). clean is False for
+    a failed setup or fixture stabilization, a failed or unverified removal on any
+    target, or a failed temp-directory removal.
     """
     trace = {"steps": [], "operations_dropped": 0}
     cleanup = {"paths_checked": 0, "denies_remaining": None, "removal_failures": [],
@@ -300,7 +306,18 @@ def trace_fence(guarded, *, temp_factory=tempfile.TemporaryDirectory) -> tuple[d
                 except Exception as exc:
                     return {"error": describe_error(exc)}
             try:
-                # The fixture as created, before any pin is taken or any icacls call.
+                # The fixture exactly as created: nothing yet applied, nothing yet pinned.
+                trace["setup_as_created"] = _snapshot(guarded, read, _fixture_paths(guarded, base, root, old, archive))
+                targets = [("parent", root), ("state", old)] + [("file:" + name, old / name)
+                                                                for name in sorted(guarded.NAMES)]
+                try:
+                    windows_fixture_acl.stabilize_owned_fixture(base, targets, read=read, run=subprocess.run)
+                    trace["fixture_acl"] = {"status": "stabilized", "targets": len(targets)}
+                except windows_fixture_acl.FixtureAclError as exc:
+                    trace["fixture_acl"] = {"status": "failed", "problems": [
+                        {"target": label, "code": code} for label, code in exc.problems]}
+                    raise
+                # The fixture as it is pinned: after stabilization, before the first fence call.
                 trace["setup"] = _snapshot(guarded, read, _fixture_paths(guarded, base, root, old, archive))
                 originals = {"parent": read(root)}
                 originals.update({"file:" + name: read(old / name) for name in guarded.NAMES})
@@ -363,12 +380,13 @@ def trace_fence(guarded, *, temp_factory=tempfile.TemporaryDirectory) -> tuple[d
             trace["error"] = describe_error(exc)   # setup or temp creation failed
     trace["cleanup"] = cleanup
     clean = (cleanup["denies_remaining"] == 0 and not cleanup["removal_failures"]
-             and cleanup["directory_removal"] == "ok")
+             and cleanup["directory_removal"] == "ok"
+             and trace.get("fixture_acl", {}).get("status") == "stabilized")
     return trace, clean
 
 
 def collect(guarded=None, *, temp_factory=tempfile.TemporaryDirectory) -> tuple[dict, bool]:
-    """Return (sanitized report, whether the owned probe deny is verified removed)."""
+    """Return (sanitized report, whether every owned probe/fixture cleanup is verified)."""
     report = {"python": platform.python_version(), "os": platform.platform(),
               "os_name": os.name}
     cleanup_ok = True
@@ -378,7 +396,9 @@ def collect(guarded=None, *, temp_factory=tempfile.TemporaryDirectory) -> tuple[
         sid = guarded._current_sid()
         report["runner_sid"] = redact(sid)
         report["runner_canonical_trustee"] = redact(guarded._canonical_trustee(sid))
-        with temp_factory(prefix="jraphyte-fence-diag-") as temp:
+        directory = temp_factory(prefix="jraphyte-fence-diag-")
+        temp = directory.__enter__()
+        try:
             probe = Path(temp) / "probe.bin"
             probe.write_bytes(b"0")
             try:
@@ -403,7 +423,18 @@ def collect(guarded=None, *, temp_factory=tempfile.TemporaryDirectory) -> tuple[
                     report["probe_cleanup"] = cleanup
                     cleanup_ok = (cleanup["icacls_remove_exit"] == 0
                                   and cleanup["deny_absent_verified"] is True)
-    except Exception as exc:  # diagnostics must never mask the test result
+        except Exception as exc:  # diagnostics must never mask the test result
+            report["diagnostic_error"] = describe_error(exc)
+        finally:
+            # The probe directory's own removal is part of the cleanup status, whatever the body did.
+            try:
+                directory.__exit__(None, None, None)
+                report["probe_directory_removal"] = "ok"
+            except Exception as exc:
+                report["probe_directory_removal"] = "failed"
+                report["probe_directory_removal_error"] = describe_error(exc)
+                cleanup_ok = False
+    except Exception as exc:
         report["diagnostic_error"] = describe_error(exc)
     if guarded is not None:
         report["fence_trace"], trace_ok = trace_fence(guarded, temp_factory=temp_factory)
