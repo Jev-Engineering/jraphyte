@@ -18,3 +18,59 @@ jobs:
       - run: python tools/run_validation.py
       - run: python -m pip install --no-deps .
       - run: trace-gc --version
+  windows-fence:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install -r requirements.txt
+      - name: Run the nine native Windows admission-fence cases
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_paper_pilot_phase_cutover_guarded_v2.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-fence.log"
+          # A bare "OK" means every case executed; skips would print "OK (skipped=N)".
+          grep -Eq '^Ran 9 tests in ' "$RUNNER_TEMP/windows-fence.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-fence.log"
+      - name: Run the fourteen Windows SID/SDDL trustee-alias regression cases
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_paper_pilot_phase_cutover_guarded_v2_trustees.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-fence-trustees.log"
+          grep -Eq '^Ran 14 tests in ' "$RUNNER_TEMP/windows-fence-trustees.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-fence-trustees.log"
+      - name: Run the thirteen owned-fixture ACL stabilization cases (nine contract, four native)
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_windows_fixture_acl.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-fixture-acl.log"
+          grep -Eq '^Ran 13 tests in ' "$RUNNER_TEMP/windows-fixture-acl.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-fixture-acl.log"
+      - name: Run the ten strict signed-head DACL fence cases (five contract, five native)
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_paper_pilot_phase_cutover_guarded_v2_strict_dacl.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-fence-strict-dacl.log"
+          grep -Eq '^Ran 10 tests in ' "$RUNNER_TEMP/windows-fence-strict-dacl.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-fence-strict-dacl.log"
+      - name: Run the eighteen diagnostics-tool sanitization, trace and cleanup cases
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_windows_fence_diagnostics.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
+          grep -Eq '^Ran 18 tests in ' "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
+      - name: Sanitized Windows trustee serialization diagnostics
+        if: always()
+        continue-on-error: true
+        run: python tools/windows_fence_diagnostics.py

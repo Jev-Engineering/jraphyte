@@ -3,12 +3,12 @@
   "hash_algorithm": "SHA-256",
   "manifest_self_excluded": true,
   "source_only": true,
-  "file_count": 702,
+  "file_count": 709,
   "files": [
     {
       "path": ".github/workflows/test.yml",
-      "bytes": 615,
-      "sha256": "ba3c6064c1fb430eda6f7fedf60561637be3daedfff4d1d533a61e5ef851ed2b"
+      "bytes": 3589,
+      "sha256": "9c147d3ff67e4bc298c4376bcef076390c1a86d25ee9333ddf1d01ff861f4b23"
     },
     {
       "path": ".gitignore",
@@ -2297,8 +2297,8 @@
     },
     {
       "path": "src/paper_pilot_phase_cutover_guarded_v2.py",
-      "bytes": 16677,
-      "sha256": "618cb280f69353aba783b68c34b3c8344a3d04dd4442fd805cf96b964f4d9af7"
+      "bytes": 19252,
+      "sha256": "eebb08bc51209e23a50d3b8e89afc84b834ac89d86c6a54e52f03f8ab06ee2d8"
     },
     {
       "path": "src/paper_pilot_phase_cutover_guarded_v4.py",
@@ -2632,8 +2632,23 @@
     },
     {
       "path": "tests/test_paper_pilot_phase_cutover_guarded_v2.py",
-      "bytes": 11173,
-      "sha256": "c1fab4e9adbe973c53d01fa2d0340559ffef0dc4d482e2b5b8bb68cfa9f43c33"
+      "bytes": 13300,
+      "sha256": "f7c72b60e3e0de9fc2b5dc14056ce88dd27d2db8a82157c07250f088049f30c7"
+    },
+    {
+      "path": "tests/test_paper_pilot_phase_cutover_guarded_v2_simulated_acl.py",
+      "bytes": 46860,
+      "sha256": "eec4d28a522f207bcd28ccf5a1ffcaaaf526144d07c0bd551ef717e9ad6deb72"
+    },
+    {
+      "path": "tests/test_paper_pilot_phase_cutover_guarded_v2_strict_dacl.py",
+      "bytes": 18172,
+      "sha256": "f714325983bec8b08ced75008a9e4c22cc59b76a0e3524ee720f621f8ca7b154"
+    },
+    {
+      "path": "tests/test_paper_pilot_phase_cutover_guarded_v2_trustees.py",
+      "bytes": 18461,
+      "sha256": "13ac20e781fb6580636252871137743a834af56dbe2f031f2208550b94d70611"
     },
     {
       "path": "tests/test_paper_pilot_phase_cutover_guarded_v4.py",
@@ -2941,6 +2956,16 @@
       "sha256": "6164938f20b9a3aff039df703d8adc20d6ad5c0ead9f7eaba2ce5b458da5d227"
     },
     {
+      "path": "tests/test_windows_fence_diagnostics.py",
+      "bytes": 20559,
+      "sha256": "c99e5d60eb8deb0bb20f1a5b64d6888f7f7134841ba3016f6991266e9498bab4"
+    },
+    {
+      "path": "tests/test_windows_fixture_acl.py",
+      "bytes": 11977,
+      "sha256": "438d68653cd88d60f4376f1bda7cb33e443d32059e0b86ef0f32b788ba5b4563"
+    },
+    {
       "path": "tools/build_schemas.py",
       "bytes": 12978,
       "sha256": "ce42e889513d3836142a653728aac2fb9de4d5fd83f8f7fd17e9cb52eeeeaf9a"
@@ -3014,6 +3039,16 @@
       "path": "tools/validate_package.py",
       "bytes": 21568,
       "sha256": "d461d0c14365d97630ea216608cdbb095e3f8806e76a0a954ea2dfcdbbee655a"
+    },
+    {
+      "path": "tools/windows_fence_diagnostics.py",
+      "bytes": 21532,
+      "sha256": "9dabba98d9af2c92b77231e597194204c5a3918c214b319736a2d8ccad371471"
+    },
+    {
+      "path": "tools/windows_fixture_acl.py",
+      "bytes": 4355,
+      "sha256": "e435337541de6216b0f1634da1a0e36a36915d2897414db80ba5b17cad7272f6"
     },
     {
       "path": "tools/windows_image_ocr.ps1",

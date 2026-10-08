@@ -1,4 +1,8 @@
-"""Windows-only owned disposable tests for the historical admission barrier."""
+"""Windows-only owned disposable tests for the historical admission barrier.
+
+Every case builds its own fixture inside a unique temporary directory created
+by this test, so it never depends on (or creates) any historical task state.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -14,10 +18,11 @@ from unittest.mock import patch
 
 from src import paper_pilot_phase_cutover_guarded_v2 as guarded
 from src.paper_pilot_phase_cutover import _current_sid
+from tools import windows_fixture_acl
 from trace_gc.budget import RunBudget
 
 
-OWNED = Path(r"D:\codex-task-runs\issue90-real-historical-transition-disabled-plan-20260930-01\fence-owned-tests")
+TEMP_PREFIX = "jraphyte-fence-"
 LIMITS = {"retrieval_requests": 1, "model_calls": 1, "retries": 0,
           "solver_expansions": 1, "review_actions": 1, "request_bytes": 1000}
 
@@ -38,11 +43,14 @@ class GuardedFenceTests(unittest.TestCase):
     def setUp(self):
         if os.name != "nt":
             self.skipTest("Windows ACL contract")
-        OWNED.mkdir(exist_ok=True)
-        self.temp = tempfile.TemporaryDirectory(dir=OWNED)
+        self.sid = _current_sid()
+        self.temp = tempfile.TemporaryDirectory(prefix=TEMP_PREFIX)
         self.addCleanup(self._cleanup)
         self.base = Path(self.temp.name)
-        self.assertEqual(self.base.resolve().parent, OWNED.resolve())
+        # The fixture owns this fresh directory; only paths beneath it are ever
+        # given a barrier ACL or have one removed again.
+        self.assertTrue(self.base.is_dir())
+        self.assertTrue(self.base.name.startswith(TEMP_PREFIX))
         self.root = self.base / "old-app"
         self.root.mkdir()
         self.old = self.root / "state"
@@ -67,20 +75,37 @@ class GuardedFenceTests(unittest.TestCase):
             (self.old / "budget.sqlite3").read_bytes()).hexdigest()
         for name in ("source-stage.lock", "phase-stage.lock"):
             (self.root / name).write_bytes(b"0")
+        # The fixture ACL is made explicit, protected and verified before any pin is taken, so
+        # nothing depends on what the temporary parent happens to pass down.
+        windows_fixture_acl.stabilize_owned_fixture(
+            self.base, [("parent", self.root), ("state", self.old)]
+            + [("file:" + name, self.old / name) for name in sorted(guarded.NAMES)],
+            read=guarded.directory_dacl_sddl)
         self.parent_acl_sha = hashlib.sha256(
             guarded.directory_dacl_sddl(self.root).encode()).hexdigest()
         self.file_acl_sha = {name: hashlib.sha256(
             guarded.directory_dacl_sddl(self.old / name).encode()).hexdigest()
             for name in guarded.NAMES}
 
+    def _owned(self, path: Path) -> Path:
+        resolved = Path(path).resolve()
+        if not resolved.is_relative_to(self.base.resolve()):
+            raise AssertionError(f"refusing ACL change outside fixture: {path}")
+        return resolved
+
     def _cleanup(self):
+        # Lift only this test's own deny ACEs so the owned tree can be removed;
+        # no ancestor of the temporary directory has its ACL touched.
         if hasattr(self, "root") and self.root.exists():
-            _call("icacls.exe", str(self.root), "/remove:d", "*" + self.sid)
+            _call("icacls.exe", str(self._owned(self.root)), "/remove:d", "*" + self.sid)
         for root in (getattr(self, "old", None), getattr(self, "archive", None)):
             if root is not None and root.exists():
                 for name in guarded.NAMES:
-                    _call("icacls.exe", str(root / name), "/remove:d", "*" + self.sid)
+                    if (root / name).exists():
+                        _call("icacls.exe", str(self._owned(root / name)),
+                              "/remove:d", "*" + self.sid)
         self.temp.cleanup()
+        self.assertFalse(self.base.exists())
 
     def invoke(self):
         return guarded.fence_closed_old_phase_guarded(
@@ -125,8 +150,14 @@ class GuardedFenceTests(unittest.TestCase):
         self.assertEqual(result, self.invoke())
         self.assertEqual({name: hashlib.sha256((self.archive / name).read_bytes()).hexdigest()
                           for name in guarded.NAMES}, self.content)
-        self.assertIn(guarded.DENY_PARENT_ACE.format(sid=self.sid),
-                      guarded.directory_dacl_sddl(self.root))
+        # The exact parent deny ACE (type D, mask LC, no flags) for this trustee.
+        # Windows may serialize the numeric SID as an alias (RID 500 -> LA), so
+        # the trustee is compared by its Windows serialization, not literal text.
+        parent_dacl = guarded.directory_dacl_sddl(self.root)
+        self.assertTrue(guarded._has_ace(parent_dacl, guarded.DENY_PARENT_ACE, self.sid))
+        # A different trustee's deny, or the file-deny mask, is not this ACE.
+        self.assertFalse(guarded._has_ace(parent_dacl, guarded.DENY_PARENT_ACE, "S-1-5-32-546"))
+        self.assertFalse(guarded._has_ace(parent_dacl, guarded.DENY_FILE_ACE, self.sid))
         self.assertFalse(self.old.exists())
 
     def test_failed_rename_retains_denial_then_same_request_recovers(self):
@@ -197,6 +228,11 @@ class GuardedFenceTests(unittest.TestCase):
                                "*" + self.sid + ":(X)").returncode, 0)
         prior = guarded.directory_dacl_sddl(self.root)
         self.parent_acl_sha = hashlib.sha256(prior.encode()).hexdigest()
+        # Changing the parent ACL makes Windows re-propagate inheritance to the
+        # children (adding AI). Re-pin them so only the owner deny can reject.
+        self.file_acl_sha = {name: hashlib.sha256(
+            guarded.directory_dacl_sddl(self.old / name).encode()).hexdigest()
+            for name in guarded.NAMES}
         with self.assertRaisesRegex(Exception, "existing owner deny"):
             self.invoke()
         self.assertEqual(guarded.directory_dacl_sddl(self.root), prior)
