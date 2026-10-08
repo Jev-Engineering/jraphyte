@@ -15,6 +15,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install -r requirements.txt
       - run: python -m pip install Pillow==12.2.0 PyMuPDF==1.28.0
+      - name: Provision the declared build backend that the generated-sdist test imports
+        run: python -m pip install "setuptools>=68" wheel
       - run: python tools/run_validation.py
       - run: python -m pip install --no-deps .
       - run: trace-gc --version
@@ -70,7 +72,121 @@ jobs:
           python -m unittest discover -s tests -p "test_windows_fence_diagnostics.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
           grep -Eq '^Ran 18 tests in ' "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
           grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
+      - name: Run the 155 native-descriptor, installation-component, restoration, token, privilege-isolation, launcher-containment, privilege-restoration, child-evidence, standalone-script, runtime-main-section, child-stop-before-restoration, launcher-consumer fixture-retention, per-fixture installation-restoration and access-denied directory-creation probe cases (one hundred thirty-nine portable, sixteen native)
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_windows_native_acl.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-native-acl-tests.log"
+          grep -Eq '^Ran 155 tests in ' "$RUNNER_TEMP/windows-native-acl-tests.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-native-acl-tests.log"
+      - name: Positive gate, supported context required - the strict v1 producer cases in a child whose own primary token has every privilege removed
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_paper_pilot_phase_trustees_v1_v4.V1FenceTrusteeTests.test_the_strict_positive_producer_path_runs_in_a_restricted_primary_token_child -v 2>&1 | tee "$RUNNER_TEMP/windows-required-positive.log"
+          grep -Eq '^Ran 1 test in ' "$RUNNER_TEMP/windows-required-positive.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-required-positive.log"
+      - name: Run the forty-five native v1/v4 fence, receipt-validator and phase-ownership trustee cases as the original runner token (context-aware, the branch each case took is printed)
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          export JRAPHYTE_BRANCH_LOG="$RUNNER_TEMP/windows-branches.jsonl"
+          python -m unittest discover -s tests -p "test_paper_pilot_phase_trustees_v1_v4.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-phase-trustees.log"
+          grep -Eq '^Ran 45 tests in ' "$RUNNER_TEMP/windows-phase-trustees.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-phase-trustees.log"
+          echo "original-token branches (supported_positive = positive qualification; unsupported_refusal = negative evidence only):"
+          cat "$RUNNER_TEMP/windows-branches.jsonl"
+      - name: Run the existing three v1 and eight v4 native fence cases as the runner identity
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_paper_pilot_phase_fence.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-phase-v1.log"
+          grep -Eq '^Ran 3 tests in ' "$RUNNER_TEMP/windows-phase-v1.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-phase-v1.log"
+          python -m unittest discover -s tests -p "test_paper_pilot_phase_cutover_guarded_v4.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-phase-v4.log"
+          grep -Eq '^Ran 8 tests in ' "$RUNNER_TEMP/windows-phase-v4.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-phase-v4.log"
+      - name: Run the six converter worker parent-process cases (four portable, genuine Windows venv redirector chain and exit-259 liveness native; refs #94)
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_paper_converter_worker_parent.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-converter-worker-parent.log"
+          grep -Eq '^Ran 6 tests in ' "$RUNNER_TEMP/windows-converter-worker-parent.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-converter-worker-parent.log"
+      - name: Run the eighteen sdist/wheel discovery cases (both build-backend spellings, missing and ambiguous artifacts)
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_sdist_discovery.py" -v 2>&1 | tee "$RUNNER_TEMP/sdist-discovery-tests.log"
+          grep -Eq '^Ran 18 tests in ' "$RUNNER_TEMP/sdist-discovery-tests.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/sdist-discovery-tests.log"
+      - name: Build the sdist and the wheel from it, run the shipped affected tests from the extracted sdist, then check the installed wheel outside the checkout
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install build "setuptools>=68" wheel
+          python -m build --outdir "$RUNNER_TEMP/dist" .
+          SDIST="$(python tools/sdist_discovery.py extract --project trace-gc --dist "$RUNNER_TEMP/dist" --into "$RUNNER_TEMP/sdist")"
+          WHEEL="$(python tools/sdist_discovery.py wheel --project trace-gc --dist "$RUNNER_TEMP/dist")"
+          (
+            cd "$SDIST"
+            python -m unittest discover -s tests -p "test_sdist_phase_distribution.py" -v 2>&1 | tee "$RUNNER_TEMP/sdist-distribution.log"
+            grep -Eq '^Ran 3 tests in ' "$RUNNER_TEMP/sdist-distribution.log"
+            grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/sdist-distribution.log"
+            python -m unittest discover -s tests -p "test_sdist_discovery.py" -v 2>&1 | tee "$RUNNER_TEMP/sdist-discovery.log"
+            grep -Eq '^Ran 18 tests in ' "$RUNNER_TEMP/sdist-discovery.log"
+            grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/sdist-discovery.log"
+            python -m unittest discover -s tests -p "test_windows_native_acl.py" -v 2>&1 | tee "$RUNNER_TEMP/sdist-native-acl.log"
+            grep -Eq '^Ran 155 tests in ' "$RUNNER_TEMP/sdist-native-acl.log"
+            grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/sdist-native-acl.log"
+            python -m unittest tests.test_paper_pilot_phase_trustees_v1_v4.V1FenceTrusteeTests.test_the_strict_positive_producer_path_runs_in_a_restricted_primary_token_child -v 2>&1 | tee "$RUNNER_TEMP/sdist-required-positive.log"
+            grep -Eq '^Ran 1 test in ' "$RUNNER_TEMP/sdist-required-positive.log"
+            grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/sdist-required-positive.log"
+            export JRAPHYTE_BRANCH_LOG="$RUNNER_TEMP/sdist-branches.jsonl"
+            python -m unittest discover -s tests -p "test_paper_pilot_phase_trustees_v1_v4.py" -v 2>&1 | tee "$RUNNER_TEMP/sdist-phase-trustees.log"
+            grep -Eq '^Ran 45 tests in ' "$RUNNER_TEMP/sdist-phase-trustees.log"
+            grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/sdist-phase-trustees.log"
+            cat "$RUNNER_TEMP/sdist-branches.jsonl"
+            unset JRAPHYTE_BRANCH_LOG
+            python -m unittest discover -s tests -p "test_paper_pilot_phase_fence.py" -v 2>&1 | tee "$RUNNER_TEMP/sdist-phase-v1.log"
+            grep -Eq '^Ran 3 tests in ' "$RUNNER_TEMP/sdist-phase-v1.log"
+            grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/sdist-phase-v1.log"
+            python -m unittest discover -s tests -p "test_paper_pilot_phase_cutover_guarded_v4.py" -v 2>&1 | tee "$RUNNER_TEMP/sdist-phase-v4.log"
+            grep -Eq '^Ran 8 tests in ' "$RUNNER_TEMP/sdist-phase-v4.log"
+            grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/sdist-phase-v4.log"
+          )
+          python -m venv "$RUNNER_TEMP/installed-venv"
+          INSTALLED="$RUNNER_TEMP/installed-venv/Scripts/python.exe"
+          "$INSTALLED" -m pip install -r requirements.txt
+          "$INSTALLED" -m pip install --no-deps "$WHEEL"
+          DECLARED=()
+          for NAME in phase_authority.py budget.py canonical.py trust.py; do
+            DECLARED+=(--declared-source "$NAME=$(python -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1]+'/trace_gc/'+sys.argv[2],'rb').read()).hexdigest())" "$SDIST" "$NAME")")
+          done
+          mkdir "$RUNNER_TEMP/outside-checkout"
+          cd "$RUNNER_TEMP/outside-checkout"
+          "$INSTALLED" -I "$SDIST/tools/installed_phase_authority_check.py" --require-windows "${DECLARED[@]}" | tee "$RUNNER_TEMP/installed-phase-check.json"
+          python -c "import hashlib,json,os,sys;d=json.load(open(os.environ['RUNNER_TEMP']+'/installed-phase-check.json'));assert d['native_windows']=='RUN' and len(d['portable_checks'])==13 and len(d['windows_checks'])==35 and d['fixture_utility_sha256']==hashlib.sha256(open(sys.argv[1]+'/tools/windows_native_acl.py','rb').read()).hexdigest() and d['fixture_acl_sha256']==hashlib.sha256(open(sys.argv[1]+'/tools/windows_fixture_acl.py','rb').read()).hexdigest() and all(d['portable_checks'].values()) and all(d['windows_checks'].values()),d" "$SDIST"
       - name: Sanitized Windows trustee serialization diagnostics
         if: always()
         continue-on-error: true
         run: python tools/windows_fence_diagnostics.py
+      - name: Sanitized native directory-creation denial probe, candidate-shape matrix, privilege isolation and installation observation
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python tools/windows_native_acl.py | tee "$RUNNER_TEMP/native-probe.json"
+      - name: Assert the standalone diagnostics script ran past its bootstrap and checkout imports on the runner
+        if: always()
+        shell: bash
+        run: |
+          python -c "import json,os;d=json.load(open(os.environ['RUNNER_TEMP']+'/native-probe.json'));assert d['os_name']=='nt' and d['completed_stages'][:4]==['bootstrap','checkout_imports','native_api','identity'] and 'error' not in d,d"

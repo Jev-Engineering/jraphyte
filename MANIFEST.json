@@ -3,12 +3,12 @@
   "hash_algorithm": "SHA-256",
   "manifest_self_excluded": true,
   "source_only": true,
-  "file_count": 709,
+  "file_count": 718,
   "files": [
     {
       "path": ".github/workflows/test.yml",
-      "bytes": 3589,
-      "sha256": "9c147d3ff67e4bc298c4376bcef076390c1a86d25ee9333ddf1d01ff861f4b23"
+      "bytes": 12883,
+      "sha256": "1b148dbe243b919564f06d96d66c4a2698e45a9b9b7772f4331abdc33824a2fd"
     },
     {
       "path": ".gitignore",
@@ -32,8 +32,8 @@
     },
     {
       "path": "MANIFEST.in",
-      "bytes": 93,
-      "sha256": "b4b637c3d710c1082dcdb508c73914885376c79acfef9288b070cdb0e5ddfeaf"
+      "bytes": 883,
+      "sha256": "0b3f3ec6266018a68361d3e811c8532509efa70cef8aa5f9e320adf2928b9ba0"
     },
     {
       "path": "NEXT_AGENT_PROMPT.md",
@@ -737,8 +737,8 @@
     },
     {
       "path": "docs/paper_pilot_phase_transition.md",
-      "bytes": 10022,
-      "sha256": "c067ae79613ece775ddea7664932a8b9bf93c75d89a7a5ab68e82fbfe534522c"
+      "bytes": 24745,
+      "sha256": "ad69ebbe19ad4d7a6f87bc7e3b3818ee091f6a606c80d6ae496f417a81414ad1"
     },
     {
       "path": "docs/paper_pilot_workflow.md",
@@ -2292,8 +2292,8 @@
     },
     {
       "path": "src/paper_pilot_phase_cutover.py",
-      "bytes": 5969,
-      "sha256": "e12545acd4e62d8e80179e356e1b2140424a048188e4b12a0285f34b9143cfd1"
+      "bytes": 9460,
+      "sha256": "1bca8c2c85e3b7cf871da6af26076274f1dde925d424e28ac026a7d6b2f5f458"
     },
     {
       "path": "src/paper_pilot_phase_cutover_guarded_v2.py",
@@ -2302,8 +2302,8 @@
     },
     {
       "path": "src/paper_pilot_phase_cutover_guarded_v4.py",
-      "bytes": 29079,
-      "sha256": "a9547fbaa0e76fbbd649366475262041f61d738f2dba1f0c8702a4a4c056abf1"
+      "bytes": 29146,
+      "sha256": "9b0e7b05c95d67015314a8b53a0f3182c66e0c0f5717c59d888440b077e1cabe"
     },
     {
       "path": "src/paper_pilot_phase_export.py",
@@ -2486,6 +2486,11 @@
       "sha256": "d87bcd1bac62d772a134ef4057d9c311b1cf7b30f599975ac01bbef4ef753451"
     },
     {
+      "path": "tests/phase_trustee_harness.py",
+      "bytes": 28549,
+      "sha256": "77a5c4ab973e8a6d3e99128ad92f06311fc9102c43ec04844c694a44b6f373d0"
+    },
+    {
       "path": "tests/test_abstract_validation.py",
       "bytes": 2304,
       "sha256": "61bfe534927e0d870b1b2003056d3a9650dd5ead4611c2718f9a4f14cf8d52da"
@@ -2652,13 +2657,13 @@
     },
     {
       "path": "tests/test_paper_pilot_phase_cutover_guarded_v4.py",
-      "bytes": 14007,
-      "sha256": "8ce50d09266407ccff5f2ace0b1cde7d4e4b00e81939426c58b459456f801237"
+      "bytes": 14399,
+      "sha256": "7a5cbd61d2e4472f8790dbb40888b60cd616c0b5a972c23025465569710f09db"
     },
     {
       "path": "tests/test_paper_pilot_phase_fence.py",
-      "bytes": 5050,
-      "sha256": "ce53724a2a31c5fe385be5f3010dae14da5babfa168e02ad936e92c54743f65f"
+      "bytes": 6030,
+      "sha256": "9b48c17fce8ea4c2e915c238cf3fcc7eb4ae8f282992519a71cfb2dadc7fe5f7"
     },
     {
       "path": "tests/test_paper_pilot_phase_import_lock.py",
@@ -2669,6 +2674,16 @@
       "path": "tests/test_paper_pilot_phase_restore_sidecars.py",
       "bytes": 12908,
       "sha256": "520c40c81f511a5134dec2acdc2eb81417848160e6def470d73b6b15ee06c872"
+    },
+    {
+      "path": "tests/test_paper_pilot_phase_trustees_model.py",
+      "bytes": 48198,
+      "sha256": "061fa1f60e1b7335ba878fe3616083688349758a93fe79dff1269e2de02c5373"
+    },
+    {
+      "path": "tests/test_paper_pilot_phase_trustees_v1_v4.py",
+      "bytes": 43328,
+      "sha256": "f83e09133ca97d3e57e40d17621c18939835f9ed0dfae04a0b003071af44eee1"
     },
     {
       "path": "tests/test_paper_qualification_v1.py",
@@ -2936,6 +2951,16 @@
       "sha256": "85f176c3e186e20b14d623f31d57a685ab2312fab3439904dcbb74437cb0bde5"
     },
     {
+      "path": "tests/test_sdist_discovery.py",
+      "bytes": 12012,
+      "sha256": "8f1a1b5f9517c6336fb89a1d0760446135fdef266611e6b34348fe10333cf178"
+    },
+    {
+      "path": "tests/test_sdist_phase_distribution.py",
+      "bytes": 6981,
+      "sha256": "7c8d4a1fbe8441c342b914d218d24e5b20b53ae8d4cf65517b524990d53aaded"
+    },
+    {
       "path": "tests/test_selected_reviewed_replay.py",
       "bytes": 12418,
       "sha256": "eb80b3f5b1586bb80d958a060b02d6fc799e17b92146ccbbff6112db7d926374"
@@ -2966,6 +2991,11 @@
       "sha256": "438d68653cd88d60f4376f1bda7cb33e443d32059e0b86ef0f32b788ba5b4563"
     },
     {
+      "path": "tests/test_windows_native_acl.py",
+      "bytes": 131065,
+      "sha256": "a466bf28608b379ca8e4745e3f953e7354d7ed5f8a0326ef5821517b96acf5c4"
+    },
+    {
       "path": "tools/build_schemas.py",
       "bytes": 12978,
       "sha256": "ce42e889513d3836142a653728aac2fb9de4d5fd83f8f7fd17e9cb52eeeeaf9a"
@@ -2989,6 +3019,11 @@
       "path": "tools/image_evidence_schemas.py",
       "bytes": 3921,
       "sha256": "dc393fea23327063506b772157fa7ddbaecc18fee058aab9f2489959767017fc"
+    },
+    {
+      "path": "tools/installed_phase_authority_check.py",
+      "bytes": 24082,
+      "sha256": "de288c30423b0decc6777f4246d911943700c592988bad1b87b8a7d7fb9c0cdf"
     },
     {
       "path": "tools/legacy_hardening.py",
@@ -3031,6 +3066,11 @@
       "sha256": "aea3f70fc525b1308d2254689a43c50a7ae8708bd0599a6d9c5ed880d0775df3"
     },
     {
+      "path": "tools/sdist_discovery.py",
+      "bytes": 4681,
+      "sha256": "80f6d9f540de5a7b2fd0612044fb57af65d58f9e28f2a59f993cb327816b1835"
+    },
+    {
       "path": "tools/selected_reviewed_replay.py",
       "bytes": 18994,
       "sha256": "d59d9fd84ce651f25dd89a3f4ae24cb110d6f209473af5d61bd51543296cab36"
@@ -3054,6 +3094,11 @@
       "path": "tools/windows_image_ocr.ps1",
       "bytes": 5451,
       "sha256": "de645b1b260d8e1e3cf5b37a8e5ebc10f3e925c72179e3cc1f2088ce64ce9e47"
+    },
+    {
+      "path": "tools/windows_native_acl.py",
+      "bytes": 71797,
+      "sha256": "36cff50790ac00d76e1fdf0425da8a25062f193cd0a28103a638135d3124c58b"
     },
     {
       "path": "trace_gc/__init__.py",
@@ -3387,8 +3432,8 @@
     },
     {
       "path": "trace_gc/phase_authority.py",
-      "bytes": 10610,
-      "sha256": "b2ffc2e12be3c927f167a456acb1f95a7d2c615756131b2f889ddc97610dfee9"
+      "bytes": 14745,
+      "sha256": "0a97d6668a3860570342d3122ffeadb77e2eabf186c3361aab52db5ea614ceac"
     },
     {
       "path": "trace_gc/phase_transition.py",

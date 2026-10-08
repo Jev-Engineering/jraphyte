@@ -1,2 +1,18 @@
+# The phase-fence and Windows tests, and the helpers they import or load by path, are listed
+# explicitly so the sdist does not depend on the build backend's default tests/test*.py rule.
+# The wheel installs only trace_gc; src/ and tools/ are not installed packages.
 include src/paper_pilot_phase_cutover.py
 include src/paper_pilot_phase_cutover_guarded_v2.py
+include src/paper_pilot_phase_cutover_guarded_v4.py
+include src/paper_pilot_phase_export.py
+include tools/installed_phase_authority_check.py
+include tools/sdist_discovery.py
+include tools/windows_native_acl.py
+include tools/windows_fence_diagnostics.py
+include tools/windows_fixture_acl.py
+include tests/phase_trustee_harness.py
+include tests/test_paper_pilot_phase_*.py
+include tests/test_windows_*.py
+include tests/test_sdist_phase_distribution.py
+include tests/test_sdist_discovery.py
+include .github/workflows/test.yml
