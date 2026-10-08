@@ -46,13 +46,21 @@ jobs:
           python -m unittest discover -s tests -p "test_paper_pilot_phase_cutover_guarded_v2_trustees.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-fence-trustees.log"
           grep -Eq '^Ran 14 tests in ' "$RUNNER_TEMP/windows-fence-trustees.log"
           grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-fence-trustees.log"
-      - name: Run the eight diagnostics-tool sanitization and cleanup cases
+      - name: Run the ten strict signed-head DACL fence cases (five contract, five native)
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_paper_pilot_phase_cutover_guarded_v2_strict_dacl.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-fence-strict-dacl.log"
+          grep -Eq '^Ran 10 tests in ' "$RUNNER_TEMP/windows-fence-strict-dacl.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-fence-strict-dacl.log"
+      - name: Run the sixteen diagnostics-tool sanitization, trace and cleanup cases
         if: always()
         shell: bash
         run: |
           set -o pipefail
           python -m unittest discover -s tests -p "test_windows_fence_diagnostics.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
-          grep -Eq '^Ran 8 tests in ' "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
+          grep -Eq '^Ran 16 tests in ' "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
           grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
       - name: Sanitized Windows trustee serialization diagnostics
         if: always()

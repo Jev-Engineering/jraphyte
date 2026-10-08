@@ -143,8 +143,14 @@ class GuardedFenceTests(unittest.TestCase):
         self.assertEqual(result, self.invoke())
         self.assertEqual({name: hashlib.sha256((self.archive / name).read_bytes()).hexdigest()
                           for name in guarded.NAMES}, self.content)
-        self.assertIn(guarded.DENY_PARENT_ACE.format(sid=self.sid),
-                      guarded.directory_dacl_sddl(self.root))
+        # The exact parent deny ACE (type D, mask LC, no flags) for this trustee.
+        # Windows may serialize the numeric SID as an alias (RID 500 -> LA), so
+        # the trustee is compared by its Windows serialization, not literal text.
+        parent_dacl = guarded.directory_dacl_sddl(self.root)
+        self.assertTrue(guarded._has_ace(parent_dacl, guarded.DENY_PARENT_ACE, self.sid))
+        # A different trustee's deny, or the file-deny mask, is not this ACE.
+        self.assertFalse(guarded._has_ace(parent_dacl, guarded.DENY_PARENT_ACE, "S-1-5-32-546"))
+        self.assertFalse(guarded._has_ace(parent_dacl, guarded.DENY_FILE_ACE, self.sid))
         self.assertFalse(self.old.exists())
 
     def test_failed_rename_retains_denial_then_same_request_recovers(self):

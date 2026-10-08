@@ -3,12 +3,12 @@
   "hash_algorithm": "SHA-256",
   "manifest_self_excluded": true,
   "source_only": true,
-  "file_count": 705,
+  "file_count": 707,
   "files": [
     {
       "path": ".github/workflows/test.yml",
-      "bytes": 2602,
-      "sha256": "366583e5f4821ac69889febc3f1c950c1668d0f02443b936abe759995b2a2c94"
+      "bytes": 3120,
+      "sha256": "a0b3ff6080fc9e7212219d25ee9432462ea3057902d5cc786156fb7f85f08c90"
     },
     {
       "path": ".gitignore",
@@ -2632,8 +2632,18 @@
     },
     {
       "path": "tests/test_paper_pilot_phase_cutover_guarded_v2.py",
-      "bytes": 12309,
-      "sha256": "655b820a4de244c6612bfd2a79854e5f9bda9692ef10ff3903c784a003de4ea5"
+      "bytes": 12838,
+      "sha256": "a4baf7de9c979aa89ff31c496b9a8e727f94119f823d357e9dfa789ad12cf2f4"
+    },
+    {
+      "path": "tests/test_paper_pilot_phase_cutover_guarded_v2_simulated_acl.py",
+      "bytes": 32224,
+      "sha256": "bcb5f16b7052094082fa235b74e3950fab2263f53b777f7c9ea8b7b468beb01f"
+    },
+    {
+      "path": "tests/test_paper_pilot_phase_cutover_guarded_v2_strict_dacl.py",
+      "bytes": 16130,
+      "sha256": "831a973dbb4a10ee4b593ecf66c08bb57fdf0983c5950742b544db078f278c69"
     },
     {
       "path": "tests/test_paper_pilot_phase_cutover_guarded_v2_trustees.py",
@@ -2947,8 +2957,8 @@
     },
     {
       "path": "tests/test_windows_fence_diagnostics.py",
-      "bytes": 6916,
-      "sha256": "8437f0e838e3832d139d58bb7338a2e7b2bdcf6e217f1640ffab14de1cfbd9fa"
+      "bytes": 17143,
+      "sha256": "0157f4e5132d2ad64075b214f7b220b3c2841544f7909d5ae3098bdf23c3d5a7"
     },
     {
       "path": "tools/build_schemas.py",
@@ -3027,8 +3037,8 @@
     },
     {
       "path": "tools/windows_fence_diagnostics.py",
-      "bytes": 4379,
-      "sha256": "d6abd2c30e6336ed73e4e9aa8e679016a29f6bbcc6b3ec106f93606bc2215322"
+      "bytes": 19626,
+      "sha256": "3b6e5db6ebfa189dd6e4b74b033e6d10dd7fdd552d5002dc306e011252f6b730"
     },
     {
       "path": "tools/windows_image_ocr.ps1",
