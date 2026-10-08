@@ -12,6 +12,7 @@ from trace_gc.canonical import bytes_digest
 from trace_gc.errors import ContractError
 from trace_gc.phase_authority import dacl_has_ace, directory_dacl_sddl
 from src.paper_pilot_phase_cutover import NAMES, _current_sid, fence_closed_old_phase
+from tools.windows_native_acl import WindowsNative, require_recreation_denied
 
 PARENT_DENY = "(D;;LC;;;{sid})"
 
@@ -57,8 +58,8 @@ class PhaseNamespaceFenceTests(unittest.TestCase):
         self.assertEqual({name: bytes_digest((self.archived / name).read_bytes())
                           for name in NAMES}, self.expected)
         self.assertTrue(dacl_has_ace(directory_dacl_sddl(self.old.parent), PARENT_DENY, self.sid))
-        with self.assertRaises((PermissionError, OSError)):
-            self.old.mkdir()
+        require_recreation_denied(WindowsNative(), self.old.parent, self.old)
+        self.assertFalse(self.old.exists())
         second = fence_closed_old_phase(old_root=self.old, archived_root=self.archived,
             expected_file_sha256=self.expected, deny_sid=self.sid, receipt_path=self.receipt)
         self.assertEqual(first, second)

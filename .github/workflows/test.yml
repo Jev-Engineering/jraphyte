@@ -72,6 +72,14 @@ jobs:
           python -m unittest discover -s tests -p "test_windows_fence_diagnostics.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
           grep -Eq '^Ran 18 tests in ' "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
           grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
+      - name: Run the thirty-seven native-descriptor, alias-cleanup, restoration, token and access-denied directory-creation probe cases (twenty-nine portable, eight native)
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_windows_native_acl.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-native-acl-tests.log"
+          grep -Eq '^Ran 37 tests in ' "$RUNNER_TEMP/windows-native-acl-tests.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-native-acl-tests.log"
       - name: Run the forty-four native v1/v4 fence, receipt-validator and phase-ownership trustee cases
         if: always()
         shell: bash
@@ -91,6 +99,14 @@ jobs:
           python -m unittest discover -s tests -p "test_paper_pilot_phase_cutover_guarded_v4.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-phase-v4.log"
           grep -Eq '^Ran 8 tests in ' "$RUNNER_TEMP/windows-phase-v4.log"
           grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-phase-v4.log"
+      - name: Run the eighteen sdist/wheel discovery cases (both build-backend spellings, missing and ambiguous artifacts)
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_sdist_discovery.py" -v 2>&1 | tee "$RUNNER_TEMP/sdist-discovery-tests.log"
+          grep -Eq '^Ran 18 tests in ' "$RUNNER_TEMP/sdist-discovery-tests.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/sdist-discovery-tests.log"
       - name: Build the sdist and the wheel from it, run the shipped affected tests from the extracted sdist, then check the installed wheel outside the checkout
         if: always()
         shell: bash
@@ -98,13 +114,19 @@ jobs:
           set -euo pipefail
           python -m pip install build "setuptools>=68" wheel
           python -m build --outdir "$RUNNER_TEMP/dist" .
-          python -c "import sys,tarfile,glob;tarfile.open(glob.glob(sys.argv[1]+'/dist/trace_gc-*.tar.gz')[0]).extractall(sys.argv[1]+'/sdist')" "$RUNNER_TEMP"
-          SDIST="$(python -c "import sys,glob;print(glob.glob(sys.argv[1]+'/sdist/trace_gc-*')[0])" "$RUNNER_TEMP")"
+          SDIST="$(python tools/sdist_discovery.py extract --project trace-gc --dist "$RUNNER_TEMP/dist" --into "$RUNNER_TEMP/sdist")"
+          WHEEL="$(python tools/sdist_discovery.py wheel --project trace-gc --dist "$RUNNER_TEMP/dist")"
           (
             cd "$SDIST"
             python -m unittest discover -s tests -p "test_sdist_phase_distribution.py" -v 2>&1 | tee "$RUNNER_TEMP/sdist-distribution.log"
             grep -Eq '^Ran 3 tests in ' "$RUNNER_TEMP/sdist-distribution.log"
             grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/sdist-distribution.log"
+            python -m unittest discover -s tests -p "test_sdist_discovery.py" -v 2>&1 | tee "$RUNNER_TEMP/sdist-discovery.log"
+            grep -Eq '^Ran 18 tests in ' "$RUNNER_TEMP/sdist-discovery.log"
+            grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/sdist-discovery.log"
+            python -m unittest discover -s tests -p "test_windows_native_acl.py" -v 2>&1 | tee "$RUNNER_TEMP/sdist-native-acl.log"
+            grep -Eq '^Ran 37 tests in ' "$RUNNER_TEMP/sdist-native-acl.log"
+            grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/sdist-native-acl.log"
             python -m unittest discover -s tests -p "test_paper_pilot_phase_trustees_v1_v4.py" -v 2>&1 | tee "$RUNNER_TEMP/sdist-phase-trustees.log"
             grep -Eq '^Ran 44 tests in ' "$RUNNER_TEMP/sdist-phase-trustees.log"
             grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/sdist-phase-trustees.log"
@@ -118,7 +140,7 @@ jobs:
           python -m venv "$RUNNER_TEMP/installed-venv"
           INSTALLED="$RUNNER_TEMP/installed-venv/Scripts/python.exe"
           "$INSTALLED" -m pip install -r requirements.txt
-          "$INSTALLED" -m pip install --no-deps "$RUNNER_TEMP"/dist/trace_gc-*.whl
+          "$INSTALLED" -m pip install --no-deps "$WHEEL"
           DECLARED=()
           for NAME in phase_authority.py budget.py canonical.py trust.py; do
             DECLARED+=(--declared-source "$NAME=$(python -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1]+'/trace_gc/'+sys.argv[2],'rb').read()).hexdigest())" "$SDIST" "$NAME")")
@@ -126,8 +148,12 @@ jobs:
           mkdir "$RUNNER_TEMP/outside-checkout"
           cd "$RUNNER_TEMP/outside-checkout"
           "$INSTALLED" -I "$SDIST/tools/installed_phase_authority_check.py" --require-windows "${DECLARED[@]}" | tee "$RUNNER_TEMP/installed-phase-check.json"
-          python -c "import json,os;d=json.load(open(os.environ['RUNNER_TEMP']+'/installed-phase-check.json'));assert d['native_windows']=='RUN' and len(d['portable_checks'])==13 and len(d['windows_checks'])==29 and all(d['portable_checks'].values()) and all(d['windows_checks'].values()),d"
+          python -c "import hashlib,json,os,sys;d=json.load(open(os.environ['RUNNER_TEMP']+'/installed-phase-check.json'));assert d['native_windows']=='RUN' and len(d['portable_checks'])==13 and len(d['windows_checks'])==34 and d['fixture_utility_sha256']==hashlib.sha256(open(sys.argv[1]+'/tools/windows_native_acl.py','rb').read()).hexdigest() and all(d['portable_checks'].values()) and all(d['windows_checks'].values()),d" "$SDIST"
       - name: Sanitized Windows trustee serialization diagnostics
         if: always()
         continue-on-error: true
         run: python tools/windows_fence_diagnostics.py
+      - name: Sanitized native directory-creation denial probe and candidate-shape matrix
+        if: always()
+        continue-on-error: true
+        run: python tools/windows_native_acl.py

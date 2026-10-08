@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
+import re
 import sqlite3
 import subprocess
 import sys
@@ -282,6 +283,39 @@ class WindowsModel:
             raise AssertionError("unmodeled icacls verb " + verb)
         self.dacls[self.key(path)] = (flags, aces)
         return subprocess.CompletedProcess(args, 0, "", "")
+
+
+class DescriptorModel:
+    """The descriptor seam of ``tools/windows_native_acl.WindowsNative`` over a ``WindowsModel``.
+
+    A model, not Windows: numeric trustees are stored in the spelling the model gives them (so a
+    deny installed for ``S-1-5-32-545`` reads back as ``BU``), exactly the situation a literal
+    ACE comparison cannot survive and a canonical one must.
+    """
+
+    OWNER = "O:BA"
+
+    def __init__(self, model):
+        self.model = model
+
+    def read_dacl(self, path) -> str:
+        return self.model.sddl(path)
+
+    def read_owner(self, path) -> str:
+        return self.OWNER
+
+    def apply_dacl(self, path, sddl: str) -> None:
+        match = re.fullmatch(r"D:([A-Z]*)((?:\([^)]*\))*)", sddl)
+        assert match is not None, sddl
+        spelled = []
+        for ace in re.findall(r"\([^)]*\)", match.group(2)):
+            fields = ace[1:-1].split(";")
+            fields[5] = self.model.spell(fields[5])
+            spelled.append("(" + ";".join(fields) + ")")
+        self.model.set(path, match.group(1), spelled)
+
+    def canonical_trustee(self, sid: str) -> str:
+        return self.model.spell(sid)
 
 
 class Sids:

@@ -31,7 +31,7 @@ from unittest.mock import patch
 from tests.phase_trustee_harness import (
     FILE_ACE, FOREIGN_RID500_SID, GUESTS_SID, NAMES, PARENT_ACE, USERS_SID, PhaseHarness,
     PhaseOwnershipScenarios, ReceiptValidatorScenarios, Sids, sha as _sha)
-from tools import windows_fixture_acl
+from tools import windows_fixture_acl, windows_native_acl
 from trace_gc import phase_authority as authority
 from trace_gc.canonical import bytes_digest, dumps, loads
 from trace_gc.errors import ContractError
@@ -89,7 +89,9 @@ class OwnedTree:
         test.addCleanup(self.cleanup)
         self.base = Path(self.temp.name)
         assert self.base.name.startswith(TEMP_PREFIX)
-        self.sids = {USERS_SID, GUESTS_SID, FOREIGN_RID500_SID, _current_sid(),
+        # The fabricated foreign SID is absent: icacls cannot resolve it, so the one test that
+        # installs it removes and verifies it through the native descriptor API itself.
+        self.sids = {USERS_SID, GUESTS_SID, _current_sid(),
                      _local_rid500_sid(), _plain_account_sid(), _near_rid500_sid()}
 
     def owned(self, path: Path) -> Path:
@@ -222,7 +224,38 @@ class NativeReceiptValidatorTests(ReceiptValidatorScenarios, unittest.TestCase):
         return directory_dacl_sddl(self.parent)
 
     def deny(self, sid, spec):
-        _icacls(str(self.parent), "/deny", "*" + sid + ":" + spec)
+        if sid == FOREIGN_RID500_SID:
+            self.deny_without_account_lookup(sid, spec)
+        else:
+            _icacls(str(self.parent), "/deny", "*" + sid + ":" + spec)
+
+    def deny_without_account_lookup(self, sid, spec):
+        """Install the deny for a SID no machine knows, and prove what Windows really stored."""
+        self.assertEqual(spec, "(AD)")
+        native = windows_native_acl.WindowsNative()
+        before, owner_before = self.raw(), native.read_owner(self.parent)
+        installed = windows_native_acl.deny_by_descriptor(native, self.parent, sid)
+        self.addCleanup(self.remove_foreign_deny, native, sid)
+        self.assertTrue(installed["installed_exactly"])
+        after = self.raw()
+        self.assertEqual(installed["before"], before)
+        self.assertEqual(installed["after"], after)
+        before_aces = windows_native_acl.split_dacl(before)[1]
+        after_aces = windows_native_acl.split_dacl(after)[1]
+        self.assertEqual(after_aces, ["(D;;LC;;;" + sid + ")"] + before_aces)
+        self.assertEqual(len(after_aces), len(before_aces) + 1)
+        kind, flags, mask, object_guid, inherited_guid, trustee = after_aces[0][1:-1].split(";")
+        self.assertEqual((kind, flags, mask, object_guid, inherited_guid, trustee),
+                         ("D", "", "LC", "", "", sid))
+        self.assertEqual(native.read_owner(self.parent), owner_before)
+        self.assertEqual(installed["owner_after"], owner_before)
+        self.assertNotEqual(_sha(before), _sha(after))
+        self.assertTrue(authority.dacl_has_ace(after, PARENT_ACE, sid))
+        self.assertFalse(authority.dacl_has_ace(after, PARENT_ACE, self.sids.local500))
+
+    def remove_foreign_deny(self, native, sid):
+        self.assertTrue(windows_native_acl.remove_descriptor_deny(native, self.parent, sid))
+        self.assertNotIn("(D;;LC;;;" + sid + ")", self.raw())
 
     def grant(self, sid, spec):
         _icacls(str(self.parent), "/grant", "*" + sid + ":" + spec)
@@ -290,6 +323,10 @@ class _FenceCase(unittest.TestCase):
         with instance.staging():
             pass
 
+    def assert_old_path_recreation_denied(self):
+        windows_native_acl.require_recreation_denied(windows_native_acl.WindowsNative(), self.parent, self.old)
+        self.assertFalse(self.old.exists())
+
     def attempt_open(self, path: Path) -> subprocess.CompletedProcess:
         return _call(sys.executable, "-c",
                      "from pathlib import Path; import sys; Path(sys.argv[1]).open('a+b').close()",
@@ -322,8 +359,7 @@ class V1FenceTrusteeTests(_FenceCase):
             self.assertFalse(self.old.exists())
             self.assertEqual(self.archived_hashes(), self.content)
             # Live denial: Users is in this process token, so recreation is refused.
-            with self.assertRaises((PermissionError, OSError)):
-                self.old.mkdir()
+            self.assert_old_path_recreation_denied()
             self.assertEqual(first, self.invoke(USERS_SID))
         # The receipt keeps the numeric SID and the raw (alias-spelled) digest.
         from trace_gc.canonical import loads
@@ -377,8 +413,7 @@ class V1FenceTrusteeTests(_FenceCase):
         self.assertEqual(result["status"], "OLD_PATH_FENCED_NEW_PHASE_ALLOWED")
         self.assertTrue(authority.dacl_has_ace(
             directory_dacl_sddl(self.parent), PARENT_ACE, sid))
-        with self.assertRaises((PermissionError, OSError)):
-            self.old.mkdir()
+        self.assert_old_path_recreation_denied()
         self.assertEqual(result, self.invoke(sid))
         self.assertEqual(self.archived_hashes(), self.content)
         self.assert_validator_accepts(self.receipt)

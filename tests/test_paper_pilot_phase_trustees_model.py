@@ -8,7 +8,10 @@ control flow and the ACE-strictness contract. It is NOT Windows evidence: that i
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -16,7 +19,7 @@ from unittest.mock import patch
 from tests.phase_trustee_harness import (
     FILE_ACE, FOREIGN_RID500_SID, GUESTS_SID, LOCAL_RID500_SID, NAMES, NEAR_RID500_SID,
     PARENT_ACE, PLAIN_ACCOUNT_SID, USERS_SID, PhaseHarness, PhaseOwnershipScenarios,
-    ReceiptValidatorScenarios, Sids, WindowsModel, sha)
+    DescriptorModel, ReceiptValidatorScenarios, Sids, WindowsModel, sha)
 from trace_gc import phase_authority as authority
 from trace_gc.canonical import bytes_digest, dumps, loads
 from trace_gc.errors import ContractError
@@ -519,25 +522,128 @@ class InstalledToolModelTests(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
-    def test_every_windows_check_passes_against_the_model(self):
-        tool = self.load_tool()
+    def start_model(self, tool, *, ignored_removals=lambda args: False):
         model = WindowsModel(self, current_sid=PLAIN_ACCOUNT_SID, modules=()).start()
-        for name, value in (("call", lambda *args: model.icacls(list(args))),
-                            ("current_sid", lambda: PLAIN_ACCOUNT_SID)):
+        calls = []
+
+        def icacls(*args):
+            calls.append(list(args))
+            if ignored_removals(args):
+                return subprocess.CompletedProcess(list(args), 0, "", "")
+            return model.icacls(list(args))
+        utility, info = tool.load_fixture_utility()
+        for name, value in (("call", icacls), ("current_sid", lambda: PLAIN_ACCOUNT_SID),
+                            ("descriptor_fixture", lambda: (utility, DescriptorModel(model), info))):
             patcher = patch.object(tool, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        return model, utility, calls
+
+    def test_every_windows_check_passes_against_the_model(self):
+        tool = self.load_tool()
+        model, utility, calls = self.start_model(tool)
         report = tool.Report()
         tool.native(report)
         windows = report.data["windows_checks"]
         self.assertEqual([name for name, passed in windows.items() if not passed], [])
-        self.assertEqual(len(windows), 29)
+        self.assertEqual(len(windows), 34)
         for name in ("alias_deny_accepted_write_and_staging",
                      "fenced_inactive_stages_but_rejects_current_write",
                      "rejected_write_leaves_ledger_unchanged",
                      "foreign_rid500_deny_rejected_for_local_account",
-                     "machine_rid500_deny_rejected_for_foreign_domain_rid500"):
+                     "machine_rid500_deny_rejected_for_foreign_domain_rid500",
+                     "foreign_rid500_deny_installed_by_descriptor_exactly",
+                     "foreign_rid500_deny_removed_between_cases",
+                     "owned_dacl_cleanup_verified",
+                     "fixture_utility_loaded_without_path_or_import_changes",
+                     "all_trace_gc_modules_from_installed_package_after_fixtures"):
             self.assertTrue(windows[name], name)
+        self.assertEqual(report.data["fixture_utility_sha256"], tool.sha(Path(utility.__file__).read_bytes()))
+
+    def test_the_foreign_domain_deny_never_reaches_icacls_and_is_removed_between_cases(self):
+        tool = self.load_tool()
+        model, utility, calls = self.start_model(tool)
+        foreign_aces = []
+        original = DescriptorModel.apply_dacl
+
+        def watch(self_, path, sddl):
+            original(self_, path, sddl)
+            foreign_aces.append("(D;;LC;;;%s)" % FOREIGN_RID500_SID in sddl)
+        with patch.object(DescriptorModel, "apply_dacl", watch):
+            tool.native(tool.Report())
+        self.assertTrue(all(FOREIGN_RID500_SID not in " ".join(args) or args[2] != "/deny" for args in calls))
+        self.assertEqual([args for args in calls if args[2] == "/deny" and any(
+            FOREIGN_RID500_SID in item for item in args)], [])
+        self.assertEqual(foreign_aces.count(True), 1)
+        self.assertGreaterEqual(foreign_aces.count(False), 1)
+        for flags, aces in model.dacls.values():
+            self.assertFalse([ace for ace in aces if FOREIGN_RID500_SID in ace])
+
+    def test_a_foreign_deny_that_is_not_actually_removed_fails_the_run_instead_of_being_hidden(self):
+        tool = self.load_tool()
+        model, utility, calls = self.start_model(tool)
+        with patch.object(utility, "remove_descriptor_deny", lambda *args, **kwargs: True):
+            with self.assertRaises(RuntimeError):
+                tool.native(tool.Report())
+
+    def test_a_removal_that_reports_drift_fails_the_run(self):
+        tool = self.load_tool()
+        model, utility, calls = self.start_model(tool)
+        real = utility.remove_descriptor_deny
+
+        def drifting(*args, **kwargs):
+            real(*args, **kwargs)
+            return False
+        with patch.object(utility, "remove_descriptor_deny", drifting):
+            with self.assertRaises(RuntimeError):
+                tool.native(tool.Report())
+
+    def test_an_owned_deny_that_survives_a_lift_between_cases_fails_the_run(self):
+        tool = self.load_tool()
+        self.start_model(tool, ignored_removals=lambda args: args[2] == "/remove:d"
+                         and args[3] == "*" + USERS_SID)
+        with self.assertRaises(RuntimeError):
+            tool.native(tool.Report())
+
+    def test_a_failed_final_cleanup_is_reported_and_fails_the_run(self):
+        tool = self.load_tool()
+        armed = []
+        model, utility, calls = self.start_model(
+            tool, ignored_removals=lambda args: bool(armed) and args[2] == "/remove:d")
+        real_check = tool.Report.check
+
+        def check(self_, name, passed):
+            real_check(self_, name, passed)
+            if name == "absent_deny_rejected":
+                armed.append(name)
+                key = next(item for item in model.dacls if item.endswith("old-app"))
+                flags, aces = model.dacls[key]
+                model.dacls[key] = (flags, ["(D;;LC;;;BU)", *aces])
+        with patch.object(tool.Report, "check", check):
+            report = tool.Report()
+            tool.native(report)
+        self.assertFalse(report.data["windows_checks"]["owned_dacl_cleanup_verified"])
+        self.assertFalse(report.ok)
+        self.assertEqual([name for name, passed in report.data["windows_checks"].items() if not passed],
+                         ["owned_dacl_cleanup_verified"])
+
+    def test_loading_the_fixture_utility_edits_neither_the_path_nor_the_installed_imports(self):
+        tool = self.load_tool()
+        code = ("import importlib.util, json, sys\n"
+                "spec = importlib.util.spec_from_file_location('check', sys.argv[1])\n"
+                "module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)\n"
+                "before = list(sys.path)\n"
+                "utility, info = module.load_fixture_utility()\n"
+                "print(json.dumps({'isolated': info['isolated'], 'path_same': before == sys.path,\n"
+                "  'modules': sorted(n for n in sys.modules if n.split('.')[0] in ('trace_gc','src','tools')),\n"
+                "  'registered': 'jraphyte_fixture_windows_native_acl' in sys.modules,\n"
+                "  'redact_is_lazy': 'tools' not in sys.modules}))\n")
+        done = subprocess.run([sys.executable, "-I", "-c", code, tool.__file__], capture_output=True,
+                              text=True, timeout=60, cwd=tempfile.gettempdir())
+        self.assertEqual(done.returncode, 0, done.stderr)
+        result = json.loads(done.stdout)
+        self.assertEqual(result, {"isolated": True, "path_same": True, "modules": [],
+                                  "registered": False, "redact_is_lazy": True})
 
     def test_portable_checks_reject_a_wrong_declared_digest(self):
         tool = self.load_tool()

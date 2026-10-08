@@ -20,14 +20,17 @@ import tarfile
 import tempfile
 import unittest
 
+from tools import sdist_discovery
+
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_PATTERNS = ("tests/test_paper_pilot_phase_*.py", "tests/test_windows_*.py")
 EXTRA_ROOTS = ("tests/phase_trustee_harness.py", "tools/installed_phase_authority_check.py",
-               "tests/test_sdist_phase_distribution.py")
+               "tests/test_sdist_phase_distribution.py", "tests/test_sdist_discovery.py")
+EXTRA_DATA = (".github/workflows/test.yml",)
 BY_PATH = re.compile(r"""["'](src|tools)["']\s*/\s*["'](\w+\.py)["']""")
 FIRST_PARTY = {"src", "tools", "tests", "trace_gc"}
 BUILD_INPUTS = ("pyproject.toml", "setup.cfg", "setup.py", "MANIFEST.in", "README.md", "LICENSE")
-BUILD_TREES = ("trace_gc", "src", "tools", "tests")
+BUILD_TREES = ("trace_gc", "src", "tools", "tests", ".github")
 IMPORT_PROBE = (
     "import json, sys, unittest\n"
     "sys.path.insert(0, '')\n"
@@ -86,7 +89,7 @@ def affected_files() -> set[Path]:
 
 def needed_relative_paths() -> set[str]:
     return {path.relative_to(ROOT).as_posix() for path in affected_files()
-            if not path.relative_to(ROOT).as_posix().startswith("trace_gc/")}
+            if not path.relative_to(ROOT).as_posix().startswith("trace_gc/")} | set(EXTRA_DATA)
 
 
 class ClosureTests(unittest.TestCase):
@@ -94,7 +97,9 @@ class ClosureTests(unittest.TestCase):
         needed = needed_relative_paths()
         for expected in ("src/paper_pilot_phase_cutover_guarded_v4.py", "tests/phase_trustee_harness.py",
                          "tools/windows_fixture_acl.py", "tools/windows_fence_diagnostics.py",
-                         "tools/installed_phase_authority_check.py"):
+                         "tools/installed_phase_authority_check.py", "tools/sdist_discovery.py",
+                         "tools/windows_native_acl.py",
+                         "tests/test_sdist_discovery.py", ".github/workflows/test.yml"):
             self.assertIn(expected, needed)
 
 
@@ -122,16 +127,10 @@ class GeneratedSdistTests(unittest.TestCase):
             cwd=tree, capture_output=True, text=True, timeout=300)
         if build.returncode:
             raise AssertionError("sdist build failed:\n" + build.stdout + build.stderr)
-        archives = sorted(dist.glob("*.tar.gz"))
-        assert len(archives) == 1, archives
-        with tarfile.open(archives[0]) as archive:
-            cls.members = {"/".join(member.name.split("/")[1:]) for member in archive.getmembers() if member.isfile()}
-            extract = cls.work / "extracted"
-            if hasattr(tarfile, "data_filter"):
-                archive.extractall(extract, filter="data")
-            else:
-                archive.extractall(extract)
-        cls.extracted = next(extract.iterdir())
+        archive = sdist_discovery.find_sdist(dist, "trace-gc")
+        with tarfile.open(archive) as handle:
+            cls.members = {"/".join(member.name.split("/")[1:]) for member in handle.getmembers() if member.isfile()}
+        cls.extracted = sdist_discovery.extract_sdist(dist, cls.work / "extracted", "trace-gc")
 
     def test_every_file_the_affected_tests_need_is_a_member_of_the_generated_sdist(self):
         missing = sorted(needed_relative_paths() - self.members)

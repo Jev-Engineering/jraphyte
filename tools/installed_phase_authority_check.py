@@ -23,7 +23,13 @@ Two groups of checks are reported separately:
   after every rejection.
 
 ``native_windows`` is ``RUN`` or ``NOT_RUN``; off Windows nothing native is claimed.
-Only ACEs this script added beneath its own temporary directory are ever removed. One
+The one deny for a fabricated foreign-domain RID-500 SID is installed and removed by numeric
+descriptor operations (no account lookup, which ``icacls`` needs and cannot do for it) through
+``tools/windows_native_acl.py``, loaded by path from beside this script as a source-only fixture
+utility: it is never put on ``sys.path`` or counted as the wheel, its digest is reported, and
+checks show it added no ``trace_gc``/``src``/``tools`` import and that every ``trace_gc`` module
+still comes from the installed package. Only ACEs this script added beneath its own temporary
+directory are ever removed, the removal is verified, and a failed removal fails the run. One
 JSON object is printed; the exit status is 1 on any failed check, on unverified
 cleanup, or (with ``--require-windows``) when not on Windows.
 """
@@ -31,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -71,6 +78,30 @@ def current_sid() -> str:
 
 def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def load_fixture_utility():
+    """Load ``windows_native_acl.py`` from beside this script, by path, as a source-only utility.
+
+    It is fixture machinery (numeric-SID descriptor writes, which ``icacls`` cannot do for a SID
+    no account database knows), not part of the wheel under test. It is never put on
+    ``sys.path`` or in ``sys.modules`` and imports nothing but the standard library; the digest of
+    the file is reported and the load is reported as isolated only if ``sys.path`` is unchanged
+    and no ``trace_gc``, ``src`` or ``tools`` module appeared.
+    """
+    path = Path(__file__).resolve().with_name("windows_native_acl.py")
+    paths, modules = list(sys.path), set(sys.modules)
+    spec = importlib.util.spec_from_file_location("jraphyte_fixture_windows_native_acl", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    appeared = {name.split(".")[0] for name in set(sys.modules) - modules}
+    isolated = sys.path == paths and not appeared & {"trace_gc", "src", "tools"}
+    return module, {"sha256": sha(path.read_bytes()), "isolated": isolated}
+
+
+def descriptor_fixture():
+    utility, info = load_fixture_utility()
+    return utility, utility.WindowsNative(), info
 
 
 class Report:
@@ -160,6 +191,11 @@ def native(report: Report) -> None:
     local_rid500 = prefix.group(1) + "-500"
     plain = runner if not runner.endswith("-500") else prefix.group(1) + "-1001"
     owned_sids = {USERS_SID, GUESTS_SID, FOREIGN_RID500_SID, runner, local_rid500, plain}
+    checkout_modules = {name for name in sys.modules if name.split(".")[0] in ("src", "tools")}
+    utility, descriptor, fixture_info = descriptor_fixture()
+    report.data["fixture_utility_sha256"] = fixture_info["sha256"]
+    report.check("fixture_utility_loaded_without_path_or_import_changes", fixture_info["isolated"])
+    cleanup_failures = []
 
     report.check("numeric_users_sid_is_serialized_as_alias",
                  authority.canonical_dacl_trustee(USERS_SID) == "BU")
@@ -196,10 +232,32 @@ def native(report: Report) -> None:
             frozenset({"PHASE_ACTIVATE"}), frozenset({"isolated-test"}), frozenset({"LIVE"}),
             can_review=True))
 
-        def lift(path: Path) -> None:
-            for sid in owned_sids:
+        def leftovers(path: Path) -> list[str]:
+            owned = {authority.canonical_dacl_trustee(sid) for sid in owned_sids}
+            users = authority.canonical_dacl_trustee(USERS_SID)
+            found = []
+            for ace in authority.canonical_dacl_aces(authority.directory_dacl_sddl(path)):
+                fields = ace[1:-1].split(";")
+                if len(fields) == 6 and "ID" not in fields[1] and (
+                        (fields[0] == "D" and fields[5] in owned)
+                        or (fields[0] == "A" and fields[5] == users)):
+                    found.append(fields[0])
+            return found
+
+        def lift(path: Path, *, strict: bool = True) -> bool:
+            for sid in sorted(owned_sids - {FOREIGN_RID500_SID}):
                 call("icacls.exe", str(path), "/remove:d", "*" + sid)
             call("icacls.exe", str(path), "/remove:g", "*" + USERS_SID)
+            exact = True
+            for _ in range(4):
+                if not utility.deny_present(descriptor, path, FOREIGN_RID500_SID):
+                    break
+                exact = utility.remove_descriptor_deny(descriptor, path, FOREIGN_RID500_SID) and exact
+            clean = exact and not leftovers(path) and not utility.deny_present(
+                descriptor, path, FOREIGN_RID500_SID)
+            if strict and not clean:
+                raise RuntimeError("an owned ACE was not removed")
+            return clean
 
         def write(deny_sid, *, dacl_sha=None):
             raw = authority.directory_dacl_sddl(parent)
@@ -336,12 +394,19 @@ def native(report: Report) -> None:
                 report.check("machine_rid500_deny_rejected_for_" + label, rejected())
             lift(parent)
 
-            icacls(str(parent), "/deny", "*" + FOREIGN_RID500_SID + ":(AD)")
+            installed = utility.deny_by_descriptor(descriptor, parent, FOREIGN_RID500_SID)
+            raw = authority.directory_dacl_sddl(parent)
+            report.check("foreign_rid500_deny_installed_by_descriptor_exactly",
+                         installed["installed_exactly"]
+                         and installed["ace"] == "(D;;LC;;;" + FOREIGN_RID500_SID + ")"
+                         and utility.split_dacl(raw)[1][0] == installed["ace"])
             write(local_rid500)
             report.check("foreign_rid500_deny_rejected_for_local_account", rejected())
             write(FOREIGN_RID500_SID)
             report.check("foreign_rid500_deny_accepted_for_itself", accepted())
             lift(parent)
+            report.check("foreign_rid500_deny_removed_between_cases",
+                         not utility.deny_present(descriptor, parent, FOREIGN_RID500_SID))
 
             icacls(str(parent), "/deny", "*" + runner + ":(AD)")
             write(runner)
@@ -354,8 +419,16 @@ def native(report: Report) -> None:
                 if not item._lock_file.closed:
                     item.close()
             for path in [parent, *parent.rglob("*"), *archived.rglob("*")]:
-                if path.exists():
-                    lift(path)
+                if path.exists() and not lift(path, strict=False):
+                    cleanup_failures.append(path.name)
+    package = Path(authority.__file__).resolve().parent
+    report.check("owned_dacl_cleanup_verified", not cleanup_failures)
+    report.check("all_trace_gc_modules_from_installed_package_after_fixtures",
+                 all(Path(getattr(module, "__file__", None) or "/").resolve().is_relative_to(package)
+                     for name, module in list(sys.modules.items())
+                     if name == "trace_gc" or name.startswith("trace_gc."))
+                 and not {name for name in sys.modules
+                          if name.split(".")[0] in ("src", "tools")} - checkout_modules)
     report.check("owned_tree_removed", base_dir is not None and not base_dir.exists())
 
 
