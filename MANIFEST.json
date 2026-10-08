@@ -7,8 +7,8 @@
   "files": [
     {
       "path": ".github/workflows/test.yml",
-      "bytes": 9858,
-      "sha256": "1660c1eb8611a7db49a6eb78aa82a33be4de815fc25917a8e8e7922c762d628b"
+      "bytes": 12883,
+      "sha256": "1b148dbe243b919564f06d96d66c4a2698e45a9b9b7772f4331abdc33824a2fd"
     },
     {
       "path": ".gitignore",
@@ -737,8 +737,8 @@
     },
     {
       "path": "docs/paper_pilot_phase_transition.md",
-      "bytes": 18288,
-      "sha256": "e28409b2c6a356b85ce27857b282fc2819628addc676cf74ca8c95c5a40a865d"
+      "bytes": 24745,
+      "sha256": "ad69ebbe19ad4d7a6f87bc7e3b3818ee091f6a606c80d6ae496f417a81414ad1"
     },
     {
       "path": "docs/paper_pilot_workflow.md",
@@ -2292,8 +2292,8 @@
     },
     {
       "path": "src/paper_pilot_phase_cutover.py",
-      "bytes": 6198,
-      "sha256": "f7ca0f1e8acb97ac263966bc5371abd43d23c9279a18bc4847643d3acb7945ee"
+      "bytes": 9460,
+      "sha256": "1bca8c2c85e3b7cf871da6af26076274f1dde925d424e28ac026a7d6b2f5f458"
     },
     {
       "path": "src/paper_pilot_phase_cutover_guarded_v2.py",
@@ -2487,8 +2487,8 @@
     },
     {
       "path": "tests/phase_trustee_harness.py",
-      "bytes": 23009,
-      "sha256": "68cfc191cfe98ebd45b3450a72def14a5ea118fb0808ac65122312922deb6dcc"
+      "bytes": 28549,
+      "sha256": "77a5c4ab973e8a6d3e99128ad92f06311fc9102c43ec04844c694a44b6f373d0"
     },
     {
       "path": "tests/test_abstract_validation.py",
@@ -2662,8 +2662,8 @@
     },
     {
       "path": "tests/test_paper_pilot_phase_fence.py",
-      "bytes": 5246,
-      "sha256": "ec0b8409b713a2f89c2ecc567bf2f5a3c983999420e655eba0eff17ee9329876"
+      "bytes": 6030,
+      "sha256": "9b48c17fce8ea4c2e915c238cf3fcc7eb4ae8f282992519a71cfb2dadc7fe5f7"
     },
     {
       "path": "tests/test_paper_pilot_phase_import_lock.py",
@@ -2677,13 +2677,13 @@
     },
     {
       "path": "tests/test_paper_pilot_phase_trustees_model.py",
-      "bytes": 33998,
-      "sha256": "4a2b6bb8f4cf5cf9f3b515725503b28ce43cd119e428755eea9f107f55ce2986"
+      "bytes": 48198,
+      "sha256": "061fa1f60e1b7335ba878fe3616083688349758a93fe79dff1269e2de02c5373"
     },
     {
       "path": "tests/test_paper_pilot_phase_trustees_v1_v4.py",
-      "bytes": 38208,
-      "sha256": "172e6b742304dde987045badd3f567d2b6f436135d54559b35c248332d0fcba1"
+      "bytes": 43328,
+      "sha256": "f83e09133ca97d3e57e40d17621c18939835f9ed0dfae04a0b003071af44eee1"
     },
     {
       "path": "tests/test_paper_qualification_v1.py",
@@ -2992,8 +2992,8 @@
     },
     {
       "path": "tests/test_windows_native_acl.py",
-      "bytes": 33718,
-      "sha256": "33b9f7f195eb0b1b7d6b9af2c8bdea5d3548a5215e0cc97faa08a1b5ac73193d"
+      "bytes": 131065,
+      "sha256": "a466bf28608b379ca8e4745e3f953e7354d7ed5f8a0326ef5821517b96acf5c4"
     },
     {
       "path": "tools/build_schemas.py",
@@ -3022,8 +3022,8 @@
     },
     {
       "path": "tools/installed_phase_authority_check.py",
-      "bytes": 22735,
-      "sha256": "b7b949f676a60e9a678ed0e8dd3c71df88c6acaac08b14aab18a1e969a97792d"
+      "bytes": 24082,
+      "sha256": "de288c30423b0decc6777f4246d911943700c592988bad1b87b8a7d7fb9c0cdf"
     },
     {
       "path": "tools/legacy_hardening.py",
@@ -3097,8 +3097,8 @@
     },
     {
       "path": "tools/windows_native_acl.py",
-      "bytes": 28625,
-      "sha256": "aa019a497081c29af9d2675fa9ff691476c513a7a731631e9b98cdbcced69671"
+      "bytes": 71797,
+      "sha256": "36cff50790ac00d76e1fdf0425da8a25062f193cd0a28103a638135d3124c58b"
     },
     {
       "path": "trace_gc/__init__.py",

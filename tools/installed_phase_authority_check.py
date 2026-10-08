@@ -80,8 +80,9 @@ def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def load_fixture_utility():
-    """Load ``windows_native_acl.py`` from beside this script, by path, as a source-only utility.
+def load_fixture_utility(name: str = "windows_native_acl"):
+    """Load ``<name>.py`` (default ``windows_native_acl.py``) from beside this script, by path, as a
+    source-only utility.
 
     It is fixture machinery (numeric-SID descriptor writes, which ``icacls`` cannot do for a SID
     no account database knows), not part of the wheel under test. It is never put on
@@ -89,9 +90,9 @@ def load_fixture_utility():
     the file is reported and the load is reported as isolated only if ``sys.path`` is unchanged
     and no ``trace_gc``, ``src`` or ``tools`` module appeared.
     """
-    path = Path(__file__).resolve().with_name("windows_native_acl.py")
+    path = Path(__file__).resolve().with_name(name + ".py")
     paths, modules = list(sys.path), set(sys.modules)
-    spec = importlib.util.spec_from_file_location("jraphyte_fixture_windows_native_acl", path)
+    spec = importlib.util.spec_from_file_location("jraphyte_fixture_" + name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     appeared = {name.split(".")[0] for name in set(sys.modules) - modules}
@@ -102,6 +103,16 @@ def load_fixture_utility():
 def descriptor_fixture():
     utility, info = load_fixture_utility()
     return utility, utility.WindowsNative(), info
+
+
+def stabilize_parent(base_dir: Path, path: Path, read) -> None:
+    """Protect the owned fixture directory ``path`` (strictly inside ``base_dir``) with exactly the
+    reviewed explicit allows and verify it, so no later deny copies inherited ACEs into it. Raises
+    the fixture utility's error, which carries fixed problem codes only."""
+    stabilizer, _ = load_fixture_utility("windows_fixture_acl")
+    stabilizer.stabilize_owned_fixture(
+        base_dir, [("old-app", path)], read=read,
+        run=lambda arguments, **_: call(*arguments))
 
 
 class Report:
@@ -194,7 +205,10 @@ def native(report: Report) -> None:
     checkout_modules = {name for name in sys.modules if name.split(".")[0] in ("src", "tools")}
     utility, descriptor, fixture_info = descriptor_fixture()
     report.data["fixture_utility_sha256"] = fixture_info["sha256"]
-    report.check("fixture_utility_loaded_without_path_or_import_changes", fixture_info["isolated"])
+    _, stabilizer_info = load_fixture_utility("windows_fixture_acl")
+    report.data["fixture_acl_sha256"] = stabilizer_info["sha256"]
+    report.check("fixture_utility_loaded_without_path_or_import_changes",
+                 fixture_info["isolated"] and stabilizer_info["isolated"])
     cleanup_failures = []
 
     report.check("numeric_users_sid_is_serialized_as_alias",
@@ -218,6 +232,13 @@ def native(report: Report) -> None:
         for directory in (parent, archived, phase):
             directory.mkdir(parents=True)
         (phase / "phase.lock").write_bytes(b"0")
+        try:
+            stabilize_parent(base_dir, parent, authority.directory_dacl_sddl)
+            report.check("owned_fixture_parent_stabilized_before_pins", True)
+        except Exception as error:   # fixed codes only
+            report.data["fixture_problems"] = [list(item) for item in getattr(error, "problems", [])]
+            report.check("owned_fixture_parent_stabilized_before_pins", False)
+            raise RuntimeError("owned fixture parent was not stabilized") from None
         files = {}
         for name in NAMES:
             body = ("installed:" + name).encode()
@@ -395,6 +416,7 @@ def native(report: Report) -> None:
             lift(parent)
 
             installed = utility.deny_by_descriptor(descriptor, parent, FOREIGN_RID500_SID)
+            report.data["foreign_rid500_install_components"] = installed["components"]
             raw = authority.directory_dacl_sddl(parent)
             report.check("foreign_rid500_deny_installed_by_descriptor_exactly",
                          installed["installed_exactly"]

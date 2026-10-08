@@ -12,17 +12,20 @@ evidence: only the native test classes prove behavior of the operating system.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
 import sqlite3
 import subprocess
 import sys
+import tempfile
 from unittest.mock import patch
 
 from trace_gc import phase_authority as authority
 from trace_gc.budget import RunBudget
 from trace_gc.canonical import bytes_digest, dumps
+from trace_gc.errors import ContractError
 from trace_gc.phase_authority import PhaseAuthority, binding_sha256
 from trace_gc.trust import IssuerPolicy, Signer, TrustStore
 
@@ -44,6 +47,60 @@ RUN_ID = "authored-run"
 
 def sha(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
+
+
+SUPPORTED_CONTEXT_ENV = "JRAPHYTE_SUPPORTED_CONTEXT"
+BRANCH_LOG_ENV = "JRAPHYTE_BRANCH_LOG"
+TOKEN_GATE_PROBLEM = "current process token can create beneath the parent deny"
+
+
+def producer_context_supported(test, base, sid: str) -> bool:
+    """Whether the ORIGINAL process token is refused creating a directory beneath the exact
+    production parent deny for ``sid``, decided by an independent native probe on a stabilized
+    directory inside the owned ``base`` (never by the code under test). The probe's own restoration
+    and cleanup must verify. With ``JRAPHYTE_SUPPORTED_CONTEXT=required`` an unsupported context
+    fails the test instead of selecting the refusal branch. With ``JRAPHYTE_BRANCH_LOG`` set, the
+    branch each case took is appended there, so a run that only took the refusal branch is visible
+    as such and is never mistaken for positive qualification."""
+    from tools import windows_fixture_acl, windows_native_acl
+    native = windows_native_acl.WindowsNative()
+    base = Path(base)
+
+    def make(label: str) -> Path:
+        path = Path(tempfile.mkdtemp(prefix="context-", dir=base))
+        windows_fixture_acl.stabilize_owned_fixture(base, [(label, path)], read=native.read_dacl)
+        return path
+    done = windows_native_acl.probe_actual_fence_shape(native, make, sid)
+    test.assertTrue(done["verified"], "context probe did not restore: " + json.dumps(
+        {"restored": done["restored"], "cleanup": done["report"]["probe_cleanup_verified"]}, sort_keys=True))
+    supported = done["report"]["verdict"] == "DENIED"
+    log = os.environ.get(BRANCH_LOG_ENV)
+    if log:
+        with open(log, "a", encoding="utf-8") as stream:
+            stream.write(json.dumps({"test": test.id().rsplit(".", 1)[-1], "verdict": done["report"]["verdict"],
+                                     "branch": "supported_positive" if supported else "unsupported_refusal"},
+                                    sort_keys=True) + "\n")
+    if not supported and os.environ.get(SUPPORTED_CONTEXT_ENV) == "required":
+        test.fail("a supported context is required and the original process token is not refused: "
+                  + json.dumps(done["report"], sort_keys=True))
+    return supported
+
+
+def assert_fence_refused_before_effects(test, invoke, *, parent, old, archive, receipt, content) -> None:
+    """The v1 producer refused (``PHASE_FENCE``, the token gate) and left the old state, the
+    parent DACL (the deny it installed to probe is removed again), the archive and the receipt
+    exactly as they were, with no probe directory left in the fenced parent or beside the receipt."""
+    before = authority.directory_dacl_sddl(parent)
+    with test.assertRaises(ContractError) as caught:
+        invoke()
+    test.assertEqual((caught.exception.code, caught.exception.detail), ("PHASE_FENCE", TOKEN_GATE_PROBLEM))
+    test.assertEqual(authority.directory_dacl_sddl(parent), before)
+    test.assertTrue(old.exists())
+    test.assertFalse(Path(archive).exists())
+    test.assertFalse(Path(receipt).exists())
+    test.assertEqual(sorted(item.name for directory in {Path(parent), Path(receipt).parent}
+                            for item in directory.iterdir() if item.name.startswith(".fence-")), [])
+    test.assertEqual({name: bytes_digest((Path(old) / name).read_bytes()) for name in content}, content)
 
 
 def database_dump(path: Path) -> str:
@@ -140,12 +197,23 @@ class PhaseHarness:
         return ledger
 
 
+class ModeledAccessDenied(PermissionError):
+    """What the model raises where Windows reports ``ERROR_ACCESS_DENIED`` (5)."""
+    winerror = 5
+
+
 class _NtOs:
-    """``os`` that reports Windows and re-keys the DACL model on rename."""
+    """``os`` that reports Windows, re-keys the DACL model on rename and refuses ``mkdir`` where
+    the modeled parent DACL denies the modeled token."""
 
     def __init__(self, model):
         self._model = model
         self.name = "nt"
+
+    def mkdir(self, path, *args, **kwargs):
+        if self._model.refuses_creation(path):
+            raise ModeledAccessDenied(13, "modeled access denied")
+        return os.mkdir(path, *args, **kwargs)
 
     def rename(self, source, destination):
         os.rename(source, destination)
@@ -191,6 +259,12 @@ class WindowsModel:
         self.test, self.current_sid, self.modules = test, current_sid, modules
         self.dacls: dict[str, tuple[str, list[str]]] = {}
         self.msvcrt = _Msvcrt()
+        # True models a token (for example one holding a bypass privilege) that is not refused by
+        # a parent deny; the DACL text is unchanged.
+        self.token_bypasses_deny = False
+        # Directories (by resolved path) where creation is not refused although the DACL text
+        # denies it, to model a filesystem or control flags that differ from another directory.
+        self.bypass_parents: set[str] = set()
 
     # -- lifecycle ---------------------------------------------------------
     def start(self):
@@ -237,6 +311,17 @@ class WindowsModel:
         self.entry(path)
         self.dacls[self.key(path)] = (flags, list(aces))
 
+    def refuses_creation(self, path) -> bool:
+        """Whether the modeled token is refused creating ``path`` under an explicit ``LC`` deny."""
+        if self.token_bypasses_deny:
+            return False
+        parent = Path(path).parent
+        if not parent.exists() or self.key(parent) in self.bypass_parents:
+            return False
+        trustee = self.spell(self.current_sid)
+        return any(self.explicit(ace, "D", trustee) and "LC" in ace[1:-1].split(";")[2]
+                   for ace in self.entry(parent)[1])
+
     def rekey(self, source, destination):
         source, destination = str(Path(source).resolve()), str(Path(destination).resolve())
         for key in list(self.dacls):
@@ -257,6 +342,18 @@ class WindowsModel:
         path, verb, rest = Path(args[1]), args[2], args[3:]
         flags, aces = self.entry(path)
         aces = list(aces)
+        if verb == "/inheritance:r":
+            assert rest[0] == "/grant:r", rest
+            aces = [item for item in aces if not self.inherited(item)]
+            flags = "P" + flags.replace("P", "")
+            for spec in rest[1:]:
+                grantee, rights = spec.lstrip("*").split(":", 1)
+                inherit = "OICI" if rights.startswith("(OI)(CI)") else ""
+                trustee = {"S-1-5-32-544": "BA", "S-1-3-4": "OW"}.get(grantee) or self.spell(grantee)
+                aces = [item for item in aces if not self.explicit(item, "A", trustee)]
+                aces.append(f"(A;{inherit};FA;;;{trustee})")
+            self.dacls[self.key(path)] = (flags, aces)
+            return subprocess.CompletedProcess(args, 0, "", "")
         sid = rest[0].lstrip("*").split(":")[0]
         trustee = self.spell(sid)
         if verb in ("/deny", "/grant"):

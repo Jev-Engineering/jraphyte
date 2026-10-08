@@ -12,6 +12,7 @@ from trace_gc.canonical import bytes_digest
 from trace_gc.errors import ContractError
 from trace_gc.phase_authority import dacl_has_ace, directory_dacl_sddl
 from src.paper_pilot_phase_cutover import NAMES, _current_sid, fence_closed_old_phase
+from tests.phase_trustee_harness import assert_fence_refused_before_effects, producer_context_supported
 from tools.windows_native_acl import WindowsNative, require_recreation_denied
 
 PARENT_DENY = "(D;;LC;;;{sid})"
@@ -51,6 +52,16 @@ class PhaseNamespaceFenceTests(unittest.TestCase):
 
     def test_exact_replay_after_closed_directory_move(self):
         self.assertFalse(dacl_has_ace(directory_dacl_sddl(self.old.parent), PARENT_DENY, self.sid))
+        if not producer_context_supported(self, self.root, self.sid):
+            # Fail closed: the original token is not refused beneath the deny, so nothing was
+            # fenced; the strict positive path is held by the supported-context run.
+            assert_fence_refused_before_effects(
+                self, lambda: fence_closed_old_phase(
+                    old_root=self.old, archived_root=self.archived, expected_file_sha256=self.expected,
+                    deny_sid=self.sid, receipt_path=self.receipt),
+                parent=self.old.parent, old=self.old, archive=self.archived, receipt=self.receipt,
+                content=self.expected)
+            return
         first = fence_closed_old_phase(old_root=self.old, archived_root=self.archived,
             expected_file_sha256=self.expected, deny_sid=self.sid, receipt_path=self.receipt)
         self.assertEqual(first["status"], "OLD_PATH_FENCED_NEW_PHASE_ALLOWED")

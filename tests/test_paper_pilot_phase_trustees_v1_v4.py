@@ -18,6 +18,7 @@ signed activation pointer, and both ``write()`` and ``staging()``.
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import re
@@ -30,7 +31,8 @@ from unittest.mock import patch
 
 from tests.phase_trustee_harness import (
     FILE_ACE, FOREIGN_RID500_SID, GUESTS_SID, NAMES, PARENT_ACE, USERS_SID, PhaseHarness,
-    PhaseOwnershipScenarios, ReceiptValidatorScenarios, Sids, sha as _sha)
+    PhaseOwnershipScenarios, ReceiptValidatorScenarios, SUPPORTED_CONTEXT_ENV, Sids,
+    assert_fence_refused_before_effects, producer_context_supported, sha as _sha)
 from tools import windows_fixture_acl, windows_native_acl
 from trace_gc import phase_authority as authority
 from trace_gc.canonical import bytes_digest, dumps, loads
@@ -86,6 +88,7 @@ class OwnedTree:
     def __init__(self, test: unittest.TestCase):
         self.test = test
         self.temp = tempfile.TemporaryDirectory(prefix=TEMP_PREFIX)
+        self.hold = windows_native_acl.ChildStopHold()
         test.addCleanup(self.cleanup)
         self.base = Path(self.temp.name)
         assert self.base.name.startswith(TEMP_PREFIX)
@@ -101,6 +104,12 @@ class OwnedTree:
         return resolved
 
     def cleanup(self):
+        # A launched child that is not shown stopped keeps the whole tree: nothing is restored or
+        # removed beneath it, and the temporary directory's finalizer is detached.
+        self.hold.settle(self.temp, self._lift_acls)
+        self.test.assertFalse(self.base.exists())
+
+    def _lift_acls(self):
         # Lift only the deny/allow ACEs this test could have added; the tree is
         # then removed. The temporary directory's own ancestors are never edited.
         for path in [self.base, *self.base.rglob("*")]:
@@ -109,8 +118,6 @@ class OwnedTree:
                     _call("icacls.exe", str(self.owned(path)), "/remove:d", "*" + sid)
                 # The one explicit grant any case adds (Users, on its own parent).
                 _call("icacls.exe", str(self.owned(path)), "/remove:g", "*" + USERS_SID)
-        self.temp.cleanup()
-        self.test.assertFalse(self.base.exists())
 
 
 class _Identity:
@@ -212,6 +219,9 @@ class NativeReceiptValidatorTests(ReceiptValidatorScenarios, unittest.TestCase):
         self.archived = base / "archive" / "state"
         self.parent.mkdir()
         self.archived.mkdir(parents=True)
+        # Explicit, protected and verified before any deny or pin (tools/windows_fixture_acl.py).
+        windows_fixture_acl.stabilize_owned_fixture(
+            base, [("parent", self.parent)], read=directory_dacl_sddl)
         self.files = {}
         for name in NAMES:
             body = ("validator:" + name).encode()
@@ -236,7 +246,8 @@ class NativeReceiptValidatorTests(ReceiptValidatorScenarios, unittest.TestCase):
         before, owner_before = self.raw(), native.read_owner(self.parent)
         installed = windows_native_acl.deny_by_descriptor(native, self.parent, sid)
         self.addCleanup(self.remove_foreign_deny, native, sid)
-        self.assertTrue(installed["installed_exactly"])
+        self.assertTrue(installed["installed_exactly"],
+                        windows_native_acl.components_message("installation", installed["components"]))
         after = self.raw()
         self.assertEqual(installed["before"], before)
         self.assertEqual(installed["after"], after)
@@ -327,6 +338,16 @@ class _FenceCase(unittest.TestCase):
         windows_native_acl.require_recreation_denied(windows_native_acl.WindowsNative(), self.parent, self.old)
         self.assertFalse(self.old.exists())
 
+    def supported_producer(self, sid) -> bool:
+        return producer_context_supported(self, self.tree.base, sid)
+
+    def without_token_gate(self):
+        """The v1 token gate has its own native and modeled tests; this keeps it out of cases that
+        exercise receipts, replay and ownership, and is never used where recreation is asserted."""
+        patcher = patch.object(self.module, "_require_denial_enforced")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def attempt_open(self, path: Path) -> subprocess.CompletedProcess:
         return _call(sys.executable, "-c",
                      "from pathlib import Path; import sys; Path(sys.argv[1]).open('a+b').close()",
@@ -350,8 +371,18 @@ class V1FenceTrusteeTests(_FenceCase):
             old_root=self.old, archived_root=self.archive,
             expected_file_sha256=self.content, deny_sid=sid, receipt_path=self.receipt)
 
+    def assert_refused_before_effects(self, sid):
+        assert_fence_refused_before_effects(
+            self, lambda: self.invoke(sid), parent=self.parent, old=self.old, archive=self.archive,
+            receipt=self.receipt, content=self.content)
+
     def test_group_alias_identity_fences_replays_and_validates(self):
         with self.identity(USERS_SID):
+            if not self.supported_producer(USERS_SID):
+                # Fail closed: the original token is not refused beneath the deny, so nothing
+                # was fenced; the supported-context run below holds the strict positive path.
+                self.assert_refused_before_effects(USERS_SID)
+                return
             first = self.invoke(USERS_SID)
             self.assertEqual(first["status"], "OLD_PATH_FENCED_NEW_PHASE_ALLOWED")
             raw = directory_dacl_sddl(self.parent)
@@ -369,6 +400,7 @@ class V1FenceTrusteeTests(_FenceCase):
         self.assert_validator_accepts(self.receipt)
 
     def test_crash_after_parent_deny_retries_to_the_identical_receipt(self):
+        self.without_token_gate()
         with self.identity(USERS_SID):
             with patch.object(self.module.os, "rename",
                               side_effect=PermissionError("injected rename failure")):
@@ -385,6 +417,7 @@ class V1FenceTrusteeTests(_FenceCase):
         self.assert_validator_accepts(self.receipt)
 
     def test_unrelated_parent_deny_is_preserved_and_does_not_satisfy_the_barrier(self):
+        self.without_token_gate()
         _icacls(str(self.parent), "/deny", "*" + GUESTS_SID + ":(AD)")
         with self.identity(USERS_SID):
             self.assertNotIn("(D;;LC;;;BU)", directory_dacl_sddl(self.parent))
@@ -398,6 +431,7 @@ class V1FenceTrusteeTests(_FenceCase):
     def test_machine_rid500_identity_fences_and_validates(self):
         # Representation evidence for the LA spelling: the process is not this
         # account, so no denied-open is claimed for it here.
+        self.without_token_gate()
         sid = _local_rid500_sid()
         with self.identity(sid):
             result = self.invoke(sid)
@@ -409,6 +443,9 @@ class V1FenceTrusteeTests(_FenceCase):
 
     def test_natural_runner_identity_fences_with_live_denied_recreation(self):
         sid = _current_sid()   # LA on a hosted RID-500 runner
+        if not self.supported_producer(sid):
+            self.assert_refused_before_effects(sid)
+            return
         result = self.invoke(sid)
         self.assertEqual(result["status"], "OLD_PATH_FENCED_NEW_PHASE_ALLOWED")
         self.assertTrue(authority.dacl_has_ace(
@@ -437,6 +474,50 @@ class V1FenceTrusteeTests(_FenceCase):
                 self.invoke(GUESTS_SID)
         self.assertEqual(directory_dacl_sddl(self.parent), before)
         self.assertTrue(self.old.exists())
+
+    STRICT_PRODUCER_CASES = (
+        "tests.test_paper_pilot_phase_trustees_v1_v4.V1FenceTrusteeTests"
+        ".test_group_alias_identity_fences_replays_and_validates",
+        "tests.test_paper_pilot_phase_trustees_v1_v4.V1FenceTrusteeTests"
+        ".test_natural_runner_identity_fences_with_live_denied_recreation",
+        "tests.test_paper_pilot_phase_fence.PhaseNamespaceFenceTests"
+        ".test_exact_replay_after_closed_directory_move")
+    STRICT_RUNNER = (
+        "import json, sys, unittest\n"
+        "from tools import windows_native_acl\n"
+        "held = windows_native_acl.WindowsNative().privileges()\n"
+        "with open(sys.argv[1] + '.token.json', 'w', encoding='utf-8') as token:\n"
+        "    json.dump({'enabled': sorted(n for n, e in held if e), 'disabled': sorted(n for n, e in held if not e)}, token)\n"
+        "names = sys.argv[2:]\n"
+        "suite = unittest.defaultTestLoader.loadTestsFromNames(names)\n"
+        "with open(sys.argv[1], 'w', encoding='utf-8') as out:\n"
+        "    result = unittest.TextTestRunner(stream=out, verbosity=0).run(suite)\n"
+        "sys.exit(0 if result.wasSuccessful() and result.testsRun == len(names) else 1)\n")
+
+    def test_the_strict_positive_producer_path_runs_in_a_restricted_primary_token_child(self):
+        """The original-token acceptance gate, forced: the child's ORIGINAL process token is a copy
+        of this one with every privilege removed, and the supported-context branch is required, so
+        the child fails unless the production producer fences and recreation is refused. Nothing
+        here is accepted on a thread impersonating a stripped token, and a context that is not
+        supported fails this test rather than passing the refusal branch."""
+        native = windows_native_acl.WindowsNative()
+        out = self.tree.base / "strict-producer-child.txt"
+        with patch.dict(os.environ, {SUPPORTED_CONTEXT_ENV: "required"}):
+            launch = self.tree.hold.launch(
+                native, [sys.executable, "-c", self.STRICT_RUNNER, str(out), *self.STRICT_PRODUCER_CASES],
+                Path.cwd(), timeout=900)
+        report = out.read_text(encoding="utf-8") if out.exists() else ""
+        self.assertEqual(windows_native_acl.launch_defects(launch), [], windows_native_acl.redact(str(launch)))
+        self.assertEqual(
+            {key: launch[key] for key in ("launched", "completed", "exit_code", "timed_out", "cleanup_verified")},
+            {"launched": True, "completed": True, "exit_code": 0, "timed_out": False, "cleanup_verified": True},
+            "restricted-primary child did not accept: " + windows_native_acl.redact(
+                str(launch) + " " + report[-6000:]))
+        self.assertIn("Ran 3 tests", report)
+        self.assertTrue(report.rstrip().endswith("OK"), report[-500:])
+        identity = json.loads(Path(str(out) + ".token.json").read_text(encoding="utf-8"))
+        self.assertLessEqual(set(identity["enabled"]), {"SeChangeNotifyPrivilege"}, identity)
+        self.assertTrue(identity["disabled"] or identity["enabled"], identity)
 
 
 class V4FenceTrusteeTests(_FenceCase):
@@ -750,6 +831,7 @@ class V1PhaseOwnershipTests(_Ownership, _FenceCase):
     def make_fence(self):
         from src import paper_pilot_phase_cutover as v1
         self.module = v1
+        self.without_token_gate()
         control = self.tree.base / "control"
         control.mkdir()
         receipt = control / "fence-receipt.json"

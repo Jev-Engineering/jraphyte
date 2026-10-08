@@ -19,7 +19,7 @@ from unittest.mock import patch
 from tests.phase_trustee_harness import (
     FILE_ACE, FOREIGN_RID500_SID, GUESTS_SID, LOCAL_RID500_SID, NAMES, NEAR_RID500_SID,
     PARENT_ACE, PLAIN_ACCOUNT_SID, USERS_SID, PhaseHarness, PhaseOwnershipScenarios,
-    DescriptorModel, ReceiptValidatorScenarios, Sids, WindowsModel, sha)
+    DescriptorModel, ReceiptValidatorScenarios, Sids, WindowsModel, assert_fence_refused_before_effects, sha)
 from trace_gc import phase_authority as authority
 from trace_gc.canonical import bytes_digest, dumps, loads
 from trace_gc.errors import ContractError
@@ -165,12 +165,278 @@ class ModeledV1FenceTests(ModeledCase):
         # Another domain's RID-500 owner must not treat the local LA deny as its own.
         self.model.icacls(["icacls.exe", str(self.parent), "/deny",
                            "*" + LOCAL_RID500_SID + ":(AD)"])
+        self.model.current_sid = FOREIGN_RID500_SID     # the modeled token is that account
         with patch.object(v1, "_current_sid", return_value=FOREIGN_RID500_SID):
             self.invoke(FOREIGN_RID500_SID)
         raw = self.sddl(self.parent)
         self.assertEqual(raw.count("(D;;LC;;;LA)"), 1)
         self.assertEqual(raw.count("(D;;LC;;;" + FOREIGN_RID500_SID + ")"), 1)
         self.assertEqual(loads(self.receipt.read_bytes())["deny_sid"], FOREIGN_RID500_SID)
+
+
+class ModeledV1TokenGateTests(ModeledCase):
+    """The v1 producer holds, with the old state in place and the deny it added removed again,
+    unless the parent deny really refuses the current token creating a child of the FENCED
+    parent. The model supplies the refusal (or, with ``token_bypasses_deny`` or
+    ``bypass_parents``, its absence); that this matches Windows is for the native tests to show."""
+
+    def setUp(self):
+        super().setUp()
+        self.receipt = self.base / "control" / "fence-receipt.json"
+        self.control = self.receipt.parent
+        self.calls = []
+        real = self.model.icacls
+
+        def record(args):
+            self.calls.append(list(args))
+            return real(args)
+        patcher = patch.object(self.model, "icacls", record)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def invoke(self):
+        return v1.fence_closed_old_phase(
+            old_root=self.old, archived_root=self.archived, expected_file_sha256=self.content,
+            deny_sid=self.current_sid, receipt_path=self.receipt)
+
+    def probes(self):
+        return sorted(path.name for directory in (self.parent, self.control)
+                      for path in directory.glob(".fence-*"))
+
+    def parent_verbs(self):
+        return [args[2] for args in self.calls if Path(args[1]) == self.parent]
+
+    def assert_held_with_old_state_in_place(self, parent_dacl, *, verbs=("/deny", "/remove:d")):
+        self.assertEqual(self.sddl(self.parent), parent_dacl)
+        self.assertTrue(self.old.is_dir() and not self.archived.exists())
+        self.assertEqual({path.name for path in self.old.iterdir()}, set(NAMES))
+        self.assertEqual({name: bytes_digest((self.old / name).read_bytes()) for name in NAMES},
+                         self.content)
+        self.assertFalse(self.receipt.exists())
+        self.assertEqual(self.parent_verbs(), list(verbs))
+        self.assertFalse([args for args in self.calls if Path(args[1]) == self.control])
+        self.assertEqual(self.probes(), [])
+
+    def hold(self, fragment):
+        with patch.object(v1.os, "rename", side_effect=AssertionError("renamed before the gate")):
+            with self.assertRaises(ContractError) as caught:
+                self.invoke()
+        self.assertEqual(caught.exception.code, "PHASE_FENCE")
+        self.assertIn(fragment, str(caught.exception))
+        return caught.exception
+
+    def test_the_native_refusal_assertion_accepts_a_refusal_and_nothing_else(self):
+        refused = dict(parent=self.parent, old=self.old, archive=self.archived,
+                       receipt=self.receipt, content=self.content)
+        self.model.token_bypasses_deny = True
+        assert_fence_refused_before_effects(self, self.invoke, **refused)
+        self.model.token_bypasses_deny = False
+        with self.assertRaises(AssertionError):
+            assert_fence_refused_before_effects(self, self.invoke, **refused)
+
+    def test_the_native_refusal_assertion_rejects_a_refusal_for_another_reason(self):
+        self.model.token_bypasses_deny = True
+
+        def another_reason():
+            raise ContractError("PHASE_FENCE", "some other problem")
+        with self.assertRaises(AssertionError):
+            assert_fence_refused_before_effects(
+                self, another_reason, parent=self.parent, old=self.old, archive=self.archived,
+                receipt=self.receipt, content=self.content)
+
+    def test_a_refused_token_fences_and_the_probe_leaves_nothing_behind(self):
+        result = self.invoke()
+        self.assertEqual(result["status"], "OLD_PATH_FENCED_NEW_PHASE_ALLOWED")
+        self.assertEqual(self.probes(), [])
+        self.assertEqual(self.parent_verbs(), ["/deny"])
+        self.assertFalse([args for args in self.calls if Path(args[1]) == self.control])
+
+    def test_a_token_the_deny_does_not_refuse_holds_and_removes_the_deny_it_added(self):
+        self.model.token_bypasses_deny = True
+        before = self.sddl(self.parent)
+        error = self.hold(v1.TOKEN_NOT_REFUSED)
+        self.assertEqual(error.detail, v1.TOKEN_NOT_REFUSED)
+        self.assert_held_with_old_state_in_place(before)
+
+    def test_the_fence_can_be_published_once_the_token_is_refused_again(self):
+        self.model.token_bypasses_deny = True
+        before = self.sddl(self.parent)
+        with self.assertRaises(ContractError):
+            self.invoke()
+        self.model.token_bypasses_deny = False
+        self.assertEqual(self.invoke()["status"], "OLD_PATH_FENCED_NEW_PHASE_ALLOWED")
+        self.assertNotEqual(self.sddl(self.parent), before)
+
+    def test_replaying_a_completed_fence_with_an_unrefused_token_does_not_republish_it(self):
+        first = self.invoke()
+        raw, receipt = self.sddl(self.parent), self.receipt.read_bytes()
+        self.calls.clear()
+        self.model.token_bypasses_deny = True
+        self.hold(v1.TOKEN_NOT_REFUSED)
+        self.assertEqual((self.sddl(self.parent), self.receipt.read_bytes()), (raw, receipt))
+        self.assertEqual(self.parent_verbs(), [])
+        self.assertEqual(self.probes(), [])
+        self.model.token_bypasses_deny = False
+        self.assertEqual(self.invoke(), first)
+
+    def test_the_gate_samples_the_fenced_parent_not_the_control_directory(self):
+        # A control directory that refuses creation must not stand in for an old parent that does not.
+        self.model.icacls(["icacls.exe", str(self.control), "/deny", "*" + self.current_sid + ":(AD)"])
+        self.calls.clear()
+        self.model.bypass_parents = {self.model.key(self.parent)}
+        before = self.sddl(self.parent)
+        self.hold(v1.TOKEN_NOT_REFUSED)
+        self.assert_held_with_old_state_in_place(before)
+        self.assertEqual(list(self.control.glob(".fence-*")), [])
+
+    def test_a_control_directory_that_does_not_refuse_does_not_block_a_refusing_old_parent(self):
+        self.model.bypass_parents = {self.model.key(self.control)}
+        self.assertEqual(self.invoke()["status"], "OLD_PATH_FENCED_NEW_PHASE_ALLOWED")
+        self.assertEqual(self.probes(), [])
+
+    def test_a_deny_that_cannot_be_installed_holds_without_touching_the_old_state(self):
+        before = self.sddl(self.parent)
+        real = self.model.icacls
+
+        def refuse(args):
+            self.calls.append(list(args))
+            if Path(args[1]) == self.parent and args[2] == "/deny":
+                return subprocess.CompletedProcess(args, 5, "", "")
+            return real(args)
+        with patch.object(self.model, "icacls", refuse):
+            self.hold("could not deny old state recreation")
+        self.assert_held_with_old_state_in_place(before, verbs=("/deny",))
+
+    def test_a_refusal_that_is_not_access_denied_is_not_a_denial(self):
+        before = self.sddl(self.parent)
+        for error in (FileNotFoundError(2, "modeled missing"), OSError(5, "no windows error"),
+                      PermissionError(13, "modeled permission error without a winerror")):
+            with self.subTest(error=type(error).__name__, errno=error.errno):
+                self.calls.clear()
+                with patch.object(v1.os, "mkdir", side_effect=error):
+                    self.hold(v1.DENIAL_UNVERIFIED)
+                self.assert_held_with_old_state_in_place(before)
+
+    def test_a_probe_directory_that_cannot_be_removed_is_reported_and_the_deny_is_still_removed(self):
+        self.model.token_bypasses_deny = True
+        before = self.sddl(self.parent)
+        with patch.object(v1.os, "rmdir", side_effect=PermissionError(13, "modeled")):
+            self.hold("the probe directory was not removed")
+        self.assertEqual(self.sddl(self.parent), before)
+        self.assertTrue(self.old.is_dir() and not self.archived.exists() and not self.receipt.exists())
+        self.assertEqual(len(self.probes()), 1)
+        self.assertTrue(self.probes()[0].startswith(".fence-probe-"))
+
+    def test_a_deny_that_cannot_be_removed_after_a_hold_says_so_and_stays_for_the_owner(self):
+        self.model.token_bypasses_deny = True
+        before = self.sddl(self.parent)
+        real = self.model.icacls
+
+        def refuse_removal(args):
+            self.calls.append(list(args))
+            if Path(args[1]) == self.parent and args[2] == "/remove:d":
+                return subprocess.CompletedProcess(args, 5, "", "")
+            return real(args)
+        with patch.object(self.model, "icacls", refuse_removal):
+            self.hold("the added deny could not be removed and verified")
+        self.assertNotEqual(self.sddl(self.parent), before)
+        self.assertTrue(self.old.is_dir() and not self.receipt.exists() and self.probes() == [])
+
+    def test_a_removal_that_reports_success_but_leaves_the_dacl_different_is_not_trusted(self):
+        self.model.token_bypasses_deny = True
+        real = self.model.icacls
+
+        def lie(args):
+            self.calls.append(list(args))
+            if Path(args[1]) == self.parent and args[2] == "/remove:d":
+                return subprocess.CompletedProcess(args, 0, "", "")
+            return real(args)
+        with patch.object(self.model, "icacls", lie):
+            self.hold("the added deny could not be removed and verified")
+
+    def test_a_removal_that_exits_nonzero_is_not_trusted_even_if_the_dacl_reads_back_equal(self):
+        self.model.token_bypasses_deny = True
+        before = self.sddl(self.parent)
+        real = self.model.icacls
+
+        def exits_badly(args):
+            self.calls.append(list(args))
+            done = real(args)
+            if Path(args[1]) == self.parent and args[2] == "/remove:d":
+                return subprocess.CompletedProcess(args, 1, "", "")
+            return done
+        with patch.object(self.model, "icacls", exits_badly):
+            error = self.hold("the added deny could not be removed and verified (icacls exit 1)")
+        self.assertEqual(self.sddl(self.parent), before)
+        self.assertEqual(error.code, "PHASE_FENCE")
+
+    def test_a_removal_that_cannot_run_is_a_hold_and_never_an_escaped_exception(self):
+        self.model.token_bypasses_deny = True
+        real = self.model.icacls
+        for failure in (OSError("modeled: no icacls"), subprocess.TimeoutExpired("icacls", 30)):
+            with self.subTest(failure=type(failure).__name__):
+                def cannot_run(args):
+                    if Path(args[1]) == self.parent and args[2] == "/remove:d":
+                        raise failure
+                    return real(args)
+                with patch.object(self.model, "icacls", cannot_run):
+                    self.hold("the added deny could not be removed and verified (removal could not run)")
+                self.assertTrue(self.old.is_dir() and not self.receipt.exists())
+                self.model.icacls(["icacls.exe", str(self.parent), "/remove:d", "*" + self.current_sid])
+
+    def test_an_existing_deny_is_not_removed_when_the_token_is_not_refused(self):
+        self.invoke()
+        self.assertEqual(self.old.exists(), False)
+        # An interrupted earlier call: the deny is there and the old state still is too.
+        self.archived.rename(self.old)
+        self.receipt.unlink()
+        self.calls.clear()
+        before = self.sddl(self.parent)
+        self.model.token_bypasses_deny = True
+        self.hold(v1.TOKEN_NOT_REFUSED)
+        self.assertEqual(self.sddl(self.parent), before)
+        self.assertEqual(self.parent_verbs(), [])
+
+    def test_another_deny_for_the_fence_sid_holds_before_any_acl_change(self):
+        self.model.icacls(["icacls.exe", str(self.parent), "/deny", "*" + self.current_sid + ":(WD,AD)"])
+        self.calls.clear()
+        before = self.sddl(self.parent)
+        self.hold("another deny for the fence SID")
+        self.assertEqual(self.sddl(self.parent), before)
+        self.assertEqual(self.calls, [])
+        self.assertTrue(self.old.is_dir() and self.probes() == [])
+
+    def test_the_gate_runs_after_the_inventory_pins_and_the_deny_and_before_the_move(self):
+        order = []
+        real_pins = v1._pinned_files
+
+        def pins(*args):
+            order.append("pins")
+            return real_pins(*args)
+
+        def gate(parent, sid, restore):
+            order.append("gate")
+            self.assertEqual(Path(parent), self.parent)
+            self.assertIn("(D;;LC;;;", self.sddl(self.parent))
+            self.assertEqual(restore, before)
+            self.assertTrue(self.old.is_dir() and not self.archived.exists())
+            raise ContractError("PHASE_FENCE", "stop at the gate")
+        before = self.sddl(self.parent)
+        with patch.object(v1, "_pinned_files", pins), patch.object(v1, "_require_denial_enforced", gate):
+            with self.assertRaises(ContractError):
+                self.invoke()
+        self.assertEqual(order, ["pins", "gate"])
+        self.assertTrue(self.old.is_dir() and not self.archived.exists() and not self.receipt.exists())
+        self.model.set(self.parent, *self.model.entry(self.parent)[:1], [
+            ace for ace in self.model.entry(self.parent)[1] if not ace.startswith("(D;")])
+        self.calls.clear()
+        with self.assertRaises(ContractError):
+            v1.fence_closed_old_phase(
+                old_root=self.old, archived_root=self.archived, deny_sid=self.current_sid,
+                expected_file_sha256={**self.content, "graph.sqlite3": "0" * 64},
+                receipt_path=self.receipt)
+        self.assertEqual(self.probes(), [])
+        self.assertEqual(self.calls, [])
 
 
 class ModeledLocalRid500FenceTests(ModeledV1FenceTests):
@@ -546,7 +812,7 @@ class InstalledToolModelTests(unittest.TestCase):
         tool.native(report)
         windows = report.data["windows_checks"]
         self.assertEqual([name for name, passed in windows.items() if not passed], [])
-        self.assertEqual(len(windows), 34)
+        self.assertEqual(len(windows), 35)
         for name in ("alias_deny_accepted_write_and_staging",
                      "fenced_inactive_stages_but_rejects_current_write",
                      "rejected_write_leaves_ledger_unchanged",
@@ -556,9 +822,23 @@ class InstalledToolModelTests(unittest.TestCase):
                      "foreign_rid500_deny_removed_between_cases",
                      "owned_dacl_cleanup_verified",
                      "fixture_utility_loaded_without_path_or_import_changes",
+                     "owned_fixture_parent_stabilized_before_pins",
                      "all_trace_gc_modules_from_installed_package_after_fixtures"):
             self.assertTrue(windows[name], name)
         self.assertEqual(report.data["fixture_utility_sha256"], tool.sha(Path(utility.__file__).read_bytes()))
+
+    def test_the_owned_parent_is_stabilized_exactly_once_before_any_pin_or_deny(self):
+        tool = self.load_tool()
+        model, utility, calls = self.start_model(tool)
+        seen = []
+        real = tool.stabilize_parent
+
+        def stabilize(base_dir, path, read):
+            seen.append((path.name, len(calls), model.sddl(path)))
+            return real(base_dir, path, read)
+        with patch.object(tool, "stabilize_parent", stabilize):
+            tool.native(tool.Report())
+        self.assertEqual([(name, before) for name, before, _ in seen], [("old-app", 0)])
 
     def test_the_foreign_domain_deny_never_reaches_icacls_and_is_removed_between_cases(self):
         tool = self.load_tool()
