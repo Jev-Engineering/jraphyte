@@ -239,6 +239,61 @@
           },
           "instruction_authority": {
             "const": false
+          },
+          "research_domain": {
+            "type": "object",
+            "properties": {
+              "version": {
+                "const": "authorized-research-domain-selection-v1"
+              },
+              "scope_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "classification_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "anchor_assertion_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              },
+              "closure_assertion_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              },
+              "source_assignments": {
+                "type": "object",
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            },
+            "required": [
+              "version",
+              "scope_hash",
+              "classification_hash",
+              "anchor_assertion_ids",
+              "closure_assertion_ids",
+              "source_assignments"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -331,6 +386,86 @@
     "created_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "research_domain_scope": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "contract_version": {
+              "const": 1
+            },
+            "taxonomy_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "taxonomy_hash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "domain_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^research:[a-z0-9][a-z0-9._-]*$"
+              },
+              "uniqueItems": true,
+              "maxItems": 100
+            },
+            "match": {
+              "enum": [
+                "ANY",
+                "ALL"
+              ]
+            },
+            "include_unclassified": {
+              "type": "boolean"
+            },
+            "include_descendants": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "contract_version",
+            "taxonomy_id",
+            "taxonomy_hash",
+            "domain_ids",
+            "match",
+            "include_unclassified",
+            "include_descendants"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "classification_identity": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "const": 1
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "migrated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "contract_version",
+        "revision",
+        "hash",
+        "migrated"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [

@@ -74,6 +74,10 @@ def main():
         benchmark=run_benchmark(ROOT/"benchmarks/graphrag")
         checks["graphrag_benchmark"]={k:benchmark[k] for k in ("status","cases","runs","upstream_configurations","downstream_configurations","provider_calls","production_graph_writes","real_model_accuracy","heldout_production_results","interpretation")}
     except Exception as exc:checks["graphrag_benchmark"]={"status":"FAIL","error":str(exc)};overall=False
+    try:
+        from trace_gc.domain_conformance import run_domain_conformance
+        checks["domain_classification_conformance"]=run_domain_conformance()
+    except Exception as exc:checks["domain_classification_conformance"]={"status":"FAIL","error":str(exc)};overall=False
     external=bool(os.environ.get("TRACE_GC_LEGACY_CORE"))
     legacy_test=next((r for r in result.records if r["test"].endswith("test_pinned_upstream_conformance")),None)
     gates={"pinned_legacy":{"status":legacy_test["status"] if legacy_test else "NOT_RUN","expected_git_blob":PINNED_CORE_BLOB,

@@ -1,0 +1,37 @@
+{
+  "initiative": "Domain-aware evidence graph v1",
+  "issue": 11,
+  "epic": 4,
+  "as_of_date": "2026-09-27",
+  "status": "BLOCKED_EXTERNAL_SELECTION_AND_ACCEPTANCE",
+  "deployment_native_adapter_implemented": false,
+  "deployment_backend": null,
+  "backend_version": null,
+  "deployment_owner": null,
+  "authorized_endpoint": null,
+  "representative_corpus_hash": null,
+  "independent_labels_hash": null,
+  "accepted_slo_adr": null,
+  "pilot_authority": null,
+  "required_legacy_blob": "68217feec539d37e4a524432c93df035f9a0fe39",
+  "pinned_legacy_conformance": "NOT_RUN",
+  "reference_tests_are_deployment_qualification": false,
+  "gates": {
+    "consistent_reads": "NOT_RUN",
+    "acl_pushdown": "NOT_RUN",
+    "source_epochs": "NOT_RUN",
+    "atomic_publication": "NOT_RUN",
+    "bounded_timeouts_cancellation": "NOT_RUN",
+    "journal_equivalent_history": "NOT_RUN",
+    "backup_restore": "NOT_RUN",
+    "representative_concurrency": "NOT_RUN",
+    "native_reference_shadow_parity": "NOT_RUN",
+    "operational_slos": "NOT_RUN",
+    "external_trust_provider_labels_pilot": "NOT_RUN"
+  },
+  "source": "https://github.com/CompleteDotTech/jraphyte/issues/11",
+  "notes": [
+    "Readiness evidence template only; not an adapter.",
+    "Delivery state and issue acceptance must be verified live."
+  ]
+}

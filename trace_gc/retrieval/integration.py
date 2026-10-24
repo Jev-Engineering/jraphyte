@@ -46,7 +46,7 @@ def validate_pack_lineage(catalog: Catalog, pack: dict[str, Any], *, current_acc
         statuses = current_status if current_status is not None else context["source_status"]
         acl = AccessFilter(policy, catalog, statuses)
         for source_id in pack["closure"]["source_snapshot_ids"]:
-            require(acl.allows("source", source_id), "ACCESS_DENIED", "model closure source not authorized")
+            require(acl.source(source_id), "ACCESS_DENIED", "model closure source not currently authorized")
         for candidate_id in pack["candidate_ids"]:
             candidate = catalog.get(candidate_id, "candidate")
             require(acl.allows("node", candidate["assertion"]["subject"]) and
@@ -98,6 +98,8 @@ def references(kind: str, body: dict[str, Any]) -> list[tuple[str, str]]:
         add("original_result_id", "retrieval-result"); add("replayed_result_id", "retrieval-result"); add("new_observation_ids", "observation")
     elif kind == "retrieval-evaluation":
         add("result_ids", "retrieval-result")
+    if kind in {"retrieval-query", "retrieval-plan"} and body.get("research_domain_scope") is not None:
+        refs.append((body["research_domain_scope"]["taxonomy_id"], "research-domain-taxonomy"))
     if kind in {"pack", "observation", "resolution"}:
         add("graph_context_ids", "graph-context"); add("graph_retrieval_query_ids", "retrieval-query")
         add("source_retrieval_ids", "retrieval-result")
@@ -109,6 +111,11 @@ def validate_record(catalog: Catalog, record: dict[str, Any]) -> None:
     if kind == "retrieval-query":
         from .contracts import validate_query
         validate_query(b)
+        from .domains import validate_scope
+        validate_scope(catalog, b.get("research_domain_scope"))
+    elif kind == "retrieval-plan":
+        from .domains import validate_scope
+        validate_scope(catalog, b.get("research_domain_scope"))
     elif kind == "graph-context":
         from .service import validate_context
         validate_context(catalog, record["id"])
@@ -132,6 +139,19 @@ def validate_record(catalog: Catalog, record: dict[str, Any]) -> None:
         candidates = {x["item_id"] for x in b["candidates"]}
         require(selected == {x["id"] for x in context["items"]} and not selected & discarded and
                 selected | discarded == candidates, "RETRIEVAL_LINEAGE", "selection accounting differs")
+        if "classification_identity" in context:
+            require(b.get("classification_identity") == context["classification_identity"] and
+                    b.get("research_domain_scope") == context.get("research_domain_scope"),
+                    "DOMAIN_REVISION", "lineage classification identity or scope differs")
+    elif kind == "retrieval-replay":
+        from ..domain_publication import classification_identity
+        for prefix, result_ref in (("original", b["original_result_id"]), ("replayed", b["replayed_result_id"])):
+            result = catalog.get(result_ref, "retrieval-result")
+            context = catalog.get(result["graph_context_id"], "graph-context")
+            if prefix + "_classification_identity" in b:
+                require(b[prefix + "_classification_identity"] == classification_identity(catalog.get(context["snapshot_id"], "graph-snapshot")) and
+                        b.get(prefix + "_research_domain_scope") == catalog.get(context["query_id"], "retrieval-query").get("research_domain_scope"),
+                        "DOMAIN_REVISION", "replay classification identity or scope differs")
     elif kind == "resolution":
         expected = resolution_lineage(catalog, b["observation_ids"])
         require({k: b[k] for k in LINEAGE_FIELDS if k in b} == expected, "RETRIEVAL_LINEAGE", "resolver lineage differs")
@@ -143,6 +163,10 @@ def validate_record(catalog: Catalog, record: dict[str, Any]) -> None:
         context = catalog.get(b["graph_context_id"], "graph-context")
         require(b["items"] == context["items"] and b["query_id"] == context["query_id"] and
                 b["graph_version"] == context["graph_version"], "RETRIEVAL_LINEAGE", "answer context differs")
+        if "classification_identity" in context:
+            require(b.get("classification_identity") == context["classification_identity"] and
+                    b.get("research_domain_scope") == context.get("research_domain_scope"),
+                    "DOMAIN_REVISION", "answer classification identity or scope differs")
         require(sorted(x["evidence_id"] for x in b["citations"]) == context["selected_evidence_ids"],
                 "PROVENANCE_MISMATCH", "answer must cite every selected canonical evidence span once")
         for citation in b["citations"]:

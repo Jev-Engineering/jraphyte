@@ -26,6 +26,7 @@ from .catalog import Catalog
 from .compiler import now
 from .errors import ContractError,require
 from .resolver import primary_observation
+from .domain_publication import snapshot_body, receipt_projection
 
 PINNED_CORE_BLOB="68217feec539d37e4a524432c93df035f9a0fe39"
 
@@ -51,15 +52,31 @@ def load_pinned_core(path: str | Path):
 
 
 class _TransactionConnection:
-    """Hooks run after BEGIN, after idempotency lookup, and before actual COMMIT."""
+    """Authority check after BEGIN; apply after lookup; finish before COMMIT.
+
+    The exact upstream source still requires its independent pinned conformance
+    gate. These hooks neither replace nor create a second graph authority.
+    """
     def __init__(self,db):
         self.raw=db;self.guard=None;self.finish=None;self.guarded=False
+        self.authority_check=None;self.checking_authority=False
     def execute(self,sql,parameters=()):
         normalized=" ".join(sql.upper().split())
-        if self.guard is not None and self.raw.in_transaction and normalized=="SELECT BODY FROM STATE WHERE ID=1" and not self.guarded:
+        if self.guard is not None and self.raw.in_transaction and normalized=="SELECT BODY FROM STATE WHERE ID=1" and not self.guarded and not self.checking_authority:
             self.guarded=True;self.guard()
         if self.finish is not None and normalized=="COMMIT" and self.guarded:self.finish()
-        return self.raw.execute(sql,parameters)
+        result=self.raw.execute(sql,parameters)
+        if normalized.split()[:1]==["BEGIN"] and self.authority_check is not None:
+            self.checking_authority=True
+            try:
+                self.authority_check()
+            except BaseException:
+                # Upstream may issue BEGIN before entering its own try/rollback.
+                # A failed boundary check must never leave its write lock held.
+                if self.raw.in_transaction:self.raw.execute("ROLLBACK")
+                raise
+            finally:self.checking_authority=False
+        return result
     def __getattr__(self,name):return getattr(self.raw,name)
 
 
@@ -118,8 +135,10 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
             require(set(f["evidence"])<=aliases.keys(),"UPSTREAM_IMPORT_REQUIRED","unknown upstream evidence alias")
             facts[ref]={"assertion":{"subject":f["subject"],"predicate":f["predicate"],"object":f["object"],"qualifiers":f["qualifiers"]},
                         "evidence_ids":sorted(aliases[x] for x in f["evidence"]),"prerequisites":f["depends_on"],"active":f["active"],"revision":1 if f["active"] else 2}
-        return {"graph_version":raw["version"],"schema_id":meta["schema_id"],"schema_hash":schema[0],"nodes":raw["nodes"],"assertions":facts,
+        result={"graph_version":raw["version"],"schema_id":meta["schema_id"],"schema_hash":schema[0],"nodes":raw["nodes"],"assertions":facts,
                 "source_epochs":{r:s["epoch"] for r,s in self.statuses().items()},"metadata":meta["metadata"],"schema_proposals":meta["schema_proposals"]}
+        if "classifications" in meta:result["classifications"]=deepcopy(meta["classifications"])
+        return result
 
     def snapshot(self,catalog: Catalog) -> str:
         with self._lock:
@@ -127,7 +146,7 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
             try:
                 state=self.state();row=self.db.execute("SELECT id,hash,kind,body FROM trace_records WHERE id=?",(state["schema_id"],)).fetchone()
                 catalog.add({"id":row[0],"hash":row[1],"kind":row[2],"body":loads(row[3])})
-                result=catalog.put("graph-snapshot",{k:state[k] for k in ("graph_version","schema_id","schema_hash","nodes","assertions","source_epochs")})
+                result=catalog.put("graph-snapshot",snapshot_body(state))
                 self.db.execute("COMMIT");return result
             except BaseException:
                 if self.db.in_transaction:self.db.execute("ROLLBACK")
@@ -162,7 +181,7 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
         return plan,list(sources.values()),facts,aliases
 
     def _transaction(self, *, key, fingerprint, expected_version, operation, catalog, apply,
-                     authorization_hash,preflight_hash,upstream_head=None,fault=None,at=None,lineage_prefix=None):
+                     authorization_hash,preflight_hash,upstream_head=None,fault=None,at=None,lineage_prefix=None,authority_check=None):
         require(bool(key) and type(expected_version) is int and expected_version>=0,"TRANSACTION_INPUT","explicit key/version required")
         plan,sources,facts,aliases=self._lower(operation,catalog)
         when=at or now();result={};prospective={};before=None
@@ -182,6 +201,7 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
             # Upstream has updated its state and inserted its journal row, but has not committed.
             if fault:fault("before_state_write")
             meta=self._meta();meta.update(schema_id=prospective["schema_id"],metadata=prospective["metadata"],schema_proposals=prospective["schema_proposals"])
+            if "classifications" in prospective:meta["classifications"]=deepcopy(prospective["classifications"])
             self.db.execute("UPDATE trace_meta SET body=? WHERE id=1",(dumps(meta),))
             current=self.state();expected=deepcopy(prospective);expected["graph_version"]+=1
             expected["source_epochs"]={ref:s["epoch"] for ref,s in self.statuses().items()}
@@ -197,6 +217,7 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
             receipt={"backend":"pinned-legacy-v1","version":row[0],"idempotency_key":key,"plan_hash":operation.get("plan_hash",digest(operation)),
                      "before_hash":before,"after_hash":digest(current),"previous_hash":previous,"event_hash":eh,"operation_hash":digest(operation),
                      "authorization_hash":authorization_hash,"preflight_hash":preflight_hash,"upstream_head":upstream_head,"committed_at":when}
+            receipt.update(receipt_projection(current))
             h=digest({"kind":"transaction","body":receipt});record={"id":f"transaction:{h}","kind":"transaction","hash":h,"body":receipt}
             self._persist([record]);event={**core,"hash":eh,"transaction_receipt":receipt}
             if fault:fault("after_state_write")
@@ -205,6 +226,7 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
             result.update(event=event,record=record)
         with self._lock:
             self.db.guard,self.db.finish,self.db.guarded=guard,finish,False
+            self.db.authority_check=authority_check
             try:
                 if plan and plan["operations"][0]["operation"]=="RETRACT_ASSERTION":
                     self._store.retract(fact_ids=[o["assertion_id"] for o in plan["operations"]],expected_version=expected_version,key=key,reason="; ".join(o["reason"] for o in plan["operations"]))
@@ -230,9 +252,11 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
             except ValueError as exc:
                 if isinstance(exc,ContractError):raise
                 raise ContractError("UPSTREAM_CONTRACT",str(exc)) from exc
-            finally:self.db.guard=self.db.finish=None;self.db.guarded=False
+            finally:
+                self.db.guard=self.db.finish=self.db.authority_check=None
+                self.db.guarded=self.db.checking_authority=False
 
-    def audit(self):
+    def audit(self, *, trust=None):
         upstream=self._store.audit();meta=self._meta();previous=None;after=meta["genesis_hash"];count=0;last_status={}
         for version,key,fingerprint,text,h in self.db.execute("SELECT version,key,fingerprint,body,hash FROM trace_journal ORDER BY version"):
             event=loads(text);count+=1;core={k:v for k,v in event.items() if k not in {"hash","transaction_receipt"}}
@@ -248,5 +272,7 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
                     require(erased and erased[0]==hash_,"BACKEND_AUDIT","record missing without tombstone")
             previous,after,last_status=h,event["after_hash"],event["source_status"]
         require(count==upstream["events"] and digest(self.state())==after and last_status==self.statuses(),"BACKEND_AUDIT","unmediated graph/status write")
-        return {"events":count,"head_hash":previous,"state_hash":after,"sandbox":self.sandbox,"upstream":upstream,
+        from .domain_publication import audit_history
+        domain_audit=audit_history(self,trust=trust)
+        return {"events":count,"head_hash":previous,"state_hash":after,"sandbox":self.sandbox,"upstream":upstream,**domain_audit,
                 "core_blob":PINNED_CORE_BLOB,"erased_record_count":self.db.execute("SELECT COUNT(*) FROM trace_erased").fetchone()[0]}
