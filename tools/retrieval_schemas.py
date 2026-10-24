@@ -22,7 +22,7 @@ def extend(schemas):
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from trace_gc.retrieval.contracts import KINDS, STRATEGIES, MODES, TRUST, VERSION, RetrievalBudget
+    from trace_gc.retrieval.contracts import KINDS, STRATEGIES, MODES, TRUST, VERSION, DOMAIN_VERSION, RetrievalBudget
     kinds = schemas["record"]["properties"]["kind"]["enum"]
     kinds.extend(k for k in KINDS if k not in kinds)
     budget = obj({k: N for k in RetrievalBudget().to_dict()})
@@ -39,6 +39,16 @@ def extend(schemas):
         "include_provenance": B, "include_conflicts": B, "include_historical": B, "include_superseded": B,
         "retrieval_strategy": arr({"enum": list(STRATEGIES)}, True), "ranking_strategy": S,
         "mode": {"enum": list(MODES)}, "budget": budget, "retrieval_round": N, "created_at": T})
+    domain_scope = {"type": "array", "uniqueItems": True, "maxItems": 64,
+        "items": {"type": "string", "maxLength": 257,
+            "pattern": "^(?:@unclassified|[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*/[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*)$"}}
+    domain_binding = obj({"classification_revision": N, "projection_hash": H})
+    q = schemas["retrieval-query"]
+    q["properties"]["version"] = {"enum": [VERSION, DOMAIN_VERSION]}
+    q["properties"]["research_domain_scope"] = deepcopy(domain_scope)
+    q["allOf"] = [{"if": {"properties": {"version": {"const": DOMAIN_VERSION}}},
+        "then": {"required": ["research_domain_scope"]},
+        "else": {"not": {"required": ["research_domain_scope"]}}}]
     schemas["retrieval-plan"] = obj({"version": S, "candidate_id": nullable(S), "question_type": S, "risk_class": risk,
         "known_entities": IDS, "known_relations": IDS, "uncertainty": nullable(NUM), "retrieval_history": IDS,
         "tier": N, "steps": arr(obj({"strategy": {"enum": list(STRATEGIES)}, "max_hops": N})),
@@ -51,6 +61,14 @@ def extend(schemas):
         "provenance_complete": B, "risk_class": risk, "calibration": obj({"qualified": {"const": False}, "note": S}),
         "generated_summary": B, "data_origin": {"enum": ["GENERATED_SUMMARY", "SOURCE_DERIVED"]},
         "instruction_authority": {"const": False}})
+    item["properties"].update({"research_domain_scope": deepcopy(domain_scope),
+        "research_domain_binding": deepcopy(domain_binding),
+        "research_domain_closure": mapping(arr({"enum": ["ANCHOR", "CONTRADICTION", "IDENTITY", "PREREQUISITE"]}, True)),
+        "research_domain_assignments": mapping(obj({
+            "assignment_id": nullable(S), "assignment_hash": nullable(H),
+            "taxonomy_id": nullable(S), "taxonomy_hash": nullable(H), "taxonomy_version": nullable(S),
+            "assignment_revision": N, "state": {"enum": ["CLASSIFIED", "UNCLASSIFIED", "RETIRED"]},
+            "domain_ids": IDS}))})
     schemas["graph-context"] = obj({"version": S, "query_id": S, "snapshot_id": S, "graph_version": N,
         "security_scope": S, "access_id": S, "source_status": mapping(status), "available_record_ids": IDS,
         "focus_entities": IDS, "items": arr(item), "retrieved_nodes": IDS, "retrieved_edges": IDS,
@@ -91,6 +109,10 @@ def extend(schemas):
     schemas["retrieval-evaluation"] = obj({"version": S, "dataset_hash": H, "split": S, "label_origin": S,
         "metrics": {"type": "object"}, "configuration": {"type": "object"}, "result_ids": IDS,
         "production_qualified": {"const": False}, "created_at": T})
+    for name in ("retrieval-plan", "graph-context", "retrieval-lineage", "graphrag-answer"):
+        schemas[name]["properties"]["research_domain_scope"] = deepcopy(domain_scope)
+        if name != "retrieval-plan":
+            schemas[name]["properties"]["research_domain_binding"] = deepcopy(domain_binding)
     lineage = {"graph_retrieval_query_ids": IDS, "graph_context_ids": IDS,
                "source_retrieval_ids": IDS, "evidence_closure_id": S, "retrieval_fingerprint": H}
     for kind in ("pack", "observation", "resolution"):

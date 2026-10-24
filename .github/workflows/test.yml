@@ -15,5 +15,20 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install -r requirements.txt
       - run: python tools/run_validation.py
+      - name: Supplemental domain evidence (not deployment qualification)
+        run: python tools/run_domain_validation.py --output /tmp/trace-domain-validation --include-upstream-regressions
       - run: python -m pip install --no-deps .
       - run: trace-gc --version
+      - name: Build the actual project wheel
+        run: python -m pip wheel --no-deps --wheel-dir /tmp/trace-gc-domain-wheel .
+      - name: Validate installed domain contracts and publication
+        run: python tools/validate_domain_wheel.py --wheel /tmp/trace-gc-domain-wheel/trace_gc-*.whl --report /tmp/domain-wheel-validation.json
+      - name: Retain domain and package evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: domain-validation-${{ matrix.python-version }}
+          path: |
+            /tmp/trace-domain-validation
+            /tmp/domain-wheel-validation.json
+          retention-days: 14

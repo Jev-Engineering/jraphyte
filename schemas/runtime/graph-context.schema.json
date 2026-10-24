@@ -282,6 +282,142 @@
           },
           "instruction_authority": {
             "const": false
+          },
+          "research_domain_scope": {
+            "type": "array",
+            "uniqueItems": true,
+            "maxItems": 64,
+            "items": {
+              "type": "string",
+              "maxLength": 257,
+              "pattern": "^(?:@unclassified|[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*/[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*)$"
+            }
+          },
+          "research_domain_binding": {
+            "type": "object",
+            "properties": {
+              "classification_revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "projection_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "required": [
+              "classification_revision",
+              "projection_hash"
+            ],
+            "additionalProperties": false
+          },
+          "research_domain_closure": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "ANCHOR",
+                  "CONTRADICTION",
+                  "IDENTITY",
+                  "PREREQUISITE"
+                ]
+              },
+              "uniqueItems": true
+            }
+          },
+          "research_domain_assignments": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "assignment_id": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignment_hash": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "taxonomy_id": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "taxonomy_hash": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "taxonomy_version": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignment_revision": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "state": {
+                  "enum": [
+                    "CLASSIFIED",
+                    "UNCLASSIFIED",
+                    "RETIRED"
+                  ]
+                },
+                "domain_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "uniqueItems": true
+                }
+              },
+              "required": [
+                "assignment_id",
+                "assignment_hash",
+                "taxonomy_id",
+                "taxonomy_hash",
+                "taxonomy_version",
+                "assignment_revision",
+                "state",
+                "domain_ids"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -487,6 +623,34 @@
     "reranking_base_context_id": {
       "type": "string",
       "minLength": 1
+    },
+    "research_domain_scope": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 64,
+      "items": {
+        "type": "string",
+        "maxLength": 257,
+        "pattern": "^(?:@unclassified|[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*/[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*)$"
+      }
+    },
+    "research_domain_binding": {
+      "type": "object",
+      "properties": {
+        "classification_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "projection_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "classification_revision",
+        "projection_hash"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [

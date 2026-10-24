@@ -36,6 +36,12 @@ class JevReranker:
             execution_mode=candidate["execution_mode"], model_version=self.model_version, program_version=RETRIEVAL_VERSION,
             graph_context_ids=[result["graph_context_id"]], source_retrieval_ids=[result_id],
             token_counter=self.token_counter, tokenizer_version=self.tokenizer_version)
+        # Refresh present-time source authorization immediately before semantic
+        # execution. A stored context or historic revision never restores access.
+        from ..compiler import validate_pack
+        current = retriever.adapter.read(request)
+        validate_pack(c, c.get(pack_id, "pack"), current_graph_access=retriever.access_policy,
+                      source_status=current.source_status)
         started = time.monotonic()
         observation_ids = self.execute(pack_id)
         latency = (time.monotonic()-started)*1000

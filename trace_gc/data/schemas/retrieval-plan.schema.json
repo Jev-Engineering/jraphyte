@@ -198,6 +198,16 @@
     "created_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "research_domain_scope": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 64,
+      "items": {
+        "type": "string",
+        "maxLength": 257,
+        "pattern": "^(?:@unclassified|[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*/[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*)$"
+      }
     }
   },
   "required": [

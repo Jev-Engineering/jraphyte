@@ -14,6 +14,7 @@ def timestamp(value: str):
 from ..errors import require
 
 VERSION = "trace-retrieval-v1"
+DOMAIN_VERSION = "trace-retrieval-domain-v2"
 STRATEGIES = (
     "ENTITY", "LEXICAL", "VECTOR", "NEIGHBORHOOD", "PATH", "COMMUNITY", "GLOBAL",
     "ONTOLOGY", "SCHEMA", "RELATION", "PROVENANCE", "EVIDENCE", "CONFLICT",
@@ -66,7 +67,7 @@ class RetrievalBudget:
 def query(*, requesting_component: str, security_scope: str, focus_entities: list[str] | None = None,
           text: str = "", candidate_id: str | None = None, decision_id: str | None = None,
           strategies: list[str] | None = None, budget: RetrievalBudget | None = None,
-          mode: str = "BALANCED_EVIDENCE", **changes: Any) -> dict[str, Any]:
+          mode: str = "BALANCED_EVIDENCE", research_domain_scope: list[str] | None = None, **changes: Any) -> dict[str, Any]:
     limits = budget or RetrievalBudget()
     body = {"version": VERSION, "requesting_component": requesting_component,
             "security_scope": security_scope, "candidate_id": candidate_id, "decision_id": decision_id,
@@ -78,6 +79,9 @@ def query(*, requesting_component: str, security_scope: str, focus_entities: lis
             "include_superseded": False, "retrieval_strategy": ["ENTITY", "NEIGHBORHOOD", "EVIDENCE", "CONFLICT"] if strategies is None else list(strategies),
             "ranking_strategy": "evidence-utility-v1", "mode": mode, "budget": limits.to_dict(),
             "retrieval_round": 0, "created_at": now()}
+    if research_domain_scope is not None:
+        body["version"] = DOMAIN_VERSION
+        body["research_domain_scope"] = research_domain_scope
     require(set(changes) <= set(body), "RETRIEVAL_QUERY", "unknown query fields")
     body.update(changes)
     if body["mode"] == "LATEST_VALID_STATE" and body["temporal_scope"]["valid_at"] is None:
@@ -89,6 +93,9 @@ def query(*, requesting_component: str, security_scope: str, focus_entities: lis
 def validate_query(body: dict[str, Any]) -> None:
     from ..schema import validate
     validate("retrieval-query", body)
+    if "research_domain_scope" in body:
+        require(body["research_domain_scope"] == sorted(set(body["research_domain_scope"])),
+                "RESEARCH_DOMAIN_SCOPE", "unique sorted namespace/domain keys required")
     limits = RetrievalBudget(**body["budget"])
     require(body["hop_limit"] <= limits.maximum_hops, "RETRIEVAL_BUDGET", "hop request exceeds budget")
     require(not set(body["allowed_relation_types"]) & set(body["excluded_relation_types"]),

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:trace-gc:0.3.0:research-domain-taxonomy",
+  "title": "TRACE-GC research-domain-taxonomy v0.3.0",
+  "type": "object",
+  "properties": {
+    "contract_version": {
+      "const": "trace-research-domain-v1"
+    },
+    "namespace": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$",
+      "maxLength": 128
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "domains": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$",
+            "maxLength": 128
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "parent_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$",
+              "maxLength": 128
+            },
+            "uniqueItems": true,
+            "minItems": 0,
+            "maxItems": 32
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "parent_ids"
+        ],
+        "additionalProperties": false
+      },
+      "uniqueItems": true,
+      "minItems": 1,
+      "maxItems": 4096
+    },
+    "unclassified_semantics": {
+      "const": "EXPLICIT_STATE_WITH_NO_LABELS"
+    },
+    "membership_semantics": {
+      "const": "EXPLICIT_LABELS_NO_IMPLICIT_ANCESTORS"
+    },
+    "authorization_granted": {
+      "const": false
+    }
+  },
+  "required": [
+    "contract_version",
+    "namespace",
+    "version",
+    "domains",
+    "unclassified_semantics",
+    "membership_semantics",
+    "authorization_granted"
+  ],
+  "additionalProperties": false
+}

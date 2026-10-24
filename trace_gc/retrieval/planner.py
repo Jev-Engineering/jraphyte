@@ -38,7 +38,8 @@ class RetrievalPlanner:
 
     def plan(self, catalog: Catalog, *, candidate_id: str | None, question_type: str, risk_class: str,
              known_entities: list[str], known_relations: list[str], budget: RetrievalBudget,
-             uncertainty: float | None = None, retrieval_history: list[str] | None = None, tier: int = 0) -> str:
+             uncertainty: float | None = None, retrieval_history: list[str] | None = None, tier: int = 0,
+             research_domain_scope: list[str] | None = None) -> str:
         require(question_type in self.policies and risk_class in {f"R{i}" for i in range(6)}, "RETRIEVAL_PLAN", "task/risk not installed")
         require(type(tier) is int and 0 <= tier <= 4, "RETRIEVAL_PLAN", "automatic tiers are 0..4; tier 5 is human-guided")
         if candidate_id:
@@ -52,11 +53,16 @@ class RetrievalPlanner:
             "known_relations": sorted(set(known_relations)), "uncertainty": uncertainty,
             "retrieval_history": list(retrieval_history or []), "tier": tier,
             "steps": [{"strategy": m, "max_hops": hop} for m in methods], "expansion_policy": "ON_UNCERTAINTY",
-            "budget": budget.to_dict(), "policy_version": self.policy_version, "created_at": now()})
+            "budget": budget.to_dict(), "policy_version": self.policy_version, "created_at": now(),
+            **({"research_domain_scope": list(research_domain_scope)} if research_domain_scope is not None else {})})
 
     def request(self, catalog: Catalog, plan_id: str, *, security_scope: str, text: str,
                 retrieval_round: int, **changes: Any) -> dict[str, Any]:
         plan = catalog.get(plan_id, "retrieval-plan")
+        if "research_domain_scope" in plan:
+            require("research_domain_scope" not in changes or changes["research_domain_scope"] == plan["research_domain_scope"],
+                    "RETRIEVAL_PLAN_BINDING", "cannot change domain scope after planning")
+            changes["research_domain_scope"] = plan["research_domain_scope"]
         return query(requesting_component="upstream-synthesis", security_scope=security_scope,
             candidate_id=plan["candidate_id"], text=text, focus_entities=plan["known_entities"],
             strategies=[s["strategy"] for s in plan["steps"]], budget=RetrievalBudget(**plan["budget"]),
@@ -142,7 +148,8 @@ class UpstreamGraphRAG:
                 known_entities=[candidate["assertion"]["subject"], candidate["assertion"]["object"]],
                 known_relations=[candidate["assertion"]["predicate"]], budget=current,
                 uncertainty=None if confidence_before is None else 1-confidence_before,
-                retrieval_history=results, tier=min(round_, 4))
+                retrieval_history=results, tier=min(round_, 4),
+                research_domain_scope=(query_overrides or {}).get("research_domain_scope"))
             request = self.planner.request(c, plan_id, security_scope=self.retriever.access_policy["tenant"],
                 text=c.get(candidate["claim_id"], "claim")["text"], retrieval_round=round_, **(query_overrides or {}))
             result_id = self.retriever.retrieve(request, plan_id=plan_id)

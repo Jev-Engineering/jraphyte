@@ -1,0 +1,34 @@
+{
+  "id": "research-domain-taxonomy:212d244d447fd9acfef8a7b075ec9e4f00a1cd786336958238b1f6df25a2d326",
+  "kind": "research-domain-taxonomy",
+  "hash": "212d244d447fd9acfef8a7b075ec9e4f00a1cd786336958238b1f6df25a2d326",
+  "body": {
+    "contract_version": "trace-research-domain-v1",
+    "namespace": "synthetic-research-example",
+    "version": "1.0.0",
+    "domains": [
+      {
+        "id": "biology",
+        "label": "Biology (synthetic example)",
+        "parent_ids": [
+          "research"
+        ]
+      },
+      {
+        "id": "computer-science",
+        "label": "Computer science (synthetic example)",
+        "parent_ids": [
+          "research"
+        ]
+      },
+      {
+        "id": "research",
+        "label": "Research (synthetic example)",
+        "parent_ids": []
+      }
+    ],
+    "unclassified_semantics": "EXPLICIT_STATE_WITH_NO_LABELS",
+    "membership_semantics": "EXPLICIT_LABELS_NO_IMPLICIT_ANCESTORS",
+    "authorization_granted": false
+  }
+}

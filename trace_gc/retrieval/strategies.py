@@ -20,11 +20,24 @@ class SearchSpace:
     conflicts: list[list[str]]
     meter: BudgetMeter
     embedding: EmbeddingModel
+    domain: Any = None
+
+    def __post_init__(self):
+        if "research_domain_scope" in self.query:
+            from .domain_scope import DomainMembership
+            self.domain = DomainMembership(self.view, self.access, self.query, self.edges, self.conflicts, self.meter)
+            if self.domain.enabled:
+                self.edges = self.domain.anchors
+                self.conflicts = [pair for pair in self.conflicts if any(ref in self.edges for ref in pair)]
+
+    def eligible(self, kind, ref, members=None):
+        return self.domain is None or self.domain.eligible(kind, ref, members)
 
     def make(self, kind: str, ref: str, members: list[str] | None = None) -> dict[str, Any]:
         self.meter.work(candidate=True)
         return canonical_item(self.view, self.access, self.query, kind=kind, ref=ref, members=members,
-                              edges=self.edges, conflicts=self.conflicts)
+                              edges=self.edges if self.domain is None else self.domain.visible,
+                              conflicts=self.conflicts if self.domain is None else self.domain.conflicts, domain=self.domain)
 
     def adjacency(self) -> dict[str, list[tuple[str, str]]]:
         result: dict[str, list[tuple[str, str]]] = {}
@@ -55,7 +68,7 @@ class BuiltinStrategy:
             candidates = sorted(snap["nodes"]) if name == "ENTITY" else sorted(r["id"] for r in c.all("claim"))
             for ref in candidates:
                 m.work()
-                if not space.access.allows("node", ref):
+                if not space.access.allows("node", ref) or not space.eligible("NODE" if name == "ENTITY" else "CLAIM", ref):
                     continue
                 if ref in focus or (text_terms and text_terms & terms(ref if name == "ENTITY" else c.get(ref, "claim")["text"])):
                     if name == "ENTITY" or ref in space.view.available_record_ids:
@@ -97,7 +110,7 @@ class BuiltinStrategy:
             for r in sorted(c.all("evidence"), key=lambda r: r["id"]):
                 m.work()
                 ref, b = r["id"], r["body"]
-                if ref not in space.view.available_record_ids or not space.access.evidence(ref):
+                if ref not in space.view.available_record_ids or not space.access.evidence(ref) or not space.eligible("EVIDENCE", ref):
                     continue
                 if relevant_sources and b["source_snapshot_id"] not in relevant_sources:
                     continue
@@ -134,7 +147,7 @@ class BuiltinStrategy:
                 relevant = (ref in q["focus_relationships"] or ref in q["ontology_scope"] or
                             rule["domain"] in q["ontology_scope"] or rule["range"] in q["ontology_scope"] or
                             (q["candidate_id"] in c and c.get(q["candidate_id"], "candidate")["assertion"]["predicate"] == ref))
-                if not relevant:
+                if not relevant or not space.eligible("ONTOLOGY" if name == "ONTOLOGY" else "SCHEMA", ref):
                     continue
                 try:
                     yield space.make("ONTOLOGY" if name == "ONTOLOGY" else "SCHEMA", ref)
@@ -162,17 +175,19 @@ class BuiltinStrategy:
         elif name == "CONFLICT":
             for pair in space.conflicts:
                 m.work()
-                entities = {x for ref in pair for x in (space.edges[ref]["assertion"]["subject"], space.edges[ref]["assertion"]["object"])}
+                conflict_edges = space.edges if space.domain is None else space.domain.visible
+                entities = {x for ref in pair for x in (conflict_edges[ref]["assertion"]["subject"], conflict_edges[ref]["assertion"]["object"])}
                 if not focus or focus & entities:
                     yield space.make("CONFLICT", digest(pair), pair)
                     for ref in pair:
-                        yield space.make("EDGE", ref)
+                        if space.eligible("EDGE", ref):
+                            yield space.make("EDGE", ref)
         elif name in {"DECISION", "SIMILAR_CASE"}:
             for record in sorted(c.all(), key=lambda r: r["id"]):
                 m.work()
                 if record["kind"] not in {"resolution", "evaluation", "observation", "candidate"} or record["id"] not in space.view.available_record_ids:
                     continue
-                if not space.access.decision(record["id"]):
+                if not space.access.decision(record["id"]) or not space.eligible("DECISION", record["id"]):
                     continue
                 b = record["body"]
                 if q["candidate_id"] is not None and (b.get("candidate_id") == q["candidate_id"] or record["id"] == q["candidate_id"]):

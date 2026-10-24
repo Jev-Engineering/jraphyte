@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:trace-gc:0.3.0:classification-plan",
+  "title": "TRACE-GC classification-plan v0.3.0",
+  "type": "object",
+  "properties": {
+    "contract_version": {
+      "const": "trace-domain-publication-v1"
+    },
+    "action": {
+      "enum": [
+        "MIGRATE_CLASSIFICATION_STATE",
+        "PUBLISH_CLASSIFICATION"
+      ]
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "graph_version": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "base_state_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "security_scope": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "execution_mode": {
+      "enum": [
+        "SYNTHETIC",
+        "RECORDED",
+        "LIVE"
+      ]
+    },
+    "assignment_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "assignment_hash": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "taxonomy_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "taxonomy_hash": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source_hashes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    },
+    "source_epochs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "contract_version",
+    "action",
+    "run_id",
+    "graph_version",
+    "base_state_hash",
+    "idempotency_key",
+    "security_scope",
+    "execution_mode",
+    "assignment_id",
+    "assignment_hash",
+    "taxonomy_id",
+    "taxonomy_hash",
+    "source_hashes",
+    "source_epochs",
+    "created_at"
+  ],
+  "additionalProperties": false
+}

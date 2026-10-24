@@ -53,9 +53,19 @@ def load_pinned_core(path: str | Path):
 class _TransactionConnection:
     """Hooks run after BEGIN, after idempotency lookup, and before actual COMMIT."""
     def __init__(self,db):
-        self.raw=db;self.guard=None;self.finish=None;self.guarded=False
+        self.raw=db;self.guard=None;self.finish=None;self.guarded=False;self.begin_guard=None
     def execute(self,sql,parameters=()):
         normalized=" ".join(sql.upper().split())
+        if normalized == "BEGIN IMMEDIATE" and self.begin_guard is not None:
+            result = self.raw.execute(sql, parameters)
+            try:
+                self.begin_guard()
+            except BaseException:
+                # Upstream BEGIN occurs before its try block. Release the lock
+                # here if a fresh retry capability check fails.
+                self.raw.execute("ROLLBACK")
+                raise
+            return result
         if self.guard is not None and self.raw.in_transaction and normalized=="SELECT BODY FROM STATE WHERE ID=1" and not self.guarded:
             self.guarded=True;self.guard()
         if self.finish is not None and normalized=="COMMIT" and self.guarded:self.finish()
@@ -118,22 +128,24 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
             require(set(f["evidence"])<=aliases.keys(),"UPSTREAM_IMPORT_REQUIRED","unknown upstream evidence alias")
             facts[ref]={"assertion":{"subject":f["subject"],"predicate":f["predicate"],"object":f["object"],"qualifiers":f["qualifiers"]},
                         "evidence_ids":sorted(aliases[x] for x in f["evidence"]),"prerequisites":f["depends_on"],"active":f["active"],"revision":1 if f["active"] else 2}
-        return {"graph_version":raw["version"],"schema_id":meta["schema_id"],"schema_hash":schema[0],"nodes":raw["nodes"],"assertions":facts,
+        result = {"graph_version":raw["version"],"schema_id":meta["schema_id"],"schema_hash":schema[0],"nodes":raw["nodes"],"assertions":facts,
                 "source_epochs":{r:s["epoch"] for r,s in self.statuses().items()},"metadata":meta["metadata"],"schema_proposals":meta["schema_proposals"]}
+        if "research_domains" in meta:
+            result["research_domains"] = deepcopy(meta["research_domains"])
+        return result
 
     def snapshot(self,catalog: Catalog) -> str:
-        with self._lock:
-            self.db.execute("BEGIN")
-            try:
-                state=self.state();row=self.db.execute("SELECT id,hash,kind,body FROM trace_records WHERE id=?",(state["schema_id"],)).fetchone()
-                catalog.add({"id":row[0],"hash":row[1],"kind":row[2],"body":loads(row[3])})
-                result=catalog.put("graph-snapshot",{k:state[k] for k in ("graph_version","schema_id","schema_hash","nodes","assertions","source_epochs")})
-                self.db.execute("COMMIT");return result
-            except BaseException:
-                if self.db.in_transaction:self.db.execute("ROLLBACK")
-                raise
+        # The common snapshot hydrator calls this bridge's state() and reads
+        # immutable sidecars; it never creates or reads a second trace_state.
+        return SQLiteReferenceBackend.snapshot(self, catalog)
 
     def _lower(self,operation,catalog):
+        from .domain_publication import MIGRATE, PUBLISH
+        if operation.get("action") in {MIGRATE, PUBLISH}:
+            # The trusted apply closure verifies exact signed classification
+            # bytes. An empty upstream commit supplies the same atomic revision
+            # and journal boundary as existing audit-only metadata operations.
+            return None, [], [], []
         if "plan_hash" not in operation:return None,[],[],[]
         matches=[r for r in catalog.all("plan") if r["hash"]==operation["plan_hash"]]
         require(len(matches)==1,"TRANSACTION_PLAN_BINDING","exact immutable plan required")
@@ -162,12 +174,13 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
         return plan,list(sources.values()),facts,aliases
 
     def _transaction(self, *, key, fingerprint, expected_version, operation, catalog, apply,
-                     authorization_hash,preflight_hash,upstream_head=None,fault=None,at=None,lineage_prefix=None):
+                     authorization_hash,preflight_hash,upstream_head=None,fault=None,at=None,lineage_prefix=None,replay_guard=None):
         require(bool(key) and type(expected_version) is int and expected_version>=0,"TRANSACTION_INPUT","explicit key/version required")
         plan,sources,facts,aliases=self._lower(operation,catalog)
         when=at or now();result={};prospective={};before=None
         def guard():
-            nonlocal before,prospective
+            nonlocal before,prospective,when
+            when = at or now()
             current=self.state()
             require(current["graph_version"]==expected_version,"STALE_GRAPH_VERSION","upstream CAS mismatch")
             require(self.db.execute("SELECT COUNT(*) FROM trace_journal").fetchone()[0]==expected_version,"UPSTREAM_UNMEDIATED_WRITE","upstream contains an unbound write")
@@ -182,6 +195,8 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
             # Upstream has updated its state and inserted its journal row, but has not committed.
             if fault:fault("before_state_write")
             meta=self._meta();meta.update(schema_id=prospective["schema_id"],metadata=prospective["metadata"],schema_proposals=prospective["schema_proposals"])
+            if "research_domains" in prospective:
+                meta["research_domains"] = deepcopy(prospective["research_domains"])
             self.db.execute("UPDATE trace_meta SET body=? WHERE id=1",(dumps(meta),))
             current=self.state();expected=deepcopy(prospective);expected["graph_version"]+=1
             expected["source_epochs"]={ref:s["epoch"] for ref,s in self.statuses().items()}
@@ -201,10 +216,19 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
             self._persist([record]);event={**core,"hash":eh,"transaction_receipt":receipt}
             if fault:fault("after_state_write")
             self.db.execute("INSERT INTO trace_journal VALUES(?,?,?,?,?)",(row[0],key,fingerprint,dumps(event),eh))
+            from .retrieval.domain_projection import update_installed_index
+            update_installed_index(self, current)
             if fault:fault("after_journal_write");fault("before_commit")
             result.update(event=event,record=record)
+        def begin_guard():
+            if replay_guard is not None:
+                replay_guard()
+            previous = self.db.raw.execute("SELECT fingerprint FROM trace_journal WHERE key=?", (key,)).fetchone()
+            require(previous is None or previous[0] == fingerprint, "IDEMPOTENCY_CONFLICT",
+                    "same key, different immutable bridge action")
         with self._lock:
             self.db.guard,self.db.finish,self.db.guarded=guard,finish,False
+            self.db.begin_guard = begin_guard
             try:
                 if plan and plan["operations"][0]["operation"]=="RETRACT_ASSERTION":
                     self._store.retract(fact_ids=[o["assertion_id"] for o in plan["operations"]],expected_version=expected_version,key=key,reason="; ".join(o["reason"] for o in plan["operations"]))
@@ -230,7 +254,9 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
             except ValueError as exc:
                 if isinstance(exc,ContractError):raise
                 raise ContractError("UPSTREAM_CONTRACT",str(exc)) from exc
-            finally:self.db.guard=self.db.finish=None;self.db.guarded=False
+            finally:
+                self.db.guard=self.db.finish=self.db.begin_guard=None
+                self.db.guarded=False
 
     def audit(self):
         upstream=self._store.audit();meta=self._meta();previous=None;after=meta["genesis_hash"];count=0;last_status={}

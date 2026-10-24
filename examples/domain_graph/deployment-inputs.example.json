@@ -1,0 +1,18 @@
+{
+  "version": "domain-deployment-inputs-v1",
+  "inputs": {
+    "backend_name": null,
+    "backend_version": null,
+    "deployment_owner": null,
+    "connection_reference": null,
+    "source_authority_reference": null,
+    "trust_enrollment_reference": null,
+    "deployment_authorization_reference": null,
+    "representative_workload_report_reference": null,
+    "isolation_requirements_reference": null,
+    "slo_reference": null,
+    "backup_restore_runbook_reference": null,
+    "retention_policy_reference": null,
+    "pilot_approval_reference": null
+  }
+}

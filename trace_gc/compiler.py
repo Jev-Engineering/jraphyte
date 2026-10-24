@@ -68,7 +68,7 @@ def _references(catalog: Catalog, id_: str, *, bounded_graph: bool = False) -> l
 
     for target, expected, _ in links:
         catalog.record(target, expected)
-    return links
+    return list(dict.fromkeys(links))
 
 @boundary
 def closure(catalog: Catalog, candidate_ids: list[str], prior_observation_ids: list[str], snapshot_id: str,

@@ -106,6 +106,11 @@ def references(kind: str, body: dict[str, Any]) -> list[tuple[str, str]]:
 
 def validate_record(catalog: Catalog, record: dict[str, Any]) -> None:
     kind, b = record["kind"], record["body"]
+    if kind in {"retrieval-lineage", "graphrag-answer"}:
+        ctx = catalog.get(b["graph_context_id"], "graph-context")
+        for field in ("research_domain_scope", "research_domain_binding"):
+            require((field in b) == (field in ctx) and b.get(field) == ctx.get(field),
+                    "DOMAIN_CONTEXT_BINDING", "domain lineage differs")
     if kind == "retrieval-query":
         from .contracts import validate_query
         validate_query(b)
