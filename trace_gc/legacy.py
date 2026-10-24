@@ -118,22 +118,30 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
             require(set(f["evidence"])<=aliases.keys(),"UPSTREAM_IMPORT_REQUIRED","unknown upstream evidence alias")
             facts[ref]={"assertion":{"subject":f["subject"],"predicate":f["predicate"],"object":f["object"],"qualifiers":f["qualifiers"]},
                         "evidence_ids":sorted(aliases[x] for x in f["evidence"]),"prerequisites":f["depends_on"],"active":f["active"],"revision":1 if f["active"] else 2}
-        return {"graph_version":raw["version"],"schema_id":meta["schema_id"],"schema_hash":schema[0],"nodes":raw["nodes"],"assertions":facts,
+        result = {"graph_version":raw["version"],"schema_id":meta["schema_id"],"schema_hash":schema[0],"nodes":raw["nodes"],"assertions":facts,
                 "source_epochs":{r:s["epoch"] for r,s in self.statuses().items()},"metadata":meta["metadata"],"schema_proposals":meta["schema_proposals"]}
+        # Absent before migration: old genesis/snapshot/journal hashes stay intact.
+        from .domain_publication import PROJECTION_KEY
+        if PROJECTION_KEY in meta:
+            result[PROJECTION_KEY] = deepcopy(meta[PROJECTION_KEY])
+        return result
 
     def snapshot(self,catalog: Catalog) -> str:
-        with self._lock:
-            self.db.execute("BEGIN")
-            try:
-                state=self.state();row=self.db.execute("SELECT id,hash,kind,body FROM trace_records WHERE id=?",(state["schema_id"],)).fetchone()
-                catalog.add({"id":row[0],"hash":row[1],"kind":row[2],"body":loads(row[3])})
-                result=catalog.put("graph-snapshot",{k:state[k] for k in ("graph_version","schema_id","schema_hash","nodes","assertions","source_epochs")})
-                self.db.execute("COMMIT");return result
-            except BaseException:
-                if self.db.in_transaction:self.db.execute("ROLLBACK")
-                raise
+        # The shared reader uses this bridge's state()/connection, never trace_state.
+        # It hydrates exact assignment references in the same read transaction.
+        return super().snapshot(catalog)
 
     def _lower(self,operation,catalog):
+        from .domain_publication import MIGRATE, PUBLISH, validate_plan_record
+        if operation.get("action") in {MIGRATE, PUBLISH}:
+            record = catalog.record(operation["plan_id"], "classification-plan")
+            validate_plan_record(catalog, record)
+            require(operation == {"action": record["body"]["action"], "plan_id": record["id"],
+                                  "plan_hash": record["hash"]},
+                    "TRANSACTION_PLAN_BINDING", "exact classification action required")
+            # The pinned upstream's audit-only commit advances its authoritative
+            # journal. Signed classification sidecars join that SAME transaction.
+            return None, [], [], []
         if "plan_hash" not in operation:return None,[],[],[]
         matches=[r for r in catalog.all("plan") if r["hash"]==operation["plan_hash"]]
         require(len(matches)==1,"TRANSACTION_PLAN_BINDING","exact immutable plan required")
@@ -167,7 +175,8 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
         plan,sources,facts,aliases=self._lower(operation,catalog)
         when=at or now();result={};prospective={};before=None
         def guard():
-            nonlocal before,prospective
+            nonlocal before,prospective,when
+            when = at or now()  # Sample after the upstream BEGIN IMMEDIATE lock.
             current=self.state()
             require(current["graph_version"]==expected_version,"STALE_GRAPH_VERSION","upstream CAS mismatch")
             require(self.db.execute("SELECT COUNT(*) FROM trace_journal").fetchone()[0]==expected_version,"UPSTREAM_UNMEDIATED_WRITE","upstream contains an unbound write")
@@ -182,6 +191,12 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
             # Upstream has updated its state and inserted its journal row, but has not committed.
             if fault:fault("before_state_write")
             meta=self._meta();meta.update(schema_id=prospective["schema_id"],metadata=prospective["metadata"],schema_proposals=prospective["schema_proposals"])
+            from .domain_publication import PROJECTION_KEY, MIGRATE, PUBLISH
+            if operation.get("action") not in {MIGRATE, PUBLISH}:
+                require(meta.get(PROJECTION_KEY) == prospective.get(PROJECTION_KEY),
+                        "DOMAIN_AUDIT", "non-domain transaction changed classification")
+            if PROJECTION_KEY in prospective:
+                meta[PROJECTION_KEY] = deepcopy(prospective[PROJECTION_KEY])
             self.db.execute("UPDATE trace_meta SET body=? WHERE id=1",(dumps(meta),))
             current=self.state();expected=deepcopy(prospective);expected["graph_version"]+=1
             expected["source_epochs"]={ref:s["epoch"] for ref,s in self.statuses().items()}
@@ -246,6 +261,21 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
                 else:
                     erased=self.db.execute("SELECT hash FROM trace_erased WHERE id=?",(ref,)).fetchone()
                     require(erased and erased[0]==hash_,"BACKEND_AUDIT","record missing without tombstone")
+            # The receipt is excluded from the event hash to avoid recursion;
+            # bind every receipt field explicitly instead of trusting that copy.
+            expected_receipt = {
+                "backend": "pinned-legacy-v1", "version": version, "idempotency_key": key,
+                "plan_hash": event["operation"].get("plan_hash", digest(event["operation"])),
+                "before_hash": event["before_hash"], "after_hash": event["after_hash"],
+                "previous_hash": event["previous_hash"], "event_hash": h,
+                "operation_hash": digest(event["operation"]),
+                "authorization_hash": event["authorization_hash"], "preflight_hash": event["preflight_hash"],
+                "upstream_head": event["upstream_head"], "committed_at": event["committed_at"]}
+            require(event["transaction_receipt"] == expected_receipt and
+                    event["version"] == version and event["idempotency_key"] == key,
+                    "BACKEND_AUDIT", "receipt or transaction identity changed independently of the journal")
+            require(digest(meta["genesis_state"]) == meta["genesis_hash"],
+                    "BACKEND_AUDIT", "genesis state differs")
             previous,after,last_status=h,event["after_hash"],event["source_status"]
         require(count==upstream["events"] and digest(self.state())==after and last_status==self.statuses(),"BACKEND_AUDIT","unmediated graph/status write")
         return {"events":count,"head_hash":previous,"state_hash":after,"sandbox":self.sandbox,"upstream":upstream,

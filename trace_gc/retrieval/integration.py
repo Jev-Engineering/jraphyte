@@ -80,8 +80,12 @@ def references(kind: str, body: dict[str, Any]) -> list[tuple[str, str]]:
             refs.extend((x, expected) for x in (value if isinstance(value, list) else [value]))
     if kind == "retrieval-query":
         add("candidate_id", "candidate"); add("decision_id", "*")
+        if "research_domain_scope" in body:
+            refs.append((body["research_domain_scope"]["taxonomy_id"], "research-domain-taxonomy"))
     elif kind == "retrieval-plan":
         add("candidate_id", "candidate"); add("retrieval_history", "retrieval-result")
+        if "research_domain_scope" in body:
+            refs.append((body["research_domain_scope"]["taxonomy_id"], "research-domain-taxonomy"))
     elif kind == "graph-context":
         add("query_id", "retrieval-query"); add("snapshot_id", "graph-snapshot"); add("access_id", "graph-access")
         add("provenance_refs", "*"); add("selected_evidence_ids", "evidence"); add("reranking_observation_ids", "observation"); add("reranking_base_context_id", "graph-context")
@@ -121,6 +125,7 @@ def validate_record(catalog: Catalog, record: dict[str, Any]) -> None:
                 b["usage"] == lineage["usage"] and b["plan_id"] == lineage["plan_id"], "RETRIEVAL_LINEAGE", "result binding differs")
     elif kind == "retrieval-lineage":
         context = catalog.get(b["graph_context_id"], "graph-context")
+        require(b.get("research_domain_binding") == context.get("research_domain_binding"), "DOMAIN_CONTEXT_BINDING", "lineage changed classification selection")
         require(b["graph_version"] == context["graph_version"] and b["query_id"] == context["query_id"],
                 "RETRIEVAL_LINEAGE", "lineage query/version differs")
         require(all(len(x) == len({row["item_id"] for row in x}) for x in (b["selected"], b["discarded"], b["candidates"])),

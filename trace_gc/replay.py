@@ -51,11 +51,19 @@ def replay_retrieval(retriever, original_result_id: str, changes: dict[str, Any]
     request = c.get(original["query_id"], "retrieval-query")
     allowed = {"retrieval_strategy", "hop_limit", "budget", "include_provenance", "include_conflicts",
                "include_historical", "include_superseded", "ranking_strategy", "graph_version", "temporal_scope", "mode",
-               "allowed_relation_types", "excluded_relation_types", "ontology_scope", "community_scope", "source_scope"}
+               "allowed_relation_types", "excluded_relation_types", "ontology_scope", "community_scope", "source_scope", "research_domain_scope"}
     require(set(changes) <= allowed, "REPLAY_SCOPE", "replay cannot change tenant, candidate or requesting role")
     before = {r["id"]: r["hash"] for r in c.all("observation")}
     request.update(graph_version=context["graph_version"], created_at=now())
     request.update(deepcopy(changes))
+    if "research_domain_scope" in changes:
+        from .retrieval.domain_scope import VERSION as DOMAIN_VERSION
+        from .retrieval.contracts import VERSION as LEGACY_VERSION
+        if changes["research_domain_scope"] is None:
+            request.pop("research_domain_scope", None)
+            request["version"] = LEGACY_VERSION
+        else:
+            request["version"] = DOMAIN_VERSION
     result_id = retriever.retrieve(request)
     new_result = c.get(result_id, "retrieval-result")
     new_context = c.get(new_result["graph_context_id"], "graph-context")

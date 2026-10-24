@@ -17,4 +17,4 @@ trace-gc = "trace_gc.cli:main"
 include = ["trace_gc*"]
 
 [tool.setuptools.package-data]
-trace_gc = ["data/schemas/*.json"]
+trace_gc = ["data/schemas/*.json", "data/domains/*.json"]

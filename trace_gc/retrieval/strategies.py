@@ -21,15 +21,25 @@ class SearchSpace:
     meter: BudgetMeter
     embedding: EmbeddingModel
 
+    def __post_init__(self):
+        from .domain_scope import DomainFilter
+        self.domain = DomainFilter(self.view, self.access, self.query, self.edges, self.conflicts, self.meter)
+
+    def emit(self, kind, ref, members=None):
+        if self.domain.anchor(kind, ref, members):
+            yield self.make(kind, ref, members)
+
     def make(self, kind: str, ref: str, members: list[str] | None = None) -> dict[str, Any]:
         self.meter.work(candidate=True)
         return canonical_item(self.view, self.access, self.query, kind=kind, ref=ref, members=members,
-                              edges=self.edges, conflicts=self.conflicts)
+                              edges=self.edges, conflicts=self.conflicts, meter=self.meter)
 
     def adjacency(self) -> dict[str, list[tuple[str, str]]]:
         result: dict[str, list[tuple[str, str]]] = {}
         for ref, fact in self.edges.items():
             self.meter.work()
+            if not self.domain.traversable(ref):
+                continue
             a = fact["assertion"]
             result.setdefault(a["subject"], []).append((a["object"], ref))
             result.setdefault(a["object"], []).append((a["subject"], ref))
@@ -42,7 +52,7 @@ class GraphRetriever(Protocol):
 
 
 class BuiltinStrategy:
-    version = "bounded-strategies-v1"
+    version = "bounded-strategies-domain-v2"
     def __init__(self, name: str):
         self.name = name
 
@@ -55,11 +65,11 @@ class BuiltinStrategy:
             candidates = sorted(snap["nodes"]) if name == "ENTITY" else sorted(r["id"] for r in c.all("claim"))
             for ref in candidates:
                 m.work()
-                if not space.access.allows("node", ref):
+                if not space.access.allows("node", ref) or not space.domain.anchor("NODE" if name == "ENTITY" else "CLAIM", ref):
                     continue
                 if ref in focus or (text_terms and text_terms & terms(ref if name == "ENTITY" else c.get(ref, "claim")["text"])):
                     if name == "ENTITY" or ref in space.view.available_record_ids:
-                        yield space.make("NODE" if name == "ENTITY" else "CLAIM", ref)
+                        yield from space.emit("NODE" if name == "ENTITY" else "CLAIM", ref)
         elif name in {"NEIGHBORHOOD", "PATH"}:
             if q["hop_limit"] == 0:
                 return
@@ -79,12 +89,12 @@ class BuiltinStrategy:
                     next_path = path + [ref]
                     if name == "NEIGHBORHOOD" and ref not in visited_edges:
                         visited_edges.add(ref)
-                        yield space.make("EDGE", ref)
+                        yield from space.emit("EDGE", ref)
                     elif name == "PATH" and len(next_path) >= 2:
                         identity = min(tuple(next_path), tuple(reversed(next_path)))
                         if identity not in paths_seen:
                             paths_seen.add(identity)
-                            yield space.make("PATH", digest(list(identity)), next_path)
+                            yield from space.emit("PATH", digest(list(identity)), next_path)
                     queue.append((target, nodes+[target], next_path))
         elif name in {"LEXICAL", "VECTOR", "SOURCE", "EVIDENCE"}:
             evidence = []
@@ -97,7 +107,7 @@ class BuiltinStrategy:
             for r in sorted(c.all("evidence"), key=lambda r: r["id"]):
                 m.work()
                 ref, b = r["id"], r["body"]
-                if ref not in space.view.available_record_ids or not space.access.evidence(ref):
+                if ref not in space.view.available_record_ids or not space.access.evidence(ref) or not space.domain.evidence_anchor(ref):
                     continue
                 if relevant_sources and b["source_snapshot_id"] not in relevant_sources:
                     continue
@@ -108,9 +118,9 @@ class BuiltinStrategy:
                     evidence.append((ref, b["quote"]))
                 elif name == "LEXICAL":
                     if text_terms & terms(b["quote"]):
-                        yield space.make("EVIDENCE", ref)
+                        yield from space.emit("EVIDENCE", ref)
                 elif ref in linked_evidence or relevant_sources:
-                    yield space.make("EVIDENCE", ref)
+                    yield from space.emit("EVIDENCE", ref)
             if name == "VECTOR" and evidence:
                 m.work(len(evidence))
                 m.used["vector_queries"] += 1
@@ -137,7 +147,7 @@ class BuiltinStrategy:
                 if not relevant:
                     continue
                 try:
-                    yield space.make("ONTOLOGY" if name == "ONTOLOGY" else "SCHEMA", ref)
+                    yield from space.emit("ONTOLOGY" if name == "ONTOLOGY" else "SCHEMA", ref)
                 except ContractError as exc:
                     if exc.code not in {"SCHEMA_CONTEXT", "ONTOLOGY_SCOPE"}:
                         raise
@@ -155,7 +165,7 @@ class BuiltinStrategy:
                         if edge_ref not in visited and (not frontier or frontier & {a["subject"], a["object"]}):
                             visited.add(edge_ref)
                             following.update([a["subject"], a["object"]])
-                            yield space.make("EDGE", edge_ref)
+                            yield from space.emit("EDGE", edge_ref)
                     frontier = following
                     if not frontier:
                         break
@@ -164,15 +174,15 @@ class BuiltinStrategy:
                 m.work()
                 entities = {x for ref in pair for x in (space.edges[ref]["assertion"]["subject"], space.edges[ref]["assertion"]["object"])}
                 if not focus or focus & entities:
-                    yield space.make("CONFLICT", digest(pair), pair)
+                    yield from space.emit("CONFLICT", digest(pair), pair)
                     for ref in pair:
-                        yield space.make("EDGE", ref)
+                        yield from space.emit("EDGE", ref)
         elif name in {"DECISION", "SIMILAR_CASE"}:
             for record in sorted(c.all(), key=lambda r: r["id"]):
                 m.work()
                 if record["kind"] not in {"resolution", "evaluation", "observation", "candidate"} or record["id"] not in space.view.available_record_ids:
                     continue
-                if not space.access.decision(record["id"]):
+                if not space.access.decision(record["id"]) or not space.domain.anchor("HYPOTHESIS" if record["kind"] == "candidate" else "DECISION", record["id"]):
                     continue
                 b = record["body"]
                 if q["candidate_id"] is not None and (b.get("candidate_id") == q["candidate_id"] or record["id"] == q["candidate_id"]):
@@ -190,7 +200,7 @@ class BuiltinStrategy:
                     continue
                 if (record["id"] == q["decision_id"] or focus & entities or
                     (name == "SIMILAR_CASE" and text_terms & terms(dumps(candidate or {})))):
-                    yield space.make("HYPOTHESIS" if is_hypothesis else "DECISION", record["id"])
+                    yield from space.emit("HYPOTHESIS" if is_hypothesis else "DECISION", record["id"])
         elif name in {"RELATION", "TEMPORAL", "PROVENANCE", "GLOBAL"}:
             for ref, fact in space.edges.items():
                 m.work()
@@ -203,7 +213,7 @@ class BuiltinStrategy:
                     continue
                 if name == "GLOBAL" and text_terms and not (text_terms & terms(dumps(a)) or focus & {a["subject"], a["object"]}):
                     continue
-                yield space.make("PROVENANCE" if name == "PROVENANCE" else "EDGE", ref)
+                yield from space.emit("PROVENANCE" if name == "PROVENANCE" else "EDGE", ref)
         elif name == "COMMUNITY":
             # Bounded connected-component summaries: no LLM, no hidden-node traversal.
             adj = space.adjacency()
@@ -231,4 +241,4 @@ class BuiltinStrategy:
                 if members:
                     ref = "community-" + digest(sorted(members))[:20]
                     if not q["community_scope"] or ref in q["community_scope"]:
-                        yield space.make("COMMUNITY", ref, sorted(members))
+                        yield from space.emit("COMMUNITY", ref, sorted(members))

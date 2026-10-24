@@ -66,6 +66,14 @@ def _references(catalog: Catalog, id_: str, *, bounded_graph: bool = False) -> l
     elif kind == "retrieval-result":
         links = [(b["graph_context_id"], "graph-context", "retrieval-context")]
 
+    from .domains import references as domain_references
+    links += [(ref, expected, "classification-binding") for ref, expected in domain_references(kind, b)]
+    if kind == "graph-context" and "research_domain_binding" in b:
+        links += [(b["research_domain_binding"]["scope"]["taxonomy_id"], "research-domain-taxonomy", "query-taxonomy")]
+        for item in b["items"]:
+            for membership in item.get("research_domain_context", {}).get("source_memberships", {}).values():
+                if membership["assignment_id"] is not None:
+                    links.append((membership["assignment_id"], "classification-assignment", "selected-classification"))
     for target, expected, _ in links:
         catalog.record(target, expected)
     return links
@@ -89,7 +97,7 @@ def closure(catalog: Catalog, candidate_ids: list[str], prior_observation_ids: l
     # All alternative/context links may be cyclic; only prerequisites are causal.
     candidates = {ref:catalog.get(ref,"candidate") for ref in seen if catalog.record(ref)["kind"] == "candidate"}
     topological_order({ref:b["prerequisites"] for ref,b in candidates.items()})
-    body = {"roots":roots,"record_ids":sorted(seen),"edges":sorted(edges),
+    body = {"roots":roots,"record_ids":sorted(seen),"edges":sorted([list(edge) for edge in {tuple(e) for e in edges}]),
             "evidence_ids":sorted(ref for ref in seen if catalog.record(ref)["kind"] == "evidence"),
             "source_snapshot_ids":sorted(ref for ref in seen if catalog.record(ref)["kind"] == "source"),
             "prior_observation_ids":sorted(prior_observation_ids),

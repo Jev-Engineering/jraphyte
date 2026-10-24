@@ -36,9 +36,12 @@ class JevReranker:
             execution_mode=candidate["execution_mode"], model_version=self.model_version, program_version=RETRIEVAL_VERSION,
             graph_context_ids=[result["graph_context_id"]], source_retrieval_ids=[result_id],
             token_counter=self.token_counter, tokenizer_version=self.tokenizer_version)
+        from .service import validate_current_context
+        validate_current_context(retriever, result["graph_context_id"], pack_id=pack_id)
         started = time.monotonic()
         observation_ids = self.execute(pack_id)
         latency = (time.monotonic()-started)*1000
+        validate_current_context(retriever, result["graph_context_id"], pack_id=pack_id)
         pack = c.get(pack_id, "pack")
         questions = {q["id"]: q for q in pack["questions"]}
         seen = set()

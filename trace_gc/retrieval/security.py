@@ -45,16 +45,23 @@ class AccessFilter:
                 (not g["users"] or p["user"] in g["users"]) and
                 (not g["roles"] or bool(set(g["roles"]) & set(p["roles"]))))
 
+    def source(self, ref: str) -> bool:
+        # Current source authority applies even when graph topology is historical.
+        if not self.allows("source", ref) or ref not in self.catalog:
+            return False
+        source = self.catalog.get(ref, "source")
+        status = self.statuses.get(ref)
+        return (source["security_scope"] == self.policy["tenant"] and bool(status) and
+                status["permission"] == "READ" and not status["tombstone"] and status["active"])
+
     def evidence(self, ref: str) -> bool:
         if ref not in self.catalog:
             return False
-        self.catalog.verify_evidence(ref)  # Existing Evidence Firewall, not a replacement.
         source_id = self.catalog.get(ref, "evidence")["source_snapshot_id"]
-        source = self.catalog.get(source_id, "source")
-        status = self.statuses.get(source_id)
-        return (self.allows("source", source_id) and source["security_scope"] == self.policy["tenant"] and
-                bool(status) and status["permission"] == "READ" and not status["tombstone"] and
-                (status["active"] or self.historical))
+        if not self.source(source_id):
+            return False
+        self.catalog.verify_evidence(ref)  # Verify only after current authorization.
+        return True
 
     def edge(self, ref: str, fact: dict[str, Any]) -> bool:
         a = fact["assertion"]

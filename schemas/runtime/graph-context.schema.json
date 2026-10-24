@@ -282,6 +282,230 @@
           },
           "instruction_authority": {
             "const": false
+          },
+          "research_domain_context": {
+            "type": "object",
+            "properties": {
+              "scope": {
+                "type": "object",
+                "properties": {
+                  "taxonomy_id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "taxonomy_hash": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "domain_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "uniqueItems": true
+                  },
+                  "include_unclassified": {
+                    "type": "boolean"
+                  },
+                  "match": {
+                    "const": "ANY_EXPLICIT_LABEL"
+                  }
+                },
+                "required": [
+                  "taxonomy_id",
+                  "taxonomy_hash",
+                  "domain_ids",
+                  "include_unclassified",
+                  "match"
+                ],
+                "additionalProperties": false
+              },
+              "scope_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "projection_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "projection_revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "anchor_assertion_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              },
+              "closure_assertions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "assertion_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "subject": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "predicate": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "object": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "qualifiers": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      }
+                    },
+                    "evidence_ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "uniqueItems": true
+                    }
+                  },
+                  "required": [
+                    "assertion_id",
+                    "subject",
+                    "predicate",
+                    "object",
+                    "qualifiers",
+                    "evidence_ids"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "source_memberships": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "enum": [
+                        "CLASSIFIED",
+                        "UNCLASSIFIED",
+                        "RETIRED"
+                      ]
+                    },
+                    "domain_ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "uniqueItems": true
+                    },
+                    "assignment_id": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "assignment_hash": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "assignment_revision": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "taxonomy_id": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "taxonomy_hash": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "taxonomy_version": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "projection_hash": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "projection_revision": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "domain_ids",
+                    "assignment_id",
+                    "assignment_hash",
+                    "assignment_revision",
+                    "taxonomy_id",
+                    "taxonomy_hash",
+                    "taxonomy_version",
+                    "projection_hash",
+                    "projection_revision"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "authorization_granted": {
+                "const": false
+              }
+            },
+            "required": [
+              "scope",
+              "scope_hash",
+              "projection_hash",
+              "projection_revision",
+              "anchor_assertion_ids",
+              "closure_assertions",
+              "source_memberships",
+              "authorization_granted"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -487,6 +711,65 @@
     "reranking_base_context_id": {
       "type": "string",
       "minLength": 1
+    },
+    "research_domain_binding": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "object",
+          "properties": {
+            "taxonomy_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "taxonomy_hash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "domain_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uniqueItems": true
+            },
+            "include_unclassified": {
+              "type": "boolean"
+            },
+            "match": {
+              "const": "ANY_EXPLICIT_LABEL"
+            }
+          },
+          "required": [
+            "taxonomy_id",
+            "taxonomy_hash",
+            "domain_ids",
+            "include_unclassified",
+            "match"
+          ],
+          "additionalProperties": false
+        },
+        "scope_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "projection_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "projection_revision": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "scope",
+        "scope_hash",
+        "projection_hash",
+        "projection_revision"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [

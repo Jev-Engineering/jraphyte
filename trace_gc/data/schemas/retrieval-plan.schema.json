@@ -198,6 +198,41 @@
     "created_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "research_domain_scope": {
+      "type": "object",
+      "properties": {
+        "taxonomy_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "taxonomy_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "domain_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "include_unclassified": {
+          "type": "boolean"
+        },
+        "match": {
+          "const": "ANY_EXPLICIT_LABEL"
+        }
+      },
+      "required": [
+        "taxonomy_id",
+        "taxonomy_hash",
+        "domain_ids",
+        "include_unclassified",
+        "match"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [

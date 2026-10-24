@@ -124,15 +124,20 @@ SCHEMAS["transaction"]=obj({"backend":S,"version":N,"idempotency_key":S,"plan_ha
                             "preflight_hash":H,"upstream_head":nullable(H),"committed_at":T})
 from retrieval_schemas import extend
 extend(SCHEMAS)
+from domain_schemas import extend as extend_domains
+extend_domains(SCHEMAS)
 
 EVENT=obj({"id":S,"run_id":S,"execution_mode":MODE,"sequence":{"type":"integer","minimum":1},
-           "stage":{"enum":["SOURCE","CLAIM","EVIDENCE","CANDIDATE","PACK","OBSERVATION","RESOLUTION","EVALUATION","QUALIFICATION","PLAN","RECEIPT","TRANSACTION","SCHEMA","SNAPSHOT","POLICY","RETRIEVAL"]},
+           "stage":{"enum":["SOURCE","CLAIM","EVIDENCE","CANDIDATE","PACK","OBSERVATION","RESOLUTION","EVALUATION","QUALIFICATION","PLAN","RECEIPT","TRANSACTION","SCHEMA","SNAPSHOT","POLICY","RETRIEVAL","DOMAIN_TAXONOMY","CLASSIFICATION_PROPOSAL","CLASSIFICATION_ASSIGNMENT","CLASSIFICATION_PLAN"]},
            "created_at":T,"parent_ids":IDS,"previous_hash":nullable(H),"record_ids":arr(S,minimum=1,unique=True),
            "payload_hash":H,"hash":H})
 MANIFEST=obj({"run_id":S,"execution_mode":MODE,"security_scope":S,"profile":{"enum":["PARTIAL_ANALYSIS","FINALIZED_ANALYSIS","FINALIZED_PUBLISHED","HISTORICAL_REPLAY"]},
               "graph_version":N,"schema_hash":H,"record_hashes":mapping(H),"source_status":mapping(STATUS),
               "record_events":mapping(S),"policy_version":S,"policy_id":S,"source_status_as_of":T,
               "ledger_head":nullable(H),"checkpoint_id":nullable(S),"transaction_id":nullable(S)})
+from domain_retrieval_schemas import extend as extend_domain_retrieval
+extend_domain_retrieval(SCHEMAS)
+
 SCHEMAS["bundle"]=obj({"format_version":{"const":"0.3.0"},"canonicalization":{"const":"TRACE-C14N-1"},
                        "manifest":MANIFEST,"records":arr(SCHEMAS["record"]),"ledger":arr(EVENT),"checkpoint":nullable(SCHEMAS["receipt"])})
 
@@ -140,7 +145,7 @@ def main():
     dest=ROOT/"schemas"/"runtime"; dest.mkdir(parents=True,exist_ok=True)
     for name,body in SCHEMAS.items():
         schema={"$schema":"https://json-schema.org/draft/2020-12/schema","$id":f"urn:trace-gc:0.3.0:{name}","title":f"TRACE-GC {name} v0.3.0",**body}
-        (dest/f"{name}.schema.json").write_text(json.dumps(schema,indent=2)+"\n",encoding="utf-8")
+        (dest/f"{name}.schema.json").write_bytes((json.dumps(schema,indent=2)+"\n").encode("utf-8"))
     package=ROOT/"trace_gc"/"data"/"schemas";package.mkdir(parents=True,exist_ok=True)
     for path in dest.glob("*.schema.json"):(package/path.name).write_bytes(path.read_bytes())
     print(f"Wrote {len(SCHEMAS)} standalone runtime schemas and wheel resources")

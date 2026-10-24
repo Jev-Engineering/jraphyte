@@ -20,6 +20,10 @@ def validate_bundle(bundle: dict[str,Any], *, trust: TrustStore | None=None,at: 
     m=bundle["manifest"];raw=bundle["records"]
     require(len(raw)==len({r["id"] for r in raw}),"DUPLICATE_ID","record IDs must be unique across all kinds")
     catalog=Catalog(raw)
+    from .domains import validate_catalog as validate_domain_catalog
+    validate_domain_catalog(catalog, trust=trust, at=at)
+    from .domain_publication import validate_catalog as validate_publication_catalog
+    validate_publication_catalog(catalog, trust=trust, at=at)
     require(m["record_hashes"]=={r["id"]:r["hash"] for r in raw},"GRAPH_MANIFEST","manifest must enumerate exact record hashes")
     sources={r["id"] for r in catalog.all("source")}
     require(set(m["source_status"])==sources,"SOURCE_STATUS_MISSING","source status must enumerate all included snapshots")
@@ -76,7 +80,8 @@ def validate_bundle(bundle: dict[str,Any], *, trust: TrustStore | None=None,at: 
         require(m["execution_mode"]!="SYNTHETIC","SYNTHETIC_PUBLICATION_FORBIDDEN","sandbox results are not published-run qualifications")
         require(m["transaction_id"] is not None,"TRANSACTION_RECEIPT_MISSING","published run needs the atomic journal receipt")
         tx=catalog.get(m["transaction_id"],"transaction")
-        plans=[r for r in catalog.all("plan") if r["hash"]==tx["plan_hash"]]
+        plans=[r for kind in ("plan", "classification-plan") for r in catalog.all(kind)
+               if r["hash"]==tx["plan_hash"]]
         require(len(plans)==1,"TRANSACTION_PLAN_BINDING","transaction does not bind an included plan")
         receipts={digest(r["body"]):r["body"] for r in catalog.all("receipt")}
         require(tx["authorization_hash"] in receipts and tx["preflight_hash"] in receipts,"TRANSACTION_RECEIPT_MISSING","authorization/preflight lineage missing")
@@ -86,11 +91,15 @@ def validate_bundle(bundle: dict[str,Any], *, trust: TrustStore | None=None,at: 
         from .trust import verify_authorization
         from .plans import REQUIRED_CHECKS
         plan=plans[0]["body"]
-        verify_authorization(trust,receipts[tx["authorization_hash"]],plan,plans[0]["hash"],at=tx["committed_at"])
-        trusted_preflight=receipts[tx["preflight_hash"]]
-        trust.verify(trusted_preflight,"PREFLIGHT",at=tx["committed_at"])
-        require(trusted_preflight["payload"]["plan_hash"]==plans[0]["hash"] and
-                trusted_preflight["payload"]["checks"]=={x:True for x in sorted(REQUIRED_CHECKS)},"PREFLIGHT_FAILED","published check receipt differs")
+        if plans[0]["kind"] == "classification-plan":
+            from .domain_publication import validate_published_transaction
+            validate_published_transaction(catalog, tx, plans[0], trust=trust)
+        else:
+            verify_authorization(trust,receipts[tx["authorization_hash"]],plan,plans[0]["hash"],at=tx["committed_at"])
+            trusted_preflight=receipts[tx["preflight_hash"]]
+            trust.verify(trusted_preflight,"PREFLIGHT",at=tx["committed_at"])
+            require(trusted_preflight["payload"]["plan_hash"]==plans[0]["hash"] and
+                    trusted_preflight["payload"]["checks"]=={x:True for x in sorted(REQUIRED_CHECKS)},"PREFLIGHT_FAILED","published check receipt differs")
         require(tx["upstream_head"] is not None and tx["upstream_head"] in {e["hash"] for e in bundle["ledger"]},"LEDGER_BINDING","atomic journal's provenance anchor is absent")
         anchor_index=next(i for i,e in enumerate(bundle["ledger"]) if e["hash"]==tx["upstream_head"])
         transaction_index=next((i for i,e in enumerate(bundle["ledger"]) if m["transaction_id"] in e["record_ids"]),-1)

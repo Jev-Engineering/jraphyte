@@ -126,7 +126,7 @@ def conflict_pairs(edges: dict[str, dict[str, Any]], relations: dict[str, Any], 
 
 def canonical_item(view: GraphReadView, access: AccessFilter, query: dict[str, Any], *, kind: str,
                    ref: str, members: list[str] | None = None, edges: dict[str, Any] | None = None,
-                   conflicts: list[list[str]] | None = None) -> dict[str, Any]:
+                   conflicts: list[list[str]] | None = None, meter=None) -> dict[str, Any]:
     """Reconstruct all source-derived text from immutable originals, not caller text."""
     c, snap = view.catalog, view.snapshot
     edges = visible_edges(view, access, query) if edges is None else edges
@@ -242,7 +242,7 @@ def canonical_item(view: GraphReadView, access: AccessFilter, query: dict[str, A
     record_refs.update(evidence_ids | decisions | observations | transactions | plans)
     record_refs.update(sources)
     risk = max((c.get(x).get("risk_class", "R0") for x in decisions), default="R0")
-    return {"id": item_id(kind, ref, members), "kind": kind, "canonical_ref": ref, "member_assertion_ids": members,
+    item = {"id": item_id(kind, ref, members), "kind": kind, "canonical_ref": ref, "member_assertion_ids": members,
             "assertion_ids": assertion_ids, "entity_ids": sorted(entities), "evidence_ids": sorted(evidence_ids),
             "source_ids": sources, "decision_ids": sorted(decisions), "observation_ids": sorted(observations),
             "transaction_ids": sorted(transactions), "plan_ids": sorted(plans), "record_refs": sorted(record_refs),
@@ -252,3 +252,6 @@ def canonical_item(view: GraphReadView, access: AccessFilter, query: dict[str, A
             "calibration": {"qualified": False, "note": "Retrieval status is not a calibrated truth probability."},
             "generated_summary": generated, "data_origin": "GENERATED_SUMMARY" if generated else "SOURCE_DERIVED",
             "instruction_authority": False}
+
+    from .domain_scope import DomainFilter
+    return DomainFilter(view, access, query, edges, conflicts, meter).enrich(item)
