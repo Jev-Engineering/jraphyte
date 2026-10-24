@@ -265,6 +265,9 @@ class WindowsModel:
         # Directories (by resolved path) where creation is not refused although the DACL text
         # denies it, to model a filesystem or control flags that differ from another directory.
         self.bypass_parents: set[str] = set()
+        # True models what hosted Windows does on every descriptor rewrite: the DACL is marked
+        # auto-inherited (``AI``), so a parent that began without the flag cannot read back equal.
+        self.marks_auto_inherited = False
 
     # -- lifecycle ---------------------------------------------------------
     def start(self):
@@ -378,6 +381,8 @@ class WindowsModel:
             aces = [item for item in aces if not self.explicit(item, "A", trustee)]
         else:
             raise AssertionError("unmodeled icacls verb " + verb)
+        if self.marks_auto_inherited and "AI" not in flags:
+            flags += "AI"
         self.dacls[self.key(path)] = (flags, aces)
         return subprocess.CompletedProcess(args, 0, "", "")
 

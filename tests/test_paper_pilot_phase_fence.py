@@ -13,6 +13,7 @@ from trace_gc.errors import ContractError
 from trace_gc.phase_authority import dacl_has_ace, directory_dacl_sddl
 from src.paper_pilot_phase_cutover import NAMES, _current_sid, fence_closed_old_phase
 from tests.phase_trustee_harness import assert_fence_refused_before_effects, producer_context_supported
+from tools import windows_fixture_acl
 from tools.windows_native_acl import WindowsNative, require_recreation_denied
 
 PARENT_DENY = "(D;;LC;;;{sid})"
@@ -25,7 +26,13 @@ class PhaseNamespaceFenceTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(dir=base)
         self.root = Path(self.temp.name)
         self.old = self.root / "old-application" / "state"
-        self.old.mkdir(parents=True)
+        self.old.parent.mkdir()
+        # The fenced parent is made protected and explicit before anything is pinned: Windows marks
+        # a rewritten DACL auto-inherited, so an unprotected parent can never read back equal to its
+        # pre-state and the strict restoration check would (rightly) refuse (tools/windows_fixture_acl.py).
+        windows_fixture_acl.stabilize_owned_fixture(
+            self.root, [("parent", self.old.parent)], read=directory_dacl_sddl)
+        self.old.mkdir()
         self.archived = self.root / "archive" / "historical-state"
         self.archived.parent.mkdir()
         self.receipt = self.root / "control" / "fence-receipt.json"

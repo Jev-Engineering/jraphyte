@@ -178,6 +178,9 @@ def installation_components(native, before: str, after: str, ace: str,
     return components
 
 
+_AUTO_INHERIT = re.compile("AI|AR")
+
+
 def restoration_components(native, path, dacl: str, owner: str) -> dict:
     """Per-component facts of a restoration check (see ``restoration``), safe to print."""
     control, aces = split_dacl(dacl)
@@ -194,6 +197,9 @@ def restoration_components(native, path, dacl: str, owner: str) -> dict:
         "owner": {"expected": redact(owner), "now": redact(now_owner), "same": owner == now_owner}}
     components["verified"] = (components["control"]["same"] and components["aces"]["same"]
                               and components["owner"]["same"])
+    components["auto_inherit_flag_only"] = (
+        not components["control"]["same"] and components["aces"]["same"] and components["owner"]["same"]
+        and _AUTO_INHERIT.sub("", control) == _AUTO_INHERIT.sub("", now_control))
     return components
 
 
@@ -268,14 +274,42 @@ def _wait_name(status) -> str:
             WAIT_FAILED: "failed"}.get(status, "unexpected")
 
 
-def run_contained(api, timeout: float, grace_ms: int = 30000):
+POST_EXIT_SETTLE_MS = 5000
+POST_EXIT_POLL_MS = 50
+
+
+def _members(api, job):
+    """Image names the job holds, best effort and never a verdict: ``None`` when ``api`` offers no
+    listing, otherwise the entries or the error that kept them back."""
+    listing = getattr(api, "members", None)
+    if listing is None:
+        return None
+    try:
+        entries, error = listing(job)
+    except Exception as failure:
+        return {"error": type(failure).__name__}
+    return entries if entries is not None else {"error": error}
+
+
+def run_contained(api, timeout: float, grace_ms: int = 30000, settle_ms: int = POST_EXIT_SETTLE_MS):
     """Start one process inside its own kill-on-close job, wait for it, and report what is KNOWN.
 
     ``api`` supplies ``create_job``, ``start`` (suspended), ``assign``, ``resume``, ``wait``,
     ``terminate_job``, ``terminate_process``, ``exit_code``, ``active_processes``, ``close`` and
-    ``pause`` (each failure carries its Windows error). ``completed`` is true only when the process
-    was contained and resumed, exited inside the timeout with a real exit code (never the
-    ``STILL_ACTIVE`` placeholder), and left no descendant behind. ``cleanup_verified`` additionally
+    ``pause`` (each failure carries its Windows error) and, optionally, ``members(job)`` returning
+    ``(entries, error)`` for the image names of the processes the job holds, and ``take_unreleased()``
+    returning ``(handle, error)`` for each handle that listing opened and could not close (such a
+    handle is retained with its close error, and the run is then neither ``completed`` nor
+    ``cleanup_verified``; failing to read an image name stays best effort). ``completed`` is true
+    only when the process was contained and resumed, exited inside the timeout with a real exit
+    code (never the ``STILL_ACTIVE`` placeholder), the job census then read zero, and nothing had to
+    be terminated afterwards. A process the job still holds after the child signaled is first only
+    observed, for at most ``settle_ms``, and recorded in ``post_exit_census``: one that leaves by
+    itself in that window (``drained_without_termination``) is a natural completion with that
+    evidence, while one that does not is terminated, sets ``descendants_terminated`` and is never
+    a completed run, whatever the exit code. Only a child whose FIRST wait saw it exit is observed
+    this way; a timed-out, wait-failed or unassigned child is terminated at once, even if both
+    termination calls fail and a later wait then sees it exit. ``cleanup_verified`` additionally
     requires the process signaled, the job empty and every handle closed; otherwise the handles
     are returned so the caller keeps ownership of them. ``child_stopped`` is the one fact a caller
     may rely on before it restores or removes anything the child could still touch: true only when
@@ -286,10 +320,30 @@ def run_contained(api, timeout: float, grace_ms: int = 30000):
               "wait_failed": False, "still_active": False, "terminated": False,
               "final_wait": None, "descendants_terminated": False, "job_active_processes": None,
               "cleanup_verified": False, "handles_retained": False, "winerror": None,
-              "child_stopped": False, "terminate_errors": [], "errors": []}
+              "child_stopped": False, "terminate_errors": [], "errors": [],
+              "post_exit_census": {"settle_ms": settle_ms, "initial_active": None, "waited_ms": 0,
+                                   "drained_without_termination": False, "members_first": None,
+                                   "members_before_termination": None}}
 
     def note(api_name, code):
         report["errors"].append({"api": api_name, "code": code})
+
+    unreleased = []
+
+    def drain():
+        # Process handles the diagnostic listing opened and could not close are still owned: keep
+        # them, name the close error, and never let them read as a verified cleanup.
+        taker = getattr(api, "take_unreleased", None)
+        for item in (taker() if taker is not None else ()):
+            handle, code = item[0], item[1]
+            unreleased.append(handle)
+            note("CloseHandle:" + (item[2] if len(item) > 2 else "members"), code)
+
+    def observe(job):
+        try:
+            return _members(api, job)
+        finally:
+            drain()
 
     def terminate(job, process, contained):
         # Ending a job ends only the processes assigned to it: a child whose assignment failed or
@@ -311,7 +365,10 @@ def run_contained(api, timeout: float, grace_ms: int = 30000):
         report["winerror"] = error
         report["child_stopped"] = True
         note("CreateJobObject", error)
-        return report, []
+        drain()
+        if unreleased:
+            report["handles_retained"] = True
+        return report, list(unreleased)
     held = [job]
     process, thread, error = api.start()
     if process is None:
@@ -338,10 +395,11 @@ def run_contained(api, timeout: float, grace_ms: int = 30000):
                 started = True
         report["launched"] = started
         signaled = False
+        natural_exit = False
         if started:
             status, error = api.wait(process, int(timeout * 1000))
             if status == WAIT_OBJECT_0:
-                signaled = True
+                signaled = natural_exit = True
             elif status == WAIT_TIMEOUT:
                 report["timed_out"] = True
             else:
@@ -365,7 +423,22 @@ def run_contained(api, timeout: float, grace_ms: int = 30000):
         count, error = api.active_processes(job)
         if count is None:
             note("QueryInformationJobObject", error)
-        elif count > 0:
+        elif count > 0 and natural_exit and settle_ms > 0:
+            census = report["post_exit_census"]
+            census["initial_active"] = count
+            census["members_first"] = observe(job)
+            while count and census["waited_ms"] < settle_ms:
+                api.pause(POST_EXIT_POLL_MS)
+                census["waited_ms"] += POST_EXIT_POLL_MS
+                count, error = api.active_processes(job)
+                if count is None:
+                    note("QueryInformationJobObject", error)
+                    break
+            if count == 0:
+                census["drained_without_termination"] = True
+            elif count:
+                census["members_before_termination"] = observe(job)
+        if count:
             report["descendants_terminated"] = True
             terminate(job, process, contained)
             remaining = grace_ms
@@ -379,25 +452,28 @@ def run_contained(api, timeout: float, grace_ms: int = 30000):
         report["job_active_processes"] = count
         report["child_stopped"] = bool(signaled and count == 0)
         report["completed"] = (started and not report["timed_out"] and not report["wait_failed"]
-                               and report["exit_code"] is not None
-                               and not report["descendants_terminated"])
-        report["cleanup_verified"] = (signaled and not report["still_active"] and count == 0)
+                               and report["exit_code"] is not None and count == 0
+                               and not report["descendants_terminated"] and not report["terminated"])
+        stopped_and_empty = signaled and not report["still_active"] and count == 0
+        report["cleanup_verified"] = stopped_and_empty
     except BaseException:
         try:
             terminate(job, process, contained)
         except Exception:
             pass
-        api.retain(held)
+        drain()
+        api.retain(held + unreleased)
         raise
-    if not report["cleanup_verified"]:
+    if not stopped_and_empty:
         report["handles_retained"] = True
-        return report, held
+        return report, held + unreleased
     left = [handle for handle in held if not api.close(handle)]
     if left:
         note("CloseHandle", None)
+    if left or unreleased:
         report["cleanup_verified"], report["completed"] = False, False
         report["handles_retained"] = True
-    return report, left
+    return report, left + unreleased
 
 
 class _ProcessApi:
@@ -406,6 +482,7 @@ class _ProcessApi:
     def __init__(self, native, primary, argv, cwd):
         self.native, self.primary, self.argv, self.cwd = native, primary, argv, cwd
         self.quota_enabled, self.restoration_error = False, None
+        self.unreleased = []
         c, w = native.c, native.w
 
         class StartupInfo(c.Structure):
@@ -457,7 +534,9 @@ class _ProcessApi:
         c.set_last_error(0)
         if not kernel.SetInformationJobObject(job, 9, c.byref(extended), c.sizeof(extended)):
             error = self._error()
-            kernel.CloseHandle(job)
+            c.set_last_error(0)
+            if not kernel.CloseHandle(job):
+                self.unreleased.append((job, self._error(), "job-setup"))
             return None, error
         return job, None
 
@@ -528,6 +607,45 @@ class _ProcessApi:
             return None, self._error()
         return accounting.ActiveProcesses, None
 
+    def members(self, job):
+        """Base names of the images of the processes the job holds (no path, no pid), each entry
+        ``{"image": name}`` or, if that process cannot be queried, ``{"image": None, "winerror": n}``."""
+        c, w, kernel = self.native.c, self.native.w, self.native.kernel
+
+        class IdList(c.Structure):
+            _fields_ = [("NumberOfAssignedProcesses", w.DWORD), ("NumberOfProcessIdsInList", w.DWORD),
+                        ("ProcessIdList", c.c_size_t * 64)]
+        listing = IdList()
+        c.set_last_error(0)
+        if not kernel.QueryInformationJobObject(job, 3, c.byref(listing), c.sizeof(listing), None):
+            return None, self._error()
+        entries = []
+        for pid in listing.ProcessIdList[:min(listing.NumberOfProcessIdsInList, 64)]:
+            c.set_last_error(0)
+            handle = kernel.OpenProcess(0x1000, False, pid)      # PROCESS_QUERY_LIMITED_INFORMATION
+            if not handle:
+                entries.append({"image": None, "winerror": self._error()})
+                continue
+            try:
+                name, size = c.create_unicode_buffer(1024), w.DWORD(1024)
+                c.set_last_error(0)
+                if kernel.QueryFullProcessImageNameW(handle, 0, name, c.byref(size)):
+                    entries.append({"image": name.value.replace("/", "\\").rsplit("\\", 1)[-1]})
+                else:
+                    entries.append({"image": None, "winerror": self._error()})
+            finally:
+                c.set_last_error(0)
+                if not kernel.CloseHandle(handle):
+                    self.unreleased.append((handle, self._error()))
+        return sorted(entries, key=lambda entry: (entry["image"] or "", entry.get("winerror") or 0)), None
+
+    def take_unreleased(self):
+        """``(handle, winerror[, kind])`` for each handle ``members`` (kind ``members``) or a failed job
+        setup (kind ``job-setup``) opened and could not close; the caller takes over the handle, which
+        stays open and owned."""
+        taken, self.unreleased = self.unreleased, []
+        return taken
+
     def close(self, handle):
         return bool(self.native.kernel.CloseHandle(handle))
 
@@ -548,6 +666,7 @@ class WindowsNative:
             raise NativeError("platform", None)
         self.c, self.w = ctypes, wintypes
         self.retained_handles: list = []
+        self.token_close_failures: list = []
         self.advapi = ctypes.WinDLL("advapi32", use_last_error=True)
         self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         v, p, d = ctypes.c_void_p, ctypes.POINTER, wintypes.DWORD
@@ -568,6 +687,8 @@ class WindowsNative:
                 (self.kernel, "TerminateJobObject", (v, wintypes.UINT), wintypes.BOOL),
                 (self.kernel, "QueryInformationJobObject", (v, ctypes.c_int, v, d, p(d)), wintypes.BOOL),
                 (self.kernel, "ResumeThread", (v,), d),
+                (self.kernel, "OpenProcess", (d, wintypes.BOOL, d), v),
+                (self.kernel, "QueryFullProcessImageNameW", (v, d, wintypes.LPWSTR, p(d)), wintypes.BOOL),
                 (self.advapi, "LookupPrivilegeValueW", (wintypes.LPCWSTR, wintypes.LPCWSTR, v), wintypes.BOOL),
                 (self.advapi, "AdjustTokenPrivileges", (v, wintypes.BOOL, v, d, v, v), wintypes.BOOL),
                 (self.advapi, "CreateProcessAsUserW",
@@ -594,6 +715,19 @@ class WindowsNative:
 
     def _fail(self, api: str):
         raise NativeError(api, self.c.get_last_error())
+
+    def _close_token(self, handle, api: str):
+        """Close a token handle this object opened. A close that fails has its Windows error read
+        at once, keeps the still-open handle owned in ``retained_handles`` and is recorded in
+        ``token_close_failures`` (``main`` then reports an unclean run); returns that error, or
+        ``None`` when the handle was released. Never raises, so it cannot hide a body's error."""
+        self.c.set_last_error(0)
+        if self.kernel.CloseHandle(handle):
+            return None
+        code = self.c.get_last_error()
+        self.retained_handles.append(handle)
+        self.token_close_failures.append({"api": "CloseHandle:token", "path": api, "code": code})
+        return code
 
     def _ok(self, api: str, result) -> None:
         if not result:
@@ -716,7 +850,7 @@ class WindowsNative:
             yield impersonation
         finally:
             for handle in opened:
-                self.kernel.CloseHandle(handle)
+                self._close_token(handle, "impersonation_token")
 
     @contextmanager
     def impersonating(self, token):
@@ -750,7 +884,7 @@ class WindowsNative:
                 found[name.value] = attributes
             return found
         finally:
-            self.kernel.CloseHandle(process)
+            self._close_token(process, "privilege_attributes")
 
     def privileges(self) -> list[tuple[str, bool]]:
         return [(name, bool(attributes & SE_PRIVILEGE_ENABLED))
@@ -769,7 +903,7 @@ class WindowsNative:
             if self.c.get_last_error() == 1300:
                 raise NativeError("AdjustTokenPrivileges", 1300)
         finally:
-            self.kernel.CloseHandle(process)
+            self._close_token(process, "adjust_privilege")
 
     def access_mask(self, path, stripped: bool) -> int:
         """Rights ``AccessCheck`` grants this token on ``path`` under its current DACL."""
@@ -811,6 +945,7 @@ class WindowsNative:
         self._ok("OpenProcessToken", self.advapi.OpenProcessToken(
             self.kernel.GetCurrentProcess(), 0x1 | 0x2 | 0x4 | 0x8, self.c.byref(process)))
         opened = [process]
+        closed_before = len(self.token_close_failures)
         try:
             restricted = self._restrict(process, None)
             opened.append(restricted)
@@ -823,9 +958,15 @@ class WindowsNative:
         finally:
             for handle in opened:
                 if handle.value:
-                    self.kernel.CloseHandle(handle)
+                    self._close_token(handle, "run_with_restricted_primary_token")
         self.retained_handles.extend(retained)
         report["increase_quota_enabled_for_launch"] = api.quota_enabled
+        # every token this launch left open - its own three and those of the nested quota-retry privilege scope - belongs in the returned report
+        launch_failures = self.token_close_failures[closed_before:]
+        if launch_failures:
+            report["errors"].extend({"api": "CloseHandle:token", "code": failure["code"]} for failure in launch_failures)
+            report["cleanup_verified"], report["completed"] = False, False
+            report["handles_retained"] = True
         if api.restoration_error is not None:
             report["privilege_restoration"] = {"verified": False, **api.restoration_error.details}
             report["cleanup_verified"], report["completed"] = False, False
@@ -1006,7 +1147,10 @@ def recreation_report(native, parent, target) -> dict:
         report["mkdir_CreateDirectoryW"][label] = native.try_create_directory(target, stripped, "CreateDirectoryW")
         report["file_control"][label] = native.try_create_file(parent / "recreation-control.bin", stripped)
     report["non_denial_outcomes"] = non_denial_outcomes(report)
-    report["probe_cleanup_verified"] = probe_cleanup_verified(report)
+    failures = token_close_failures(native)
+    report["probe_cleanup_verified"] = probe_cleanup_verified(report) and not failures
+    if failures:
+        report["token_close_failures"] = failures
     report["verdict"] = classify(report)
     report["cause_established"] = False
     return report
@@ -1142,8 +1286,15 @@ def installation_observation(native, sid: str, make_directory, stabilize) -> dic
     shapes are diagnostics and may be inexact), while ``restoration_verified`` is false unless EVERY
     fixture whose original descriptor was captured shows a verified restoration. A restoration that
     is unverified or raised is listed in ``restoration_unverified``; a fixture that failed before
-    anything was captured has nothing to restore and is not counted."""
-    result, unverified = {}, []
+    anything was captured has nothing to restore and is not counted.
+
+    A restoration whose owner, ordered ACEs and protection are exact but whose control differs only
+    by the ``AI``/``AR`` letters (hosted Windows logs showed one such transition, empty control to
+    ``AI``) is kept as diagnostic evidence in ``auto_inherit_flag_only`` for any captured fixture.
+    It is never a verified restoration: ``restoration_exact`` and ``restoration_verified`` stay
+    false for that fixture, it is listed in ``restoration_unverified``, and the section is unclean.
+    Only the stabilized (protected) fixture is expected to restore exactly."""
+    result, unverified, flag_only = {}, [], []
     for label, prepared, protection in (("unprotected_inherited_auto_flag", False, "auto"),
                                         ("unprotected_inherited_no_flag", False, "none"),
                                         ("stabilized_protected_auto_flag", True, "auto")):
@@ -1163,7 +1314,11 @@ def installation_observation(native, sid: str, make_directory, stabilize) -> dic
         except Exception as error:
             entry["error"] = {"type": type(error).__name__, "code": getattr(error, "code", None)}
         if captured:
-            entry["restoration_verified"] = entry.get("restored", {}).get("verified") is True
+            restored = entry.get("restored", {})
+            entry["restoration_exact"] = restored.get("verified") is True
+            entry["restoration_verified"] = entry["restoration_exact"]
+            if restored.get("auto_inherit_flag_only") is True and not entry["restoration_exact"]:
+                flag_only.append(label)
             if not entry["restoration_verified"]:
                 unverified.append(label)
         result[label] = entry
@@ -1171,6 +1326,7 @@ def installation_observation(native, sid: str, make_directory, stabilize) -> dic
         result["stabilized_protected_auto_flag"].get("installed", {}).get("installed_exactly")
         and result["stabilized_protected_auto_flag"].get("restored", {}).get("verified"))
     result["restoration_unverified"] = unverified
+    result["auto_inherit_flag_only"] = flag_only
     result["restoration_verified"] = not unverified
     return result
 
@@ -1368,12 +1524,19 @@ def bootstrap_checkout() -> None:
         sys.path.insert(0, str(ROOT))
 
 
+def token_close_failures(native) -> list:
+    """The token handles ``native`` opened and could not close (each still owned and retained)."""
+    failures = getattr(native, "token_close_failures", None)
+    return [dict(entry) for entry in failures] if isinstance(failures, list) else []
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["--child-recreation-probe"] and len(argv) == 4:
         return child_recreation_probe(*argv[1:])
     report = {"os_name": os.name, "completed_stages": []}
     clean = True
+    native = None
     stage = "bootstrap"
     try:
         bootstrap_checkout()
@@ -1436,6 +1599,10 @@ def main(argv: list[str] | None = None) -> int:
         report["error"] = {"type": type(error).__name__, "code": getattr(error, "code", None),
                            "stage": stage}
         clean = os.name != "nt"
+    failures = token_close_failures(native)
+    if failures:
+        report["token_close_failures"] = failures
+        clean = False
     report["cleanup_verified"] = clean
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if clean else 1

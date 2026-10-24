@@ -72,13 +72,13 @@ jobs:
           python -m unittest discover -s tests -p "test_windows_fence_diagnostics.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
           grep -Eq '^Ran 18 tests in ' "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
           grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
-      - name: Run the 155 native-descriptor, installation-component, restoration, token, privilege-isolation, launcher-containment, privilege-restoration, child-evidence, standalone-script, runtime-main-section, child-stop-before-restoration, launcher-consumer fixture-retention, per-fixture installation-restoration and access-denied directory-creation probe cases (one hundred thirty-nine portable, sixteen native)
+      - name: Run the 216 native-descriptor, installation-component, restoration, token, privilege-isolation, launcher-containment, privilege-restoration, child-evidence, standalone-script, runtime-main-section, child-stop-before-restoration, launcher-consumer fixture-retention, per-fixture installation-restoration and access-denied directory-creation probe cases (one hundred ninety-nine portable, seventeen native)
         if: always()
         shell: bash
         run: |
           set -o pipefail
           python -m unittest discover -s tests -p "test_windows_native_acl.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-native-acl-tests.log"
-          grep -Eq '^Ran 155 tests in ' "$RUNNER_TEMP/windows-native-acl-tests.log"
+          grep -Eq '^Ran 216 tests in ' "$RUNNER_TEMP/windows-native-acl-tests.log"
           grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-native-acl-tests.log"
       - name: Positive gate, supported context required - the strict v1 producer cases in a child whose own primary token has every privilege removed
         if: always()
@@ -144,7 +144,7 @@ jobs:
             grep -Eq '^Ran 18 tests in ' "$RUNNER_TEMP/sdist-discovery.log"
             grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/sdist-discovery.log"
             python -m unittest discover -s tests -p "test_windows_native_acl.py" -v 2>&1 | tee "$RUNNER_TEMP/sdist-native-acl.log"
-            grep -Eq '^Ran 155 tests in ' "$RUNNER_TEMP/sdist-native-acl.log"
+            grep -Eq '^Ran 216 tests in ' "$RUNNER_TEMP/sdist-native-acl.log"
             grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/sdist-native-acl.log"
             python -m unittest tests.test_paper_pilot_phase_trustees_v1_v4.V1FenceTrusteeTests.test_the_strict_positive_producer_path_runs_in_a_restricted_primary_token_child -v 2>&1 | tee "$RUNNER_TEMP/sdist-required-positive.log"
             grep -Eq '^Ran 1 test in ' "$RUNNER_TEMP/sdist-required-positive.log"

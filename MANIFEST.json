@@ -8,7 +8,7 @@
     {
       "path": ".github/workflows/test.yml",
       "bytes": 12883,
-      "sha256": "1b148dbe243b919564f06d96d66c4a2698e45a9b9b7772f4331abdc33824a2fd"
+      "sha256": "16d8fec348defb7db99d43bd1fbcc1bd9c599a50a681aaeaabd948041df1acf7"
     },
     {
       "path": ".gitignore",
@@ -737,8 +737,8 @@
     },
     {
       "path": "docs/paper_pilot_phase_transition.md",
-      "bytes": 24745,
-      "sha256": "ad69ebbe19ad4d7a6f87bc7e3b3818ee091f6a606c80d6ae496f417a81414ad1"
+      "bytes": 26197,
+      "sha256": "5362b4bf9ae21809806c5f5195951bfad06d828cf1f19a40284cf87a7e86df6a"
     },
     {
       "path": "docs/paper_pilot_workflow.md",
@@ -2487,8 +2487,8 @@
     },
     {
       "path": "tests/phase_trustee_harness.py",
-      "bytes": 28549,
-      "sha256": "77a5c4ab973e8a6d3e99128ad92f06311fc9102c43ec04844c694a44b6f373d0"
+      "bytes": 28871,
+      "sha256": "2589fe6eaee3c4178bc17de63e0a425010eddbaf601895571c968b62943c8ee7"
     },
     {
       "path": "tests/test_abstract_validation.py",
@@ -2662,8 +2662,8 @@
     },
     {
       "path": "tests/test_paper_pilot_phase_fence.py",
-      "bytes": 6030,
-      "sha256": "9b48c17fce8ea4c2e915c238cf3fcc7eb4ae8f282992519a71cfb2dadc7fe5f7"
+      "bytes": 6530,
+      "sha256": "a715b08abf952aa41372edc9c287c737801fd5c9bad2740a972da818ef00e5ad"
     },
     {
       "path": "tests/test_paper_pilot_phase_import_lock.py",
@@ -2677,8 +2677,8 @@
     },
     {
       "path": "tests/test_paper_pilot_phase_trustees_model.py",
-      "bytes": 48198,
-      "sha256": "061fa1f60e1b7335ba878fe3616083688349758a93fe79dff1269e2de02c5373"
+      "bytes": 50464,
+      "sha256": "aa3a55e7594b28dd0d6eefb016840a9f7d00305e8ff8fe100c6e377a2a14229a"
     },
     {
       "path": "tests/test_paper_pilot_phase_trustees_v1_v4.py",
@@ -2992,8 +2992,8 @@
     },
     {
       "path": "tests/test_windows_native_acl.py",
-      "bytes": 131065,
-      "sha256": "a466bf28608b379ca8e4745e3f953e7354d7ed5f8a0326ef5821517b96acf5c4"
+      "bytes": 143973,
+      "sha256": "09fb42252067a6f5e1a83b30413a7e9fca0fbb8cc394aa0ce055f29f5230c52d"
     },
     {
       "path": "tools/build_schemas.py",
@@ -3097,8 +3097,8 @@
     },
     {
       "path": "tools/windows_native_acl.py",
-      "bytes": 71797,
-      "sha256": "36cff50790ac00d76e1fdf0425da8a25062f193cd0a28103a638135d3124c58b"
+      "bytes": 77099,
+      "sha256": "3fe9e7411535b1d83849a6422e54262678b25421fb377e4924add9168e411891"
     },
     {
       "path": "trace_gc/__init__.py",

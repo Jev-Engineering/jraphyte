@@ -354,6 +354,39 @@ class ModeledV1TokenGateTests(ModeledCase):
         with patch.object(self.model, "icacls", lie):
             self.hold("the added deny could not be removed and verified")
 
+    def test_an_unprotected_parent_that_windows_marks_auto_inherited_cannot_be_shown_restored(self):
+        # Observed on hosted Windows: any rewrite adds the AI control flag, so a parent that began
+        # unprotected and unflagged never reads back equal and the strict check must say so.
+        self.model.token_bypasses_deny = True
+        self.model.marks_auto_inherited = True
+        self.model.set(self.parent, "", ["(A;OICIID;FA;;;SY)", "(A;OICIID;FA;;;BA)", "(A;OICIID;FA;;;OW)"])
+        before = self.sddl(self.parent)
+        error = self.hold("the added deny could not be removed and verified (DACL differs from its pre-state)")
+        self.assertEqual(error.detail, v1.TOKEN_NOT_REFUSED +
+                         "; the added deny could not be removed and verified (DACL differs from its pre-state)")
+        after = self.sddl(self.parent)
+        self.assertEqual((before, after), ("D:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;OW)",
+                                            "D:AI(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;OW)"))
+        self.assertTrue(self.old.is_dir() and not self.archived.exists() and not self.receipt.exists())
+        self.assertEqual(self.probes(), [])
+        self.model.set(self.parent, "", ["(A;OICIID;FA;;;SY)", "(A;OICIID;FA;;;BA)", "(A;OICIID;FA;;;OW)"])
+        with self.assertRaises(AssertionError):
+            assert_fence_refused_before_effects(
+                self, self.invoke, parent=self.parent, old=self.old, archive=self.archived,
+                receipt=self.receipt, content=self.content)
+
+    def test_a_protected_explicit_parent_restores_exactly_under_the_same_rewrite_marking(self):
+        self.model.token_bypasses_deny = True
+        self.model.marks_auto_inherited = True
+        self.model.set(self.parent, "PAI", ["(A;OICI;FA;;;SY)", "(A;OICI;FA;;;BA)", "(A;OICI;FA;;;OW)"])
+        before = self.sddl(self.parent)
+        error = self.hold(v1.TOKEN_NOT_REFUSED)
+        self.assertEqual(error.detail, v1.TOKEN_NOT_REFUSED)
+        self.assert_held_with_old_state_in_place(before)
+        assert_fence_refused_before_effects(
+            self, self.invoke, parent=self.parent, old=self.old, archive=self.archived,
+            receipt=self.receipt, content=self.content)
+
     def test_a_removal_that_exits_nonzero_is_not_trusted_even_if_the_dacl_reads_back_equal(self):
         self.model.token_bypasses_deny = True
         before = self.sddl(self.parent)

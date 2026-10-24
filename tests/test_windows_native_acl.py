@@ -636,6 +636,29 @@ class RestorationComponentTests(unittest.TestCase):
                          (True, True, True, True))
 
 
+    def test_a_difference_in_the_auto_inherit_letters_alone_is_named_and_is_not_an_exact_restoration(self):
+        unmarked = "D:(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
+        marked = "D:AI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
+        found = native_acl.restoration_components(FakeNative(dacl=marked), Path("x"), unmarked, "O:BA")
+        self.assertEqual((found["verified"], found["control"]["same"], found["aces"]["same"],
+                          found["owner"]["same"], found["auto_inherit_flag_only"]), (False, False, True, True, True))
+        exact = native_acl.restoration_components(FakeNative(dacl=unmarked), Path("x"), unmarked, "O:BA")
+        self.assertEqual((exact["verified"], exact["auto_inherit_flag_only"]), (True, False))
+
+    def test_the_auto_inherit_allowance_never_covers_protection_aces_or_owner(self):
+        unmarked = "D:(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
+        for label, fake in (
+                ("protection", FakeNative(dacl="D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)")),
+                ("extra ace", FakeNative(dacl="D:AI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;FA;;;WD)")),
+                ("missing ace", FakeNative(dacl="D:AI(A;OICI;FA;;;SY)")),
+                ("owner", FakeNative(dacl="D:AI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"))):
+            with self.subTest(label):
+                fake.owner = "O:SY" if label == "owner" else fake.owner
+                found = native_acl.restoration_components(fake, Path("x"), unmarked, "O:BA")
+                self.assertIs(found["auto_inherit_flag_only"], False)
+                self.assertIs(found["verified"], False)
+
+
 class PrivilegeFake(FakeNative):
     """Creation succeeds unless the token keeps the one privilege named in ``needs``."""
 
@@ -798,6 +821,57 @@ STABILIZED = "stabilized_protected_auto_flag"
 RESTORATION_FAILURES = ("protection", "owner", "extra_ace", "ignored", "raises")
 
 
+class AutoInheritMarkingNative(PerFixtureNative):
+    """Windows marks a descriptor auto-inherited once it is rewritten: a fixture that began without
+    the flag reads back with it after every restoration listed in ``marks``."""
+
+    UNMARKED = "D:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)"
+
+    def __init__(self, marks=LABELS[:2], starts=None, **kwargs):
+        super().__init__(**kwargs)
+        self.marks = set(marks)
+        self.starts = starts or {LABELS[0]: self.UNMARKED, LABELS[1]: self.UNMARKED}
+
+    @staticmethod
+    def toggled(text):
+        return text.replace("D:(", "D:P(", 1) if text.startswith("D:(") else PerFixtureNative.toggled(text)
+
+    def read_dacl(self, path):
+        return self.state.setdefault(self.key(path), self.starts.get(self.key(path), PROTECTED))
+
+    def apply_dacl(self, path, sddl, protection="auto"):
+        super().apply_dacl(path, sddl, protection)
+        key = self.key(path)
+        if key in self.marks and "AI" not in self.state[key].split(")", 1)[0]:
+            self.state[key] = re.sub(r"^D:(P?)", r"D:\1AI", self.state[key], count=1)
+
+
+CONTROL_DRIFTS = {"gain_ai": ("", "AI"), "gain_ar": ("", "AR"), "lose_ai": ("AI", ""), "lose_ar": ("AR", ""),
+                  "ai_becomes_ar": ("AI", "AR"), "ar_becomes_ai": ("AR", "AI")}
+CONTROL_STARTS = {kind: start for kind, (start, _) in CONTROL_DRIFTS.items()}
+ACES = "(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)"
+
+
+class ControlDriftNative(PerFixtureNative):
+    """Both unprotected fixtures begin with the control letters of ``kind``; the restoration of
+    ``label`` (``None``: of none) reads back with the letters that kind drifts to."""
+
+    def __init__(self, label, kind):
+        super().__init__()
+        self.label, (self.start, self.after) = label, CONTROL_DRIFTS[kind]
+
+    def read_dacl(self, path):
+        key = self.key(path)
+        initial = "D:%s%s" % (self.start, ACES) if key in LABELS[:2] else PROTECTED
+        return self.state.setdefault(key, initial)
+
+    def apply_dacl(self, path, sddl, protection="auto"):
+        super().apply_dacl(path, sddl, protection)
+        key = self.key(path)
+        if key == self.label and "(D;" not in sddl:
+            self.state[key] = "D:%s%s" % (self.after, ACES)
+
+
 class InstallationRestorationTests(unittest.TestCase):
     """The restoration of EVERY attempted fixture is verified on its own; an installation that
     reads back inexactly is a different fact from a restoration that cannot be shown."""
@@ -903,6 +977,68 @@ class InstallationRestorationTests(unittest.TestCase):
         self.assertIs(report["stabilized_install_and_restoration_exact"], False)
         self.assertIs(native_acl.installation_section_verified(report), False)
 
+    def test_unprotected_fixtures_that_only_gain_the_auto_inherit_flag_stay_unverified_diagnostic_evidence(self):
+        report = self.observe(AutoInheritMarkingNative())
+        for label in LABELS[:2]:
+            self.assertEqual((report[label]["restoration_exact"], report[label]["restoration_verified"],
+                              report[label]["restored"]["verified"],
+                              report[label]["restored"]["auto_inherit_flag_only"]), (False, False, False, True), label)
+        self.assertIs(report[STABILIZED]["restoration_exact"], True)
+        self.assertEqual((report["restoration_unverified"], report["auto_inherit_flag_only"],
+                          report["restoration_verified"]), (list(LABELS[:2]), list(LABELS[:2]), False))
+        self.assertIs(native_acl.installation_section_verified(report), False)
+
+    def test_a_flag_only_difference_on_the_stabilized_fixture_is_unverified_evidence_too(self):
+        report = self.observe(AutoInheritMarkingNative(
+            marks=(STABILIZED,), starts={LABELS[0]: AutoInheritMarkingNative.UNMARKED,
+                                         LABELS[1]: AutoInheritMarkingNative.UNMARKED,
+                                         STABILIZED: "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)"}))
+        self.assertIs(report[STABILIZED]["restored"]["auto_inherit_flag_only"], True)
+        self.assertEqual((report[STABILIZED]["restoration_verified"], report["restoration_unverified"],
+                          report["auto_inherit_flag_only"]), (False, [STABILIZED], [STABILIZED]))
+        self.assertIs(native_acl.installation_section_verified(report), False)
+
+    def test_each_control_flag_drift_on_each_unprotected_fixture_is_unverified_diagnostic_evidence(self):
+        for label in LABELS[:2]:
+            for kind in CONTROL_DRIFTS:
+                with self.subTest(label=label, kind=kind):
+                    report = self.observe(ControlDriftNative(label, kind))
+                    entry = report[label]
+                    self.assertEqual((entry["restoration_exact"], entry["restoration_verified"],
+                                      entry["restored"]["verified"], entry["restored"]["auto_inherit_flag_only"],
+                                      entry["restored"]["aces"]["same"], entry["restored"]["owner"]["same"]),
+                                     (False, False, False, True, True, True))
+                    self.assertNotEqual(entry["restored"]["control"]["expected"], entry["restored"]["control"]["now"])
+                    self.assertEqual((report["restoration_unverified"], report["auto_inherit_flag_only"],
+                                      report["restoration_verified"]), ([label], [label], False))
+                    other = LABELS[1 - LABELS.index(label)]
+                    self.assertIs(report[other]["restoration_verified"], True)
+                    self.assertIs(report[STABILIZED]["restoration_verified"], True)
+                    self.assertIs(report["stabilized_install_and_restoration_exact"], True)
+                    self.assertIs(native_acl.installation_section_verified(report), False)
+
+    def test_an_exact_restoration_of_every_control_flag_shape_is_verified(self):
+        for kind, start in CONTROL_STARTS.items():
+            with self.subTest(kind=kind):
+                report = self.observe(ControlDriftNative(None, kind))
+                for label in LABELS:
+                    self.assertIs(report[label]["restoration_verified"], True, label)
+                self.assertEqual((report["restoration_unverified"], report["auto_inherit_flag_only"],
+                                  report["restoration_verified"]), ([], [], True))
+                self.assertIs(native_acl.installation_section_verified(report), True)
+
+    def test_an_owner_or_ace_or_protection_failure_is_not_flag_only_evidence_beside_a_flag_only_drift(self):
+        for label in LABELS[:2]:
+            for how in RESTORATION_FAILURES:
+                with self.subTest(label=label, how=how):
+                    report = self.observe(AutoInheritMarkingNative(bad=(label,), how=how))
+                    other = LABELS[1 - LABELS.index(label)]
+                    self.assertEqual(report["restoration_unverified"], list(LABELS[:2]))
+                    self.assertEqual(report["auto_inherit_flag_only"], [other])
+                    self.assertIs(report[label]["restoration_verified"], False)
+                    self.assertIs(report[other]["restoration_verified"], False)
+                    self.assertIs(native_acl.installation_section_verified(report), False)
+
     def test_the_section_verdict_needs_both_facts_to_be_exactly_true(self):
         for body, clean in (({}, False),
                             ({"stabilized_install_and_restoration_exact": True}, False),
@@ -922,7 +1058,9 @@ class FakeProcessApi:
     def __init__(self, *, job=(100, None), start=(200, 300, None), assign=(True, None),
                  resume=(True, None), waits=((0, None),), terminate_job=(True, None),
                  terminate_process=(True, None), exit_code=(True, 0, None), active=((0, None),),
-                 close_fails=(), raise_on_wait=None):
+                 close_fails=(), raise_on_wait=None, members=([{"image": "conhost.exe"}], None),
+                 leak=None):
+        self.members_script, self.leak, self.leaked, self.opened = members, leak, [], 0
         self.script = dict(job=job, start=start, assign=assign, resume=resume,
                            terminate_job=terminate_job, terminate_process=terminate_process,
                            exit_code=exit_code)
@@ -970,6 +1108,19 @@ class FakeProcessApi:
     def active_processes(self, job):
         self.calls.append("active")
         return self._next(self.active)
+
+    def members(self, job):
+        self.calls.append("members")
+        if self.leak is not None:
+            self.leaked.append((900 + self.opened, self.leak))
+            self.opened += 1
+        if isinstance(self.members_script, BaseException):
+            raise self.members_script
+        return self.members_script
+
+    def take_unreleased(self):
+        taken, self.leaked = self.leaked, []
+        return taken
 
     def close(self, handle):
         self.calls.append(("close", handle))
@@ -1118,6 +1269,537 @@ class UnassignedChildTests(unittest.TestCase):
         self.assertEqual((sorted(api.retained), api.closed()), ([100, 200, 300], []))
 
 
+class StickyJobApi(FakeProcessApi):
+    """The child exits zero at once but one job member stays until the job is terminated, and only
+    when ``removable`` does the termination remove it."""
+
+    def __init__(self, removable=True, **script):
+        super().__init__(members=([{"image": "child.exe"}], None), **script)
+        self.removable, self.ended = removable, False
+
+    def terminate_job(self, job, code):
+        result = super().terminate_job(job, code)
+        self.ended = self.ended or (result[0] and self.removable)
+        return result
+
+    def active_processes(self, job):
+        self.calls.append("active")
+        return (0 if self.ended else 1), None
+
+
+class ModeledCtypes:
+    """``ctypes`` with the Windows last-error pair modeled, so the real ``_ProcessApi`` can be
+    driven on any host."""
+
+    def __init__(self):
+        import ctypes
+        self._ctypes, self.last = ctypes, 0
+
+    def __getattr__(self, name):
+        return getattr(self._ctypes, name)
+
+    def set_last_error(self, value):
+        self.last = value
+
+    def get_last_error(self):
+        return self.last
+
+    @staticmethod
+    def byref(value):
+        return value
+
+
+class ModeledKernel:
+    """The four kernel calls ``_ProcessApi.members`` makes, over a scripted job."""
+
+    def __init__(self, c, pids, unopenable=(), unnamed=(), unclosable=(), listing_error=None):
+        self.c, self.pids = c, list(pids)
+        self.unopenable, self.unnamed, self.unclosable = set(unopenable), set(unnamed), set(unclosable)
+        self.listing_error = listing_error
+        self.open_handles, self.close_calls = set(), []
+
+    def QueryInformationJobObject(self, job, klass, listing, size, returned):
+        assert klass == 3
+        if self.listing_error is not None:
+            self.c.last = self.listing_error
+            return False
+        listing.NumberOfAssignedProcesses = listing.NumberOfProcessIdsInList = len(self.pids)
+        for index, pid in enumerate(self.pids):
+            listing.ProcessIdList[index] = pid
+        return True
+
+    def OpenProcess(self, access, inherit, pid):
+        if pid in self.unopenable:
+            self.c.last = 5
+            return None
+        self.open_handles.add(5000 + pid)
+        return 5000 + pid
+
+    def QueryFullProcessImageNameW(self, handle, flags, name, size):
+        if handle - 5000 in self.unnamed:
+            self.c.last = 299
+            return False
+        name.value = "C:\\Windows\\System32\\image%d.exe" % (handle - 5000)
+        return True
+
+    def CloseHandle(self, handle):
+        self.close_calls.append(handle)
+        if handle - 5000 in self.unclosable:
+            self.c.last = 6
+            return False
+        self.open_handles.discard(handle)
+        return True
+
+
+def modeled_process_api(pids, **faults):
+    c = ModeledCtypes()
+    from ctypes import wintypes
+    kernel = ModeledKernel(c, pids, **faults)
+    native = mock.Mock(c=c, w=wintypes, kernel=kernel, retained_handles=[])
+    return native_acl._ProcessApi(native, None, ["x"], "."), kernel
+
+
+class ProcessApiMembersTests(unittest.TestCase):
+    """The real ``_ProcessApi.members`` against a modeled kernel: an image name that cannot be read
+    stays best effort, a process handle that cannot be released does not."""
+
+    def test_every_opened_handle_is_closed_and_the_entries_name_only_the_image(self):
+        api, kernel = modeled_process_api([11, 12])
+        entries, error = api.members(100)
+        self.assertEqual((entries, error), ([{"image": "image11.exe"}, {"image": "image12.exe"}], None))
+        self.assertEqual((sorted(kernel.close_calls), kernel.open_handles, api.take_unreleased()),
+                         ([5011, 5012], set(), []))
+
+    def test_an_image_that_cannot_be_named_or_opened_is_best_effort_and_leaks_nothing(self):
+        api, kernel = modeled_process_api([11, 12, 13], unopenable=[12], unnamed=[13])
+        entries, error = api.members(100)
+        self.assertEqual(entries, [{"image": None, "winerror": 5}, {"image": None, "winerror": 299},
+                                   {"image": "image11.exe"}])
+        self.assertEqual((sorted(kernel.close_calls), kernel.open_handles, api.take_unreleased()),
+                         ([5011, 5013], set(), []))
+
+    def test_a_listing_that_fails_opens_nothing(self):
+        api, kernel = modeled_process_api([11], listing_error=87)
+        self.assertEqual(api.members(100), (None, 87))
+        self.assertEqual((kernel.close_calls, api.take_unreleased()), ([], []))
+
+    def test_a_handle_that_cannot_be_closed_is_handed_over_with_its_error_once(self):
+        api, kernel = modeled_process_api([11, 12, 13], unclosable=[12])
+        entries, error = api.members(100)
+        self.assertEqual(len(entries), 3)
+        self.assertEqual(api.take_unreleased(), [(5012, 6)])
+        self.assertEqual(api.take_unreleased(), [])
+        self.assertEqual(kernel.open_handles, {5012})
+
+    def test_a_handle_that_cannot_be_closed_after_a_failed_name_query_is_still_handed_over(self):
+        api, _ = modeled_process_api([11], unnamed=[11], unclosable=[11])
+        entries, _error = api.members(100)
+        self.assertEqual(entries, [{"image": None, "winerror": 299}])
+        self.assertEqual(api.take_unreleased(), [(5011, 6)])
+
+    def test_through_run_contained_an_unreleased_listing_handle_is_a_retained_unclean_launch(self):
+        api, kernel = modeled_process_api([11], unclosable=[11])
+        actions = FakeProcessApi(active=((1, None), (0, None)))
+        actions.members, actions.take_unreleased = api.members, api.take_unreleased
+        report, retained = native_acl.run_contained(actions, 5.0, grace_ms=300)
+        self.assertEqual((report["completed"], report["cleanup_verified"], report["handles_retained"],
+                          report["errors"], retained), (False, False, True,
+                                                        [{"api": "CloseHandle:members", "code": 6}], [5011]))
+        self.assertEqual(report["post_exit_census"]["members_first"], [{"image": "image11.exe"}])
+
+    def test_through_run_contained_a_clean_listing_stays_a_completion(self):
+        api, _ = modeled_process_api([11])
+        actions = FakeProcessApi(active=((1, None), (0, None)))
+        actions.members, actions.take_unreleased = api.members, api.take_unreleased
+        report, retained = native_acl.run_contained(actions, 5.0, grace_ms=300)
+        self.assertEqual((report["completed"], report["cleanup_verified"], report["errors"], retained),
+                         (True, True, [], []))
+
+
+class ModeledTokenKernel:
+    """``kernel32`` as far as the token paths use it: handles are numbered, and a handle in
+    ``unclosable`` refuses ``CloseHandle`` with ``ERROR_INVALID_HANDLE`` (6) so the real
+    ``WindowsNative`` close handling runs on any host."""
+
+    def __init__(self, c, unclosable=()):
+        self.c = c
+        self.unclosable = dict(unclosable) if isinstance(unclosable, dict) else {h: 6 for h in unclosable}
+        self.open_handles, self.close_calls = set(), []
+
+    def GetCurrentProcess(self):
+        return -1
+
+    def CloseHandle(self, handle):
+        value = getattr(handle, "value", handle)
+        self.close_calls.append(value)
+        if value in self.unclosable:
+            self.c.last = self.unclosable[value]
+            return False
+        self.open_handles.discard(value)
+        return True
+
+
+class ModeledTokenAdvapi:
+    """``advapi32`` for the process-token calls: every opened or derived token gets the next
+    number (101, 102, ...) and is open until closed; the process token holds two privileges."""
+
+    PRIVILEGES = (("SeChangeNotifyPrivilege", 3), ("SeIncreaseQuotaPrivilege", 0))
+
+    def __init__(self, kernel):
+        self.kernel, self.issued = kernel, 100
+        self.adjustments = []
+        self.attrs = dict(self.PRIVILEGES)
+        self.create_results = []           # scripted CreateProcessAsUserW outcomes: (started, last_error)
+
+    def _issue(self, reference):
+        self.issued += 1
+        reference.value = self.issued
+        self.kernel.open_handles.add(self.issued)
+        return True
+
+    def OpenProcessToken(self, process, access, reference):
+        return self._issue(reference)
+
+    def CreateRestrictedToken(self, source, flags, a, b, c_, d, e, f, reference):
+        return self._issue(reference)
+
+    def DuplicateTokenEx(self, source, access, attributes, level, kind, reference):
+        return self._issue(reference)
+
+    def GetTokenInformation(self, token, klass, buffer, size, returned):
+        assert klass == 3
+        needed = 4 + 12 * len(self.PRIVILEGES)
+        if buffer is None:
+            returned.value = needed
+            return False
+        import struct
+        data = struct.pack("<I", len(self.PRIVILEGES)) + b"".join(
+            struct.pack("<IiI", index, 0, self.attrs[name]) for index, (name, _) in enumerate(self.PRIVILEGES))
+        buffer[0:len(data)] = data
+        returned.value = needed
+        return True
+
+    def LookupPrivilegeNameW(self, system, luid, name, length):
+        import struct
+        name.value = self.PRIVILEGES[struct.unpack("<I", luid.raw[:4])[0]][0]
+        return True
+
+    def LookupPrivilegeValueW(self, system, name, luid):
+        import struct
+        luid.raw = struct.pack("<II", [n for n, _ in self.PRIVILEGES].index(name), 0)
+        return True
+
+    def AdjustTokenPrivileges(self, token, disable_all, state, length, previous, returned):
+        import struct
+        raw = bytes(state.raw)
+        self.adjustments.append(raw)
+        _, index, _, attributes = struct.unpack_from("<IIiI", raw, 0)
+        self.attrs[self.PRIVILEGES[index][0]] = attributes
+        return True
+
+    def CreateProcessAsUserW(self, token, application, command, pa, ta, inherit, flags, environment, cwd, startup, created):
+        started, error = self.create_results.pop(0) if self.create_results else (True, 0)
+        self.kernel.c.last = error
+        if started:
+            created.hProcess, created.hThread = 201, 202
+            self.kernel.open_handles.update({201, 202})
+        return started
+
+
+class ModeledLaunchKernel(ModeledTokenKernel):
+    """``kernel32`` for a whole contained launch that succeeds: a job, one child that exits 0 and an empty job afterwards.
+    ``set_info_error`` makes SetInformationJobObject fail with that Windows error (the job-setup failure path)."""
+
+    def __init__(self, c, unclosable=(), set_info_error=None):
+        super().__init__(c, unclosable)
+        self.set_info_error = set_info_error
+
+    def CreateJobObjectW(self, attributes, name):
+        self.open_handles.add(301)
+        return 301
+
+    def SetInformationJobObject(self, job, klass, info, size):
+        if self.set_info_error is not None:
+            self.c.last = self.set_info_error
+            return False
+        return True
+
+    def AssignProcessToJobObject(self, job, process):
+        return True
+
+    def ResumeThread(self, thread):
+        return 1
+
+    def WaitForSingleObject(self, handle, milliseconds):
+        return 0
+
+    def GetExitCodeProcess(self, process, code):
+        code.value = 0
+        return True
+
+    def QueryInformationJobObject(self, job, klass, info, size, returned):
+        return True
+
+    def TerminateJobObject(self, job, code):
+        return True
+
+    def TerminateProcess(self, process, code):
+        return True
+
+
+def modeled_native(unclosable=(), launch=False, set_info_error=None):
+    """The real ``WindowsNative`` methods over a modeled ``advapi32``/``kernel32``."""
+    from ctypes import wintypes
+    c = ModeledCtypes()
+    kernel = ModeledLaunchKernel(c, unclosable, set_info_error) if launch else ModeledTokenKernel(c, unclosable)
+    native = object.__new__(native_acl.WindowsNative)
+    native.c, native.w, native.kernel, native.advapi = c, wintypes, kernel, ModeledTokenAdvapi(kernel)
+    native.retained_handles, native.token_close_failures = [], []
+    return native
+
+
+TOKEN_FAILURE = {"api": "CloseHandle:token", "code": 6}
+
+
+class TokenCloseFailureTests(unittest.TestCase):
+    """A restricted-token handle that CloseHandle refuses is never discarded: the error is read at
+    once, the still-open handle stays owned, the returned report is not a verified cleanup and
+    ``main`` is unclean. Every path that opens a process token is covered."""
+
+    def test_every_token_closes_when_nothing_fails(self):
+        native = modeled_native()
+        with native.impersonation_token(True) as token:
+            self.assertEqual(token.value, 103)
+        self.assertEqual((sorted(native.kernel.close_calls), native.kernel.open_handles,
+                          native.retained_handles, native.token_close_failures), ([101, 102, 103], set(), [], []))
+
+    def test_impersonation_token_keeps_each_handle_that_will_not_close_and_closes_the_rest(self):
+        native = modeled_native(unclosable=[102])
+        with native.impersonation_token(True):
+            pass
+        self.assertEqual(sorted(native.kernel.close_calls), [101, 102, 103])
+        self.assertEqual(native.kernel.open_handles, {102})
+        self.assertEqual([h.value for h in native.retained_handles], [102])
+        self.assertEqual(native.token_close_failures,
+                         [{"api": "CloseHandle:token", "path": "impersonation_token", "code": 6}])
+        self.assertEqual(native_acl.token_close_failures(native), native.token_close_failures)
+
+    def test_each_close_error_is_the_one_of_its_own_call(self):
+        native = modeled_native(unclosable={101: 5, 103: 1450})
+        with native.impersonation_token(True):
+            pass
+        self.assertEqual([(e["code"], e["path"]) for e in native.token_close_failures],
+                         [(5, "impersonation_token"), (1450, "impersonation_token")])
+        self.assertEqual([h.value for h in native.retained_handles], [101, 103])
+
+    def test_a_body_error_survives_a_failed_close_and_the_handle_stays_owned(self):
+        native = modeled_native(unclosable=[102])
+        with self.assertRaises(ValueError):
+            with native.impersonation_token(True):
+                raise ValueError("body")
+        self.assertEqual(([h.value for h in native.retained_handles], len(native.token_close_failures)), ([102], 1))
+
+    def test_privilege_inventory_read_reports_its_unreleased_token(self):
+        native = modeled_native(unclosable=[101])
+        self.assertEqual(native.privilege_attributes(), {"SeChangeNotifyPrivilege": 3, "SeIncreaseQuotaPrivilege": 0})
+        self.assertEqual([h.value for h in native.retained_handles], [101])
+        self.assertEqual(native.token_close_failures,
+                         [{"api": "CloseHandle:token", "path": "privilege_attributes", "code": 6}])
+
+    def test_privilege_adjustment_reports_its_unreleased_token(self):
+        native = modeled_native(unclosable=[101])
+        native.adjust_privilege("SeIncreaseQuotaPrivilege", 2)
+        self.assertEqual(len(native.advapi.adjustments), 1)
+        self.assertEqual(native.token_close_failures,
+                         [{"api": "CloseHandle:token", "path": "adjust_privilege", "code": 6}])
+        self.assertEqual([h.value for h in native.retained_handles], [101])
+
+    def test_an_error_before_the_close_still_closes_and_reports_the_token(self):
+        native = modeled_native(unclosable=[101])
+        native.advapi.LookupPrivilegeNameW = lambda *a: False
+        with self.assertRaises(native_acl.NativeError):
+            native.privilege_attributes()
+        self.assertEqual(len(native.token_close_failures), 1)
+
+    def launch(self, native, report=None, raises=None):
+        proc = mock.Mock(quota_enabled=False, restoration_error=None)
+        sent = dict({"launched": True, "completed": True, "exit_code": 0, "cleanup_verified": True,
+                     "handles_retained": False, "child_stopped": True, "errors": [], "timed_out": False,
+                     "wait_failed": False, "still_active": False}, **(report or {}))
+
+        def contained(api, timeout):
+            if raises is not None:
+                raise raises
+            return sent, []
+        with mock.patch.object(native_acl, "_ProcessApi", return_value=proc), \
+                mock.patch.object(native_acl, "run_contained", side_effect=contained):
+            return native.run_with_restricted_primary_token(["x"], ".")
+
+    def test_a_clean_restricted_launch_keeps_its_verified_report(self):
+        native = modeled_native()
+        report = self.launch(native)
+        self.assertEqual((report["completed"], report["cleanup_verified"], report["handles_retained"],
+                          report["errors"], native_acl.launch_defects(report)), (True, True, False, [], []))
+        self.assertEqual((sorted(native.kernel.close_calls), native.token_close_failures), ([101, 102, 103], []))
+
+    def test_a_primary_token_that_will_not_close_makes_the_launch_unclean_and_is_retained(self):
+        native = modeled_native(unclosable=[103])
+        report = self.launch(native)
+        self.assertEqual((report["completed"], report["cleanup_verified"], report["handles_retained"]),
+                         (False, False, True))
+        self.assertEqual(report["errors"], [TOKEN_FAILURE])
+        self.assertEqual([h.value for h in native.retained_handles], [103])
+        self.assertEqual(native.kernel.open_handles, {103})
+        for reason in ("launch_not_completed", "launch_cleanup_unverified", "handles_retained", "launch_errors"):
+            self.assertIn(reason, native_acl.launch_defects(report))
+        self.assertTrue(report["child_stopped"])
+
+    def test_every_token_that_will_not_close_is_one_error_and_one_retained_handle(self):
+        native = modeled_native(unclosable=[101, 102, 103])
+        report = self.launch(native)
+        self.assertEqual(report["errors"], [TOKEN_FAILURE] * 3)
+        self.assertEqual(sorted(h.value for h in native.retained_handles), [101, 102, 103])
+        self.assertFalse(report["cleanup_verified"])
+
+    def test_an_earlier_launch_error_is_kept_beside_the_close_error(self):
+        native = modeled_native(unclosable=[101])
+        report = self.launch(native, report={"errors": [{"api": "WaitForSingleObject", "code": 5}]})
+        self.assertEqual(report["errors"], [{"api": "WaitForSingleObject", "code": 5}, TOKEN_FAILURE])
+
+    def test_a_launch_that_raises_still_closes_and_retains_the_tokens(self):
+        native = modeled_native(unclosable=[102])
+        with self.assertRaises(RuntimeError):
+            self.launch(native, raises=RuntimeError("wait"))
+        self.assertEqual(sorted(native.kernel.close_calls), [101, 102, 103])
+        self.assertEqual(([h.value for h in native.retained_handles], len(native.token_close_failures)), ([102], 1))
+
+    def test_a_recreation_report_from_a_native_with_an_unreleased_token_is_not_a_clean_probe(self):
+        native = FakeNative()
+        report = native_acl.recreation_report(native, Path("p"), Path("p") / "t")
+        self.assertTrue(report["probe_cleanup_verified"])
+        self.assertNotIn("token_close_failures", report)
+        native.token_close_failures = [{"api": "CloseHandle:token", "path": "impersonation_token", "code": 6}]
+        report = native_acl.recreation_report(native, Path("p"), Path("p") / "t")
+        self.assertFalse(report["probe_cleanup_verified"])
+        self.assertEqual(report["token_close_failures"], native.token_close_failures)
+        with self.assertRaises(AssertionError):
+            native_acl.require_recreation_denied(native, Path("p"), Path("p") / "t")
+
+    def test_a_native_stand_in_without_the_record_has_no_failures(self):
+        self.assertEqual(native_acl.token_close_failures(object()), [])
+        self.assertEqual(native_acl.token_close_failures(mock.Mock()), [])
+        self.assertEqual(native_acl.token_close_failures(None), [])
+
+
+class TokenCloseRetryBoundaryTests(unittest.TestCase):
+    """The REAL launch path with nothing mocked away: ``run_with_restricted_primary_token`` -> ``run_contained`` -> ``_ProcessApi`` over modeled
+    kernel/advapi calls, including the quota-retry that enters the real ``privilege_scope`` (its own inventory and adjustment tokens). Every token
+    close failure of the launch - its three tokens and the nested ones - reaches the returned report, and the handles stay owned."""
+
+    def launch(self, native, retry=True):
+        native.advapi.create_results = [(False, 1314), (True, 0)] if retry else [(True, 0)]
+        return native.run_with_restricted_primary_token(["x"], ".", timeout=5.0)
+
+    def test_a_clean_retry_through_the_real_privilege_scope_is_a_verified_completion(self):
+        native = modeled_native(launch=True)
+        report = self.launch(native)
+        self.assertEqual((report["launched"], report["completed"], report["cleanup_verified"], report["handles_retained"], report["errors"]),
+                         (True, True, True, False, []))
+        self.assertEqual((report["increase_quota_enabled_for_launch"], report["privilege_restoration"]), (True, {"verified": True}))
+        self.assertEqual((native.token_close_failures, native.retained_handles, native_acl.launch_defects(report)), ([], [], []))
+        self.assertEqual(native.advapi.attrs["SeIncreaseQuotaPrivilege"], 0)
+        self.assertEqual(len(native.advapi.adjustments), 2)
+
+    def test_a_token_that_the_nested_privilege_scope_cannot_close_reaches_the_launch_report(self):
+        for nested, path in ((104, "privilege_attributes"), (105, "adjust_privilege")):
+            with self.subTest(handle=nested, path=path):
+                native = modeled_native(unclosable=[nested], launch=True)
+                report = self.launch(native)
+                self.assertEqual(report["errors"], [TOKEN_FAILURE])
+                self.assertEqual((report["launched"], report["completed"], report["cleanup_verified"], report["handles_retained"]), (True, False, False, True))
+                self.assertEqual([(f["path"], f["code"]) for f in native.token_close_failures], [(path, 6)])
+                self.assertEqual([h.value for h in native.retained_handles], [nested])
+                self.assertIn(nested, native.kernel.open_handles)
+                for reason in ("launch_not_completed", "launch_cleanup_unverified", "handles_retained", "launch_errors"):
+                    self.assertIn(reason, native_acl.launch_defects(report))
+
+    def test_every_nested_and_outer_failure_is_one_error_and_one_retained_owner(self):
+        native = modeled_native(unclosable=[101, 104, 105, 107], launch=True)
+        report = self.launch(native)
+        self.assertEqual(report["errors"], [TOKEN_FAILURE] * 4)
+        self.assertEqual(sorted(h.value for h in native.retained_handles), [101, 104, 105, 107])
+        self.assertEqual(len(native.token_close_failures), 4)
+        self.assertFalse(report["cleanup_verified"] or report["completed"])
+
+    def test_the_failures_of_an_earlier_launch_are_not_charged_to_a_later_clean_one(self):
+        native = modeled_native(unclosable=[104], launch=True)
+        first = self.launch(native)
+        native.kernel.unclosable.clear()
+        second = self.launch(native)
+        self.assertEqual((len(first["errors"]), second["errors"], second["completed"], second["cleanup_verified"]), (1, [], True, True))
+        self.assertEqual(len(native.token_close_failures), 1)
+
+    def test_a_launch_without_a_retry_keeps_only_its_own_three_tokens(self):
+        native = modeled_native(unclosable=[103], launch=True)
+        report = self.launch(native, retry=False)
+        self.assertEqual((report["errors"], report["increase_quota_enabled_for_launch"]), ([TOKEN_FAILURE], False))
+        self.assertEqual([f["path"] for f in native.token_close_failures], ["run_with_restricted_primary_token"])
+
+    def test_a_direct_consumer_and_main_both_see_the_nested_failure(self):
+        native = modeled_native(unclosable=[105], launch=True)
+        report = self.launch(native)
+        self.assertTrue(native_acl.launch_defects(report))
+        self.assertEqual(native_acl.token_close_failures(native), native.token_close_failures)
+        self.assertEqual(len(native_acl.token_close_failures(native)), 1)
+
+
+class JobSetupCloseTests(unittest.TestCase):
+    """A job whose setup call fails and whose handle then cannot be closed stays owned, with both errors reported."""
+
+    @staticmethod
+    def api(unclosable=(), set_info_error=87):
+        from ctypes import wintypes
+        c = ModeledCtypes()
+        kernel = ModeledLaunchKernel(c, unclosable, set_info_error)
+        native = mock.Mock(c=c, w=wintypes, kernel=kernel, retained_handles=[])
+        return native_acl._ProcessApi(native, None, ["x"], "."), kernel, native
+
+    def test_a_job_that_cannot_be_configured_and_closes_cleanly_leaves_nothing(self):
+        api, kernel, native = self.api()
+        self.assertEqual(api.create_job(), (None, 87))
+        self.assertEqual((api.take_unreleased(), kernel.open_handles), ([], set()))
+        report, retained = native_acl.run_contained(api, 5.0)
+        self.assertEqual((report["errors"], retained, report["handles_retained"], report["child_stopped"], report["launched"]),
+                         ([{"api": "CreateJobObject", "code": 87}], [], False, True, False))
+
+    def test_a_job_that_cannot_be_configured_or_closed_is_retained_with_both_errors(self):
+        api, kernel, native = self.api(unclosable=[301])
+        self.assertEqual(api.create_job(), (None, 87))
+        self.assertEqual(api.take_unreleased(), [(301, 6, "job-setup")])
+        self.assertEqual(kernel.open_handles, {301})
+        api, kernel, native = self.api(unclosable=[301])
+        report, retained = native_acl.run_contained(api, 5.0)
+        self.assertEqual(report["errors"], [{"api": "CreateJobObject", "code": 87}, {"api": "CloseHandle:job-setup", "code": 6}])
+        self.assertEqual((retained, report["handles_retained"], report["cleanup_verified"], report["completed"], report["child_stopped"]), ([301], True, False, False, True))
+        self.assertIn("handles_retained", native_acl.launch_defects(report))
+        self.assertEqual(api.take_unreleased(), [])
+
+    def test_the_real_launcher_keeps_the_unreleased_job_in_its_owner(self):
+        native = modeled_native(unclosable=[301], launch=True, set_info_error=87)
+        native.advapi.create_results = [(True, 0)]
+        report = native.run_with_restricted_primary_token(["x"], ".", timeout=5.0)
+        self.assertEqual(report["errors"], [{"api": "CreateJobObject", "code": 87}, {"api": "CloseHandle:job-setup", "code": 6}])
+        self.assertIn(301, [h if isinstance(h, int) else h.value for h in native.retained_handles])
+        self.assertEqual((report["handles_retained"], report["cleanup_verified"]), (True, False))
+
+    def test_a_second_listing_style_leak_keeps_its_kind(self):
+        actions = FakeProcessApi(job=(None, 5))
+        actions.take_unreleased = lambda: [(7, 6, "job-setup"), (8, 6)]
+        report, retained = native_acl.run_contained(actions, 5.0)
+        self.assertEqual([e["api"] for e in report["errors"]], ["CreateJobObject", "CloseHandle:job-setup", "CloseHandle:members"])
+        self.assertEqual(retained, [7, 8])
+
+
 class RunContainedTests(unittest.TestCase):
     def run_it(self, **script):
         api = FakeProcessApi(**script)
@@ -1208,12 +1890,171 @@ class RunContainedTests(unittest.TestCase):
         _, report, _ = self.run_it(exit_code=(True, 3, None))
         self.assertEqual((report["exit_code"], report["completed"], report["cleanup_verified"]), (3, True, True))
 
-    def test_a_descendant_left_in_the_job_is_terminated_and_the_run_is_not_completed(self):
+    def test_a_job_member_that_leaves_by_itself_after_the_exit_is_a_natural_completion_with_its_evidence(self):
         api, report, retained = self.run_it(active=((2, None), (1, None), (0, None)))
-        self.assertEqual((report["descendants_terminated"], report["completed"],
-                          report["job_active_processes"], report["cleanup_verified"]), (True, False, 0, True))
-        self.assertIn("terminate_job", api.calls)
-        self.assertEqual(retained, [])
+        self.assertEqual((report["completed"], report["exit_code"], report["descendants_terminated"],
+                          report["terminated"], report["job_active_processes"], report["cleanup_verified"],
+                          report["child_stopped"]), (True, 0, False, False, 0, True, True))
+        census = report["post_exit_census"]
+        self.assertEqual((census["initial_active"], census["waited_ms"], census["drained_without_termination"],
+                          census["members_first"], census["members_before_termination"]),
+                         (2, 100, True, [{"image": "conhost.exe"}], None))
+        self.assertNotIn("terminate_job", api.calls)
+        self.assertNotIn("terminate_process", api.calls)
+        self.assertEqual((api.calls.count("pause"), retained), (2, []))
+
+    def test_a_job_member_that_never_leaves_is_terminated_and_the_zero_exit_is_not_a_completion(self):
+        api = StickyJobApi()
+        report, retained = native_acl.run_contained(api, 5.0, grace_ms=300)
+        self.assertEqual((report["exit_code"], report["completed"], report["descendants_terminated"],
+                          report["terminated"], report["job_active_processes"], report["cleanup_verified"],
+                          report["child_stopped"], retained), (0, False, True, True, 0, True, True, []))
+        census = report["post_exit_census"]
+        self.assertEqual((census["initial_active"], census["waited_ms"], census["drained_without_termination"],
+                          census["members_first"], census["members_before_termination"]),
+                         (1, native_acl.POST_EXIT_SETTLE_MS, False, [{"image": "child.exe"}],
+                          [{"image": "child.exe"}]))
+        self.assertLess(api.calls.index("pause"), api.calls.index("terminate_job"))
+
+    def test_a_member_that_outlives_the_settle_and_cannot_be_removed_fails_cleanup_and_keeps_the_job(self):
+        api = StickyJobApi(terminate_job=(True, None), removable=False)
+        report, retained = native_acl.run_contained(api, 5.0, grace_ms=300)
+        self.assertEqual((report["completed"], report["descendants_terminated"], report["job_active_processes"],
+                          report["cleanup_verified"], report["child_stopped"], report["handles_retained"]),
+                         (False, True, 1, False, False, True))
+        self.assertIn(100, retained)
+
+    def test_the_settle_is_bounded_by_its_budget_and_a_zero_budget_terminates_at_once(self):
+        api = StickyJobApi()
+        report, _ = native_acl.run_contained(api, 5.0, grace_ms=300, settle_ms=200)
+        self.assertEqual((report["post_exit_census"]["waited_ms"], report["post_exit_census"]["settle_ms"],
+                          report["descendants_terminated"], report["completed"]), (200, 200, True, False))
+        api = StickyJobApi()
+        report, _ = native_acl.run_contained(api, 5.0, grace_ms=300, settle_ms=0)
+        self.assertEqual((report["post_exit_census"]["waited_ms"], report["post_exit_census"]["initial_active"],
+                          report["descendants_terminated"], report["completed"], report["cleanup_verified"]),
+                         (0, None, True, False, True))
+
+    def test_a_timed_out_child_is_terminated_at_once_without_a_settle_and_a_later_exit_zero_is_not_completion(self):
+        api, report, _ = self.run_it(waits=((native_acl.WAIT_TIMEOUT, None), (0, None)),
+                                     exit_code=(True, 0, None), active=((1, None), (0, None)))
+        census = report["post_exit_census"]
+        self.assertEqual((report["exit_code"], report["timed_out"], report["terminated"], report["completed"],
+                          census["initial_active"], census["waited_ms"], api.calls.count("members")),
+                         (0, True, True, False, None, 0, 0))
+
+    def test_an_assignment_failure_is_never_settled_or_completed_even_with_a_zero_exit(self):
+        api = CausalProcessApi(assign=(False, 5), exit_code=(True, 0, None))
+        report, _ = native_acl.run_contained(api, 5.0, grace_ms=300)
+        self.assertEqual((report["launched"], report["completed"], report["terminated"], report["exit_code"],
+                          report["post_exit_census"]["waited_ms"], report["post_exit_census"]["initial_active"]),
+                         (False, False, True, 0, 0, None))
+
+    def test_a_census_that_cannot_be_read_is_never_settled_and_never_a_completion(self):
+        api, report, _ = self.run_it(active=((None, 6),))
+        self.assertEqual((report["completed"], report["post_exit_census"]["initial_active"],
+                          report["post_exit_census"]["waited_ms"], report["descendants_terminated"]),
+                         (False, None, 0, False))
+        self.assertNotIn("pause", api.calls)
+
+    def test_a_census_that_becomes_unreadable_during_the_settle_is_not_a_completion_or_a_drain(self):
+        api, report, _ = self.run_it(active=((1, None), (None, 6)))
+        self.assertEqual((report["completed"], report["job_active_processes"], report["cleanup_verified"],
+                          report["post_exit_census"]["drained_without_termination"]), (False, None, False, False))
+        self.assertIn({"api": "QueryInformationJobObject", "code": 6}, report["errors"])
+        self.assertNotIn("terminate_job", api.calls)
+
+    def test_the_member_listing_is_best_effort_and_never_changes_the_verdict(self):
+        for label, members, expected in (
+                ("raises", RuntimeError("boom"), {"error": "RuntimeError"}),
+                ("error", (None, 5), {"error": 5}),
+                ("image unknown", ([{"image": None, "winerror": 5}], None), [{"image": None, "winerror": 5}])):
+            with self.subTest(label):
+                _, report, _ = self.run_it(active=((1, None), (0, None)), members=members)
+                self.assertEqual((report["post_exit_census"]["members_first"], report["completed"]),
+                                 (expected, True))
+        self.assertIsNone(native_acl._members(object(), 100))
+        api = StickyJobApi()
+        api.members = None
+        report, _ = native_acl.run_contained(api, 5.0, grace_ms=300)
+        self.assertEqual((report["post_exit_census"]["members_first"], report["completed"]), (None, False))
+
+    def test_a_timed_out_child_is_never_settled_even_when_both_terminations_fail_and_a_later_wait_sees_it_exit(self):
+        api = FakeProcessApi(waits=((native_acl.WAIT_TIMEOUT, None), (0, None)),
+                             terminate_job=(False, 5), terminate_process=(False, 5),
+                             exit_code=(True, 0, None), active=((1, None),))
+        report, retained = native_acl.run_contained(api, 5.0, grace_ms=300)
+        census = report["post_exit_census"]
+        self.assertEqual((report["timed_out"], report["terminated"], report["exit_code"], report["completed"],
+                          report["descendants_terminated"], report["cleanup_verified"]),
+                         (True, False, 0, False, True, False))
+        self.assertEqual((census["initial_active"], census["waited_ms"], census["drained_without_termination"],
+                          census["members_first"], census["members_before_termination"],
+                          api.calls.count("members")), (None, 0, False, None, None, 0))
+        self.assertEqual(api.calls.count("terminate_job"), 2)
+        self.assertIn(100, retained)
+
+    def test_a_wait_failure_is_never_settled_even_when_both_terminations_fail_and_a_later_wait_sees_it_exit(self):
+        api = FakeProcessApi(waits=((native_acl.WAIT_FAILED, 6), (0, None)),
+                             terminate_job=(False, 5), terminate_process=(False, 5),
+                             exit_code=(True, 0, None), active=((1, None),))
+        report, _ = native_acl.run_contained(api, 5.0, grace_ms=300)
+        census = report["post_exit_census"]
+        self.assertEqual((report["wait_failed"], report["completed"], report["descendants_terminated"],
+                          census["initial_active"], census["waited_ms"], census["drained_without_termination"],
+                          api.calls.count("members")), (True, False, True, None, 0, False, 0))
+
+    def test_a_listing_handle_that_cannot_be_closed_is_retained_and_is_never_a_verified_cleanup(self):
+        api, report, retained = self.run_it(active=((2, None), (0, None)), leak=6)
+        self.assertEqual((report["launched"], report["exit_code"], report["completed"], report["cleanup_verified"],
+                          report["handles_retained"], report["child_stopped"], report["job_active_processes"]),
+                         (True, 0, False, False, True, True, 0))
+        self.assertEqual(report["errors"], [{"api": "CloseHandle:members", "code": 6}])
+        self.assertEqual(retained, [900])
+        self.assertEqual(api.closed(), [100, 200, 300])
+        self.assertNotIn(900, api.closed())
+        self.assertEqual(report["post_exit_census"]["drained_without_termination"], True)
+        self.assertEqual(sorted(native_acl.launch_defects(report)),
+                         sorted(["handles_retained", "launch_cleanup_unverified", "launch_errors",
+                                 "launch_not_completed"]))
+
+    def test_every_listing_handle_that_cannot_be_closed_is_retained_with_its_own_error(self):
+        api = StickyJobApi(leak=6)
+        report, retained = native_acl.run_contained(api, 5.0, grace_ms=300)
+        self.assertEqual((report["completed"], report["cleanup_verified"], report["handles_retained"],
+                          report["descendants_terminated"], report["job_active_processes"]),
+                         (False, False, True, True, 0))
+        self.assertEqual(report["errors"], [{"api": "CloseHandle:members", "code": 6}] * 2)
+        self.assertEqual(retained, [900, 901])
+
+    def test_a_listing_handle_leak_is_kept_when_the_run_also_fails_cleanup_otherwise(self):
+        api = FakeProcessApi(active=((1, None),), leak=6)
+        report, retained = native_acl.run_contained(api, 5.0, grace_ms=300)
+        self.assertEqual((report["cleanup_verified"], report["handles_retained"], report["job_active_processes"]),
+                         (False, True, 1))
+        self.assertEqual(sorted(retained), sorted([100, 200, 300, 900, 901]))
+
+    def test_a_listing_that_is_interrupted_after_opening_a_handle_keeps_that_handle_owned(self):
+        api = FakeProcessApi(active=((1, None),), members=KeyboardInterrupt(), leak=6)
+        with self.assertRaises(KeyboardInterrupt):
+            native_acl.run_contained(api, 5.0, grace_ms=300)
+        self.assertEqual(sorted(api.retained), [100, 200, 300, 900])
+
+    def test_a_listing_with_no_unreleased_handles_leaves_the_clean_completion_unchanged(self):
+        api, report, retained = self.run_it(active=((2, None), (0, None)))
+        self.assertEqual((report["completed"], report["cleanup_verified"], report["handles_retained"],
+                          report["errors"], retained, native_acl.launch_defects(report)),
+                         (True, True, False, [], [], []))
+
+    def test_a_listing_handle_leak_reaches_the_consumer_and_main_as_an_unclean_failure(self):
+        _, leaked, _ = self.run_it(active=((2, None), (0, None)), leak=6)
+        with tempfile.TemporaryDirectory() as folder:
+            out = Path(folder) / "child.json"
+            out.write_text(json.dumps({"verdict": "DENIED"}), encoding="utf-8")
+            child, reasons = native_acl.child_evidence(leaked, out)
+        self.assertIn("handles_retained", reasons)
+        self.assertIn("launch_cleanup_unverified", reasons)
+        self.assertIn("launch_errors", reasons)
 
     def test_a_descendant_that_cannot_be_removed_fails_cleanup_and_keeps_the_job(self):
         _, report, retained = self.run_it(active=((1, None),))
@@ -1684,7 +2525,7 @@ class ChildEvidenceTests(unittest.TestCase):
             self.assertIs(native_acl.child_section_verified(
                 {"restoration_verified": restored, "evidence_complete": complete}), clean)
 
-    def run_main(self, child, **overrides):
+    def run_main(self, child, native=None, **overrides):
         from unittest import mock
         import contextlib
         import io
@@ -1695,7 +2536,7 @@ class ChildEvidenceTests(unittest.TestCase):
                                              "restoration_verified": True}}
         good.update(overrides)
         patches = [mock.patch.object(native_acl, "bootstrap_checkout"),
-                   mock.patch.object(native_acl, "WindowsNative"),
+                   mock.patch.object(native_acl, "WindowsNative", **({} if native is None else {"return_value": native})),
                    mock.patch.object(cutover, "_current_sid", return_value=MACHINE)]
         for name, section in (("candidate_matrix", "matrix"),
                               ("probe_actual_fence_shape", "actual_fence_shape"),
@@ -1722,6 +2563,20 @@ class ChildEvidenceTests(unittest.TestCase):
                 raise body
             return body
         return produce
+
+    def test_main_is_unclean_when_a_token_handle_could_not_be_closed(self):
+        complete = {"restoration_verified": True, "evidence_complete": True, "not_run": []}
+        code, report = self.run_main(complete, native=modeled_native())
+        self.assertEqual((code, report["cleanup_verified"]), (0, True))
+        self.assertNotIn("token_close_failures", report)
+        native = modeled_native(unclosable=[102])
+        with native.impersonation_token(True):
+            pass
+        code, report = self.run_main(complete, native=native)
+        self.assertEqual((code, report["cleanup_verified"]), (1, False))
+        self.assertEqual(report["token_close_failures"],
+                         [{"api": "CloseHandle:token", "path": "impersonation_token", "code": 6}])
+        self.assertEqual(report["completed_stages"][-1], "restricted_primary_child")
 
     def test_main_exit_and_json_follow_the_restricted_primary_section_at_runtime(self):
         complete = {"restoration_verified": True, "evidence_complete": True, "not_run": []}
@@ -1765,6 +2620,28 @@ class ChildEvidenceTests(unittest.TestCase):
                 self.assertEqual(report["restricted_primary_child"].get("error"), None, report)
                 self.assertFalse(report["restricted_primary_child"]["evidence_complete"])
                 self.assertIn(reason, report["restricted_primary_child"]["not_run"])
+
+    def test_main_is_unclean_when_the_launch_lost_ownership_of_a_listing_handle(self):
+        real_section = native_acl.restricted_primary_child_report
+        api = FakeProcessApi(active=((2, None), (0, None)), leak=6)
+        leaked, retained = native_acl.run_contained(api, 5.0, grace_ms=300)
+        self.assertEqual(retained, [900])
+
+        class Launcher(FakeNative):
+            def __init__(self):
+                super().__init__(dacl=PROTECTED)
+
+            def run_with_restricted_primary_token(self, argv, cwd, timeout=900.0):
+                Path(argv[-1]).write_text(json.dumps(ChildEvidenceTests.GOOD), encoding="utf-8")
+                return dict(leaked)
+
+        def section(native, make_directory, sid, stabilize, hold=None):
+            return real_section(Launcher(), make_directory, sid, lambda path: None, hold=hold)
+        code, report = self.run_main(section)
+        child = report["restricted_primary_child"]
+        self.assertEqual((code, report["cleanup_verified"], child["evidence_complete"]), (1, False, False))
+        self.assertIn("handles_retained", child["not_run"])
+        self.assertIn("launch_cleanup_unverified", child["not_run"])
 
     def test_main_keeps_the_fixture_root_while_a_child_may_still_run(self):
         roots = []
@@ -1850,6 +2727,50 @@ class ChildEvidenceTests(unittest.TestCase):
                     self.assertEqual(report["completed_stages"][-1], "restricted_primary_child")
                     self.assertNotIn("fixture_retained", report)
                     self.assertNotIn("refused", json.dumps(report))
+
+    def test_main_is_unclean_for_each_control_flag_drift_on_each_unprotected_fixture(self):
+        for label in LABELS[:2]:
+            for kind in CONTROL_DRIFTS:
+                with self.subTest(label=label, kind=kind):
+                    code, report = self.installation_through_main(ControlDriftNative(label, kind))
+                    section = report["installation_observation"]
+                    self.assertEqual((code, report["cleanup_verified"]), (1, False))
+                    self.assertEqual((section["restoration_verified"], section["restoration_unverified"],
+                                      section["auto_inherit_flag_only"]), (False, [label], [label]))
+                    self.assertEqual((section[label]["restoration_exact"], section[label]["restoration_verified"],
+                                      section[label]["restored"]["auto_inherit_flag_only"]), (False, False, True))
+                    self.assertIs(section["stabilized_install_and_restoration_exact"], True)
+                    self.assertIn("installation_observation", report["completed_stages"])
+                    self.assertEqual(report["completed_stages"][-1], "restricted_primary_child")
+                    self.assertNotIn("error", section)
+
+    def test_main_is_unclean_for_a_flag_drift_on_the_stabilized_fixture(self):
+        code, report = self.installation_through_main(AutoInheritMarkingNative(
+            marks=(STABILIZED,), starts={LABELS[0]: AutoInheritMarkingNative.UNMARKED,
+                                         LABELS[1]: AutoInheritMarkingNative.UNMARKED,
+                                         STABILIZED: "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)"}))
+        self.assertEqual((code, report["cleanup_verified"]), (1, False))
+        self.assertEqual(report["installation_observation"]["restoration_unverified"], [STABILIZED])
+
+    def test_main_is_clean_for_an_exact_restoration_of_every_control_flag_shape(self):
+        for kind in CONTROL_DRIFTS:
+            with self.subTest(kind=kind):
+                code, report = self.installation_through_main(ControlDriftNative(None, kind))
+                section = report["installation_observation"]
+                self.assertEqual((code, report["cleanup_verified"]), (0, True))
+                self.assertEqual((section["restoration_verified"], section["auto_inherit_flag_only"]), (True, []))
+
+    def test_main_is_unclean_for_each_ace_owner_protection_failure_and_exception_beside_flag_drift(self):
+        for label in LABELS[:2]:
+            for how in RESTORATION_FAILURES:
+                with self.subTest(label=label, how=how):
+                    code, report = self.installation_through_main(AutoInheritMarkingNative(bad=(label,), how=how))
+                    section = report["installation_observation"]
+                    self.assertEqual((code, report["cleanup_verified"]), (1, False))
+                    other = LABELS[1 - LABELS.index(label)]
+                    self.assertEqual((section["restoration_unverified"], section["auto_inherit_flag_only"]),
+                                     (list(LABELS[:2]), [other]))
+                    self.assertIs(section[label]["restoration_verified"], False)
 
     def test_main_stays_clean_for_an_inexact_unprotected_installation_that_was_restored(self):
         code, report = self.installation_through_main(PerFixtureNative(inexact=LABELS[:2]))
@@ -2293,6 +3214,38 @@ class NativeDescriptorTests(unittest.TestCase):
                           launch["cleanup_verified"], launch["job_active_processes"],
                           launch["child_stopped"]),
                          (0, True, False, True, 0, True), launch)
+        census = launch["post_exit_census"]
+        self.assertEqual((census["waited_ms"], census["drained_without_termination"]),
+                         (native_acl.POST_EXIT_SETTLE_MS, False), launch)
+        self.assertIsNotNone(census["members_before_termination"], launch)
+
+    def test_a_descendant_that_exits_by_itself_soon_after_the_child_is_a_natural_completion(self):
+        # The child leaves only after the descendant has written its marker, and the descendant
+        # then lives three seconds, inside the five-second settle: the first census is therefore
+        # necessarily nonempty and the job can only drain by itself.
+        marker = Path(self.temp.name) / "descendant-started"
+        descendant = ("import pathlib, sys, time; pathlib.Path(sys.argv[1]).write_text('x'); time.sleep(3)")
+        code = ("import pathlib, subprocess, sys, time\n"
+                "marker = pathlib.Path(sys.argv[1])\n"
+                "subprocess.Popen([sys.executable, '-c', sys.argv[2], str(marker)])\n"
+                "end = time.monotonic() + 30\n"
+                "while not marker.exists() and time.monotonic() < end:\n"
+                "    time.sleep(0.05)\n"
+                "sys.exit(0 if marker.exists() else 3)\n")
+        launch = self.hold.launch(
+            self.native, [sys.executable, "-c", code, str(marker), descendant], Path(self.temp.name), timeout=60)
+        self.assertEqual(native_acl.launch_defects(launch), [], launch)
+        self.assertEqual((launch["exit_code"], launch["descendants_terminated"], launch["terminated"],
+                          launch["completed"], launch["cleanup_verified"], launch["job_active_processes"],
+                          launch["child_stopped"]), (0, False, False, True, True, 0, True), launch)
+        census = launch["post_exit_census"]
+        self.assertTrue(marker.exists(), launch)
+        self.assertGreaterEqual(census["initial_active"], 1, launch)
+        self.assertGreater(census["waited_ms"], 0, launch)
+        self.assertLess(census["waited_ms"], native_acl.POST_EXIT_SETTLE_MS, launch)
+        self.assertIs(census["drained_without_termination"], True, launch)
+        self.assertIsNotNone(census["members_first"], launch)
+        self.assertIsNone(census["members_before_termination"], launch)
 
     def test_the_privilege_inventory_is_identical_after_a_scope_over_an_enabled_and_a_disabled_privilege(self):
         def state():
