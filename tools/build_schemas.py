@@ -2,9 +2,13 @@
 """Generate the checked-in standalone 2020-12 runtime schemas; no remote refs."""
 from __future__ import annotations
 import json
+import sys
 from copy import deepcopy
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
+# Generators import versioned runtime contracts from this checkout, not an
+# accidentally installed distribution or the caller's PYTHONPATH.
+sys.path.insert(0, str(ROOT))
 S = {"type":"string", "minLength":1}
 H = {"type":"string", "pattern":"^[0-9a-f]{64}$"}
 N = {"type":"integer", "minimum":0}
@@ -132,9 +136,11 @@ from local_semantic_schemas import extend as extend_local_semantic
 extend_local_semantic(SCHEMAS)
 from phase_schemas import extend as extend_phase
 extend_phase(SCHEMAS)
+from domain_schemas import extend as extend_domains
+extend_domains(SCHEMAS)
 
 EVENT=obj({"id":S,"run_id":S,"execution_mode":MODE,"sequence":{"type":"integer","minimum":1},
-           "stage":{"enum":["SOURCE","CLAIM","EVIDENCE","CANDIDATE","PACK","OBSERVATION","RESOLUTION","EVALUATION","QUALIFICATION","PLAN","RECEIPT","TRANSACTION","SCHEMA","SNAPSHOT","POLICY","RETRIEVAL"]},
+           "stage":{"enum":["SOURCE","CLAIM","EVIDENCE","CANDIDATE","PACK","OBSERVATION","RESOLUTION","EVALUATION","QUALIFICATION","PLAN","RECEIPT","TRANSACTION","SCHEMA","SNAPSHOT","POLICY","RETRIEVAL","DOMAIN_TAXONOMY","CLASSIFICATION"]},
            "created_at":T,"parent_ids":IDS,"previous_hash":nullable(H),"record_ids":arr(S,minimum=1,unique=True),
            "payload_hash":H,"hash":H})
 MANIFEST=obj({"run_id":S,"execution_mode":MODE,"security_scope":S,"profile":{"enum":["PARTIAL_ANALYSIS","FINALIZED_ANALYSIS","FINALIZED_PUBLISHED","HISTORICAL_REPLAY"]},

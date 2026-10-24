@@ -3,11 +3,13 @@ from copy import deepcopy
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 from trace_gc.compiler import compile_pack, validate_pack
 from trace_gc.demo import build_fixture, fixture_response, RUN, POLICY, SCOPE as PIPELINE_SCOPE
 from trace_gc.adapter import record_response
 from trace_gc.programs import question
 from trace_gc.errors import ContractError
+from trace_gc.retrieval.budget import BudgetMeter
 from trace_gc.retrieval.contracts import query, RetrievalBudget
 from trace_gc.retrieval.fixtures import corpus, demo_access, SCOPE
 from trace_gc.retrieval.service import HybridRetriever, GraphRAGQueryService, validate_context
@@ -98,15 +100,36 @@ class RetrievalSecurityTests(unittest.TestCase):
         self.r.set_access_policy(policy)
         _, _, body = self.ctx(self.request(strategies=["DECISION"], include_historical=True))
         self.assertFalse(any(i["kind"] == "HYPOTHESIS" for i in body["items"]))
-    def test_answer_citations_cannot_be_silently_removed(self):
+    def nonempty_answer(self):
+        # BudgetMeter binds its default clock when the class is defined, so the
+        # keyword default itself is replaced. A frozen clock removes host load
+        # from the original selection without changing any production limit.
+        calls = []
+        def frozen():
+            calls.append(1)
+            return 0.0
+        patcher = mock.patch.dict(BudgetMeter.__init__.__kwdefaults__, {"clock": frozen})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         answer = GraphRAGQueryService(self.r).query(self.request())
         body = answer["context"]
+        result = self.c.get(body["result_id"], "retrieval-result")
+        context = self.c.get(body["graph_context_id"], "graph-context")
+        lineage = self.c.get(result["lineage_id"], "retrieval-lineage")
+        detail = {"status": result["status"], "warnings": body["warnings"], "stop_reason": lineage["stop_reason"],
+                  "usage": result["usage"], "latency_ms": lineage["latency_ms"], "clock_calls": len(calls)}
+        self.assertTrue(calls, detail)
+        self.assertTrue(context["selected_evidence_ids"], detail)
+        self.assertEqual(sorted(x["evidence_id"] for x in body["citations"]), context["selected_evidence_ids"], detail)
+        self.assertNotIn("RETRIEVAL_BUDGET_EXHAUSTED", body["warnings"], detail)
+        return body
+    def test_answer_citations_cannot_be_silently_removed(self):
+        body = self.nonempty_answer()
         body["citations"] = []
         with self.assertRaisesRegex(ContractError, "PROVENANCE_MISMATCH"):
             validate_record(self.c, self.c.record(self.c.put("graphrag-answer", body)))
     def test_answer_source_identity_cannot_be_changed(self):
-        answer = GraphRAGQueryService(self.r).query(self.request())
-        body = answer["context"]
+        body = self.nonempty_answer()
         body["citations"][0]["source_id"] = "different-paper"
         with self.assertRaisesRegex(ContractError, "PROVENANCE_MISMATCH"):
             validate_record(self.c, self.c.record(self.c.put("graphrag-answer", body)))

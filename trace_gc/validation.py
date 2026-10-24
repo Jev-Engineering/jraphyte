@@ -20,6 +20,8 @@ def validate_bundle(bundle: dict[str,Any], *, trust: TrustStore | None=None,at: 
     m=bundle["manifest"];raw=bundle["records"]
     require(len(raw)==len({r["id"] for r in raw}),"DUPLICATE_ID","record IDs must be unique across all kinds")
     catalog=Catalog(raw)
+    from .domains import validate_catalog as validate_domains
+    validate_domains(catalog)
     require(m["record_hashes"]=={r["id"]:r["hash"] for r in raw},"GRAPH_MANIFEST","manifest must enumerate exact record hashes")
     sources={r["id"] for r in catalog.all("source")}
     require(set(m["source_status"])==sources,"SOURCE_STATUS_MISSING","source status must enumerate all included snapshots")
@@ -48,6 +50,8 @@ def validate_bundle(bundle: dict[str,Any], *, trust: TrustStore | None=None,at: 
         elif kind=="evidence":catalog.verify_evidence(r["id"])
         elif kind=="schema":validate_schema_contract(b["relations"])
         elif kind=="graph-snapshot":
+            from .domain_publication import verify_projection
+            verify_projection(catalog,b)
             require(catalog.hash(b["schema_id"])==b["schema_hash"],"SCHEMA_HASH",r["id"])
             validate_graph(b["nodes"],b["assertions"],catalog.get(b["schema_id"],"schema")["relations"])
         elif kind=="candidate":
@@ -98,6 +102,9 @@ def validate_bundle(bundle: dict[str,Any], *, trust: TrustStore | None=None,at: 
         verify_authorization(trust,receipts[tx["authorization_hash"]],plan,plans[0]["hash"],at=tx["committed_at"])
         trusted_preflight=receipts[tx["preflight_hash"]]
         trust.verify(trusted_preflight,"PREFLIGHT",at=tx["committed_at"])
+        from .domain_publication import verify_review_attribution
+        verify_review_attribution(catalog,plan,receipts[tx["authorization_hash"]]["payload"]["reviewed_by"],
+                                  at=tx["committed_at"],approval_issued_at=receipts[tx["authorization_hash"]]["issued_at"])
         require(trusted_preflight["payload"]["plan_hash"]==plans[0]["hash"] and
                 trusted_preflight["payload"]["checks"]=={x:True for x in sorted(REQUIRED_CHECKS)},"PREFLIGHT_FAILED","published check receipt differs")
         require(tx["upstream_head"] is not None and tx["upstream_head"] in {e["hash"] for e in bundle["ledger"]},"LEDGER_BINDING","atomic journal's provenance anchor is absent")

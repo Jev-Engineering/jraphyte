@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:trace-gc:0.3.0:classification-read-identity",
+  "title": "TRACE-GC classification-read-identity v0.3.0",
+  "type": "object",
+  "properties": {
+    "contract_version": {
+      "const": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "migrated": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "contract_version",
+    "revision",
+    "hash",
+    "migrated"
+  ],
+  "additionalProperties": false
+}

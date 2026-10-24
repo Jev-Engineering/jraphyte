@@ -73,7 +73,7 @@ def query(*, requesting_component: str, security_scope: str, focus_entities: lis
             "text": text, "focus_entities": sorted(set(focus_entities or [])), "focus_relationships": [],
             "target_information": [], "hop_limit": min(1, limits.maximum_hops), "allowed_relation_types": [],
             "excluded_relation_types": [], "temporal_scope": {"as_of": None, "valid_at": None, "before_source": None},
-            "graph_version": None, "ontology_scope": [], "source_scope": [], "community_scope": [],
+            "graph_version": None, "ontology_scope": [], "source_scope": [], "community_scope": [], "research_domain_scope": None,
             "include_provenance": True, "include_conflicts": True, "include_historical": False,
             "include_superseded": False, "retrieval_strategy": ["ENTITY", "NEIGHBORHOOD", "EVIDENCE", "CONFLICT"] if strategies is None else list(strategies),
             "ranking_strategy": "evidence-utility-v1", "mode": mode, "budget": limits.to_dict(),

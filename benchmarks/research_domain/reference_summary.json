@@ -1,0 +1,4292 @@
+{
+  "version": "research-domain-workloads-v1.1",
+  "status": "MEASURED_NOT_QUALIFIED",
+  "input_manifest": {
+    "data_kind": "SYNTHETIC",
+    "protocol_id": "research-domain-workloads-v1.1",
+    "corpus_hash": "3641e9ff2c6660977136563d60c388e3fcac2e49da30ddfa4a72d31f2bc1b998",
+    "labels_hash": "0995aa41c22da39adecde45e7c5cba51b086cbe56da874aad65ae944e04037b6",
+    "query_protocol_hash": "288b7d17ce8d76ddc51d6ccb71acf6e4e9454e7318f43562ec90678fad0b9abd",
+    "expected_query_rejections": {
+      "acl-scope-rejected": "SECURITY_SCOPE"
+    },
+    "label_origin": "FABRICATED_FIXTURE_NOT_INDEPENDENT",
+    "owner": null,
+    "slo": null,
+    "isolation_requirements": null,
+    "concurrency": {
+      "workers": 2,
+      "repetitions_per_worker": 3,
+      "kind": "same-process threads over immutable in-memory reference snapshots; not deployment-like concurrency"
+    }
+  },
+  "environment": {
+    "python": "3.13.13",
+    "platform": "Windows-11-10.0.26200-SP0"
+  },
+  "sample_count": 66,
+  "operations": {
+    "publication": {
+      "latency_ms": {
+        "count": 10,
+        "p50": 164.1065,
+        "p95": 951.8777,
+        "p99": 951.8777,
+        "maximum": 951.8777
+      },
+      "outcomes": {
+        "COMMITTED": 5,
+        "REPLAYED": 4,
+        "STALE_GRAPH_VERSION": 1
+      }
+    },
+    "query:rejected": {
+      "latency_ms": {
+        "count": 1,
+        "p50": 8.3338,
+        "p95": 8.3338,
+        "p99": 8.3338,
+        "maximum": 8.3338
+      },
+      "outcomes": {
+        "SECURITY_SCOPE": 1
+      }
+    },
+    "query:scoped:COMMUNITY": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 188.3346,
+        "p95": 344.8862,
+        "p99": 344.8862,
+        "maximum": 344.8862
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    },
+    "query:scoped:LEXICAL": {
+      "latency_ms": {
+        "count": 13,
+        "p50": 161.0016,
+        "p95": 227.7879,
+        "p99": 227.7879,
+        "maximum": 227.7879
+      },
+      "outcomes": {
+        "COMPLETE": 10,
+        "EMPTY": 3
+      }
+    },
+    "query:scoped:PATH": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 117.2765,
+        "p95": 266.792,
+        "p99": 266.792,
+        "maximum": 266.792
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    },
+    "query:scoped:VECTOR": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 196.6322,
+        "p95": 309.5393,
+        "p99": 309.5393,
+        "maximum": 309.5393
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    },
+    "query:unscoped:COMMUNITY": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 128.6413,
+        "p95": 402.4169,
+        "p99": 402.4169,
+        "maximum": 402.4169
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    },
+    "query:unscoped:LEXICAL": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 134.9018,
+        "p95": 233.8361,
+        "p99": 233.8361,
+        "maximum": 233.8361
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    },
+    "query:unscoped:PATH": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 169.3835,
+        "p95": 331.858,
+        "p99": 331.858,
+        "maximum": 331.858
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    },
+    "query:unscoped:VECTOR": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 125.5608,
+        "p95": 318.9434,
+        "p99": 318.9434,
+        "maximum": 318.9434
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    }
+  },
+  "query_latency_ms": {
+    "count": 56,
+    "p50": 162.9726,
+    "p95": 331.858,
+    "p99": 402.4169,
+    "maximum": 402.4169
+  },
+  "query_outcomes": {
+    "completed": 55,
+    "rejected_or_error": 1
+  },
+  "telemetry_coverage": {
+    "queries": 56,
+    "measured_queries": 56,
+    "unmeasured_queries": 0
+  },
+  "publication_latency_ms": {
+    "count": 10,
+    "p50": 164.1065,
+    "p95": 951.8777,
+    "p99": 951.8777,
+    "maximum": 951.8777
+  },
+  "committed_publication_latency_ms": {
+    "count": 5,
+    "p50": 164.1065,
+    "p95": 770.6817,
+    "p99": 770.6817,
+    "maximum": 770.6817
+  },
+  "acl_elapsed_ms": {
+    "count": 56,
+    "p50": 6.4744,
+    "p95": 43.8045,
+    "p99": 103.5816,
+    "maximum": 103.5816
+  },
+  "index_validation_ms": {
+    "count": 7,
+    "p50": 1.1439999798312783,
+    "p95": 1.6801999881863594,
+    "p99": 1.6801999881863594,
+    "maximum": 1.6801999881863594
+  },
+  "authority_audit_ms": {
+    "count": 7,
+    "p50": 88.34729995578527,
+    "p95": 135.42609999421984,
+    "p99": 135.42609999421984,
+    "maximum": 135.42609999421984
+  },
+  "cache": {
+    "hits": 3,
+    "misses": 52,
+    "invalidations": 3,
+    "evictions": 40
+  },
+  "domain_hops": {
+    "community:disjoint_domain_transitions": 6,
+    "community:membership_changing_transitions": 24,
+    "community:transitions": 60,
+    "path:disjoint_domain_transitions": 6,
+    "path:membership_changing_transitions": 24,
+    "path:transitions": 24,
+    "required_closure:disjoint_domain_transitions": 216,
+    "required_closure:membership_changing_transitions": 216,
+    "required_closure:transitions": 360
+  },
+  "quality": {
+    "unscoped": {
+      "queries": 24,
+      "labeled_queries": 12,
+      "mean_evidence_recall": 0.5,
+      "missed_contradiction_pairs": 12,
+      "forbidden_sources_returned": 0
+    },
+    "scoped": {
+      "queries": 31,
+      "labeled_queries": 16,
+      "mean_evidence_recall": 1.0,
+      "missed_contradiction_pairs": 0,
+      "forbidden_sources_returned": 0
+    }
+  },
+  "paired_comparison": {
+    "community": {
+      "unscoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 128.6413,
+          "p95": 402.4169,
+          "p99": 402.4169,
+          "maximum": 402.4169
+        },
+        "mean_evidence_recall": null,
+        "missed_contradiction_pairs": 0
+      },
+      "scoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 188.3346,
+          "p95": 344.8862,
+          "p99": 344.8862,
+          "maximum": 344.8862
+        },
+        "mean_evidence_recall": null,
+        "missed_contradiction_pairs": 0
+      }
+    },
+    "lexical-conflict": {
+      "unscoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 134.9018,
+          "p95": 233.8361,
+          "p99": 233.8361,
+          "maximum": 233.8361
+        },
+        "mean_evidence_recall": 0.5,
+        "missed_contradiction_pairs": 6
+      },
+      "scoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 102.363,
+          "p95": 202.8144,
+          "p99": 202.8144,
+          "maximum": 202.8144
+        },
+        "mean_evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0
+      }
+    },
+    "path": {
+      "unscoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 169.3835,
+          "p95": 331.858,
+          "p99": 331.858,
+          "maximum": 331.858
+        },
+        "mean_evidence_recall": null,
+        "missed_contradiction_pairs": 0
+      },
+      "scoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 117.2765,
+          "p95": 266.792,
+          "p99": 266.792,
+          "maximum": 266.792
+        },
+        "mean_evidence_recall": null,
+        "missed_contradiction_pairs": 0
+      }
+    },
+    "vector-conflict": {
+      "unscoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 125.5608,
+          "p95": 318.9434,
+          "p99": 318.9434,
+          "maximum": 318.9434
+        },
+        "mean_evidence_recall": 0.5,
+        "missed_contradiction_pairs": 6
+      },
+      "scoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 196.6322,
+          "p95": 309.5393,
+          "p99": 309.5393,
+          "maximum": 309.5393
+        },
+        "mean_evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0
+      }
+    }
+  },
+  "writes": {
+    "committed": 5,
+    "cross_domain_batches": 3,
+    "cross_domain_batch_rate": 0.6,
+    "replayed": 4,
+    "rejected": 1
+  },
+  "qualification": {
+    "representativeness": "NOT_ESTABLISHED",
+    "independent_labels": "NOT_ESTABLISHED",
+    "deployment_slos": "NOT_EVALUATED",
+    "storage_decision_owner": "NOT_SELECTED",
+    "production_backend": "NOT_QUALIFIED"
+  },
+  "limitations": [
+    "No synthetic node count or latency threshold authorizes physical sharding.",
+    "Nearest-rank quantiles have no statistical confidence claim; inspect sample counts.",
+    "ACL/cache/traversal costs include recorded rejections and operational errors; quality excludes them.",
+    "Missing telemetry on imported legacy rows is reported as unmeasured, not imputed as zero cost.",
+    "Cross-domain hops count executed path/community/required-closure transitions, including revalidation; not network RPCs.",
+    "Write latency excludes caller plan preparation/signing and includes trusted publish validation/commit.",
+    "Hash-bound representative-candidate metadata is not an approval or independent qualification."
+  ],
+  "samples": [
+    {
+      "kind": "QUERY",
+      "case_id": "lexical-conflict:unscoped",
+      "pair_id": "lexical-conflict",
+      "operation": "query:unscoped:LEXICAL",
+      "request_hash": "8cca18c8dab637f5b347e95c9c35f083212da1bc6454aab157fa6c288feaca3e",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 181.3456,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 124,
+          "edge": 24,
+          "evidence": 39,
+          "require_scope": 2,
+          "source": 40
+        },
+        "acl_elapsed_ms": 18.6792,
+        "domain_hops": {},
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 0
+      },
+      "quality": {
+        "evidence_recall": 0.5,
+        "missed_contradiction_pairs": 1,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 27,
+        "candidates": 1,
+        "nodes": 0,
+        "edges": 0,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 1,
+        "tokens": 1087,
+        "graph_queries": 1,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 0,
+      "selected_source_count": 1,
+      "context_hash": "cb69ea53eaab6c141b84194038d41d0c5521d9624de392621299ae215026a793"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "lexical-conflict:scoped",
+      "pair_id": "lexical-conflict",
+      "operation": "query:scoped:LEXICAL",
+      "request_hash": "efebebf4680380ab2447712d61a7452906a8c18b9517280641fa27a9eeb89cc1",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 42.1299,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 250,
+          "edge": 46,
+          "evidence": 74,
+          "require_scope": 2,
+          "source": 100
+        },
+        "acl_elapsed_ms": 7.4922,
+        "domain_hops": {
+          "required_closure:disjoint_domain_transitions": 10,
+          "required_closure:membership_changing_transitions": 10,
+          "required_closure:transitions": 14
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 0
+      },
+      "quality": {
+        "evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 92,
+        "candidates": 1,
+        "nodes": 3,
+        "edges": 2,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 2,
+        "tokens": 3032,
+        "graph_queries": 1,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 2,
+      "selected_source_count": 2,
+      "context_hash": "744e7fd8fc2b351d85ae32afb19784d15ef9cfd40ba712029a2013910e5d9937"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "lexical-conflict:unscoped",
+      "pair_id": "lexical-conflict",
+      "operation": "query:unscoped:LEXICAL",
+      "request_hash": "8cca18c8dab637f5b347e95c9c35f083212da1bc6454aab157fa6c288feaca3e",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 233.8361,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 124,
+          "edge": 24,
+          "evidence": 39,
+          "require_scope": 2,
+          "source": 40
+        },
+        "acl_elapsed_ms": 34.2441,
+        "domain_hops": {},
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 0
+      },
+      "quality": {
+        "evidence_recall": 0.5,
+        "missed_contradiction_pairs": 1,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 27,
+        "candidates": 1,
+        "nodes": 0,
+        "edges": 0,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 1,
+        "tokens": 1087,
+        "graph_queries": 1,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 0,
+      "selected_source_count": 1,
+      "context_hash": "64305533b707bef32c8735ae6696b579d1726e525baf9456b7f0015689bcaa1c"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "lexical-conflict:scoped",
+      "pair_id": "lexical-conflict",
+      "operation": "query:scoped:LEXICAL",
+      "request_hash": "efebebf4680380ab2447712d61a7452906a8c18b9517280641fa27a9eeb89cc1",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 41.1384,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 250,
+          "edge": 46,
+          "evidence": 74,
+          "require_scope": 2,
+          "source": 100
+        },
+        "acl_elapsed_ms": 6.2973,
+        "domain_hops": {
+          "required_closure:disjoint_domain_transitions": 10,
+          "required_closure:membership_changing_transitions": 10,
+          "required_closure:transitions": 14
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 0
+      },
+      "quality": {
+        "evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 92,
+        "candidates": 1,
+        "nodes": 3,
+        "edges": 2,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 2,
+        "tokens": 3032,
+        "graph_queries": 1,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 2,
+      "selected_source_count": 2,
+      "context_hash": "b5047463819ce1e33a2df28a5a06acbf0731a0cf68e746bae983d8ba29194b13"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "vector-conflict:unscoped",
+      "pair_id": "vector-conflict",
+      "operation": "query:unscoped:VECTOR",
+      "request_hash": "e6f063dfc7c6fe90df1384a3825a346023c27308d3c16d128d815d7a16b25781",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 40.9421,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 4,
+          "allows": 136,
+          "edge": 24,
+          "evidence": 39,
+          "require_scope": 2,
+          "source": 52
+        },
+        "acl_elapsed_ms": 6.3549,
+        "domain_hops": {},
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 0
+      },
+      "quality": {
+        "evidence_recall": 0.5,
+        "missed_contradiction_pairs": 1,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 39,
+        "candidates": 1,
+        "nodes": 0,
+        "edges": 0,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 1,
+        "tokens": 1087,
+        "graph_queries": 1,
+        "vector_queries": 1
+      },
+      "selected_assertion_count": 0,
+      "selected_source_count": 1,
+      "context_hash": "ea749ae2d20e0664ebc4ae14b28ba88473a2e2248a135a35b061bca09b4b3310"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "vector-conflict:unscoped",
+      "pair_id": "vector-conflict",
+      "operation": "query:unscoped:VECTOR",
+      "request_hash": "e6f063dfc7c6fe90df1384a3825a346023c27308d3c16d128d815d7a16b25781",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 136.8309,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 4,
+          "allows": 136,
+          "edge": 24,
+          "evidence": 39,
+          "require_scope": 2,
+          "source": 52
+        },
+        "acl_elapsed_ms": 6.4744,
+        "domain_hops": {},
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 0
+      },
+      "quality": {
+        "evidence_recall": 0.5,
+        "missed_contradiction_pairs": 1,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 39,
+        "candidates": 1,
+        "nodes": 0,
+        "edges": 0,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 1,
+        "tokens": 1087,
+        "graph_queries": 1,
+        "vector_queries": 1
+      },
+      "selected_assertion_count": 0,
+      "selected_source_count": 1,
+      "context_hash": "7269ca766ed15fa2e18a289bb6f0e2040e42118ecd1fc7e83d7267f31847eb2e"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "vector-conflict:scoped",
+      "pair_id": "vector-conflict",
+      "operation": "query:scoped:VECTOR",
+      "request_hash": "d0cf203ada365d3ff033de4350a95bb5baa1c74ef8eac3de622bc47ad4a0de9d",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 78.1197,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 4,
+          "allows": 255,
+          "edge": 46,
+          "evidence": 74,
+          "require_scope": 2,
+          "source": 105
+        },
+        "acl_elapsed_ms": 7.8354,
+        "domain_hops": {
+          "required_closure:disjoint_domain_transitions": 10,
+          "required_closure:membership_changing_transitions": 10,
+          "required_closure:transitions": 14
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 0
+      },
+      "quality": {
+        "evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 97,
+        "candidates": 1,
+        "nodes": 3,
+        "edges": 2,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 2,
+        "tokens": 3032,
+        "graph_queries": 1,
+        "vector_queries": 1
+      },
+      "selected_assertion_count": 2,
+      "selected_source_count": 2,
+      "context_hash": "7dd36096b51fbbd269b180181bada0fde017c4c556c8a5bf8f8e25e72ab95c9c"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "path:unscoped",
+      "pair_id": "path",
+      "operation": "query:unscoped:PATH",
+      "request_hash": "e14e29efdf0788d63c9a1876d47d11db6623ca0c4a3bdbd7d3abde20260062f5",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 82.652,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 139,
+          "edge": 30,
+          "evidence": 30,
+          "require_scope": 2,
+          "source": 34
+        },
+        "acl_elapsed_ms": 4.6227,
+        "domain_hops": {
+          "path:disjoint_domain_transitions": 1,
+          "path:membership_changing_transitions": 3,
+          "path:transitions": 3
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 50,
+        "candidates": 3,
+        "nodes": 3,
+        "edges": 4,
+        "paths": 3,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 4,
+        "tokens": 4911,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 4,
+      "selected_source_count": 4,
+      "context_hash": "6fcc40190073deffe2c7c69583ae7a814bb2adfaf6ad2166afbf01a9cba778fb"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "path:scoped",
+      "pair_id": "path",
+      "operation": "query:scoped:PATH",
+      "request_hash": "c16101ff52e0ed3ae4f37ae59f265a8d8d93d7a8c9b6e5d0f3eb357d2d0dc1e5",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 60.104,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 235,
+          "edge": 48,
+          "evidence": 48,
+          "require_scope": 2,
+          "source": 75
+        },
+        "acl_elapsed_ms": 5.1225,
+        "domain_hops": {
+          "path:membership_changing_transitions": 1,
+          "path:transitions": 1,
+          "required_closure:disjoint_domain_transitions": 8,
+          "required_closure:membership_changing_transitions": 8,
+          "required_closure:transitions": 16
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 98,
+        "candidates": 1,
+        "nodes": 4,
+        "edges": 3,
+        "paths": 1,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 3,
+        "tokens": 3378,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 3,
+      "selected_source_count": 3,
+      "context_hash": "9884efb40b8509babf812d7d64817a8f112d5a22bd379ee95f2d3b424f5792e2"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "vector-conflict:scoped",
+      "pair_id": "vector-conflict",
+      "operation": "query:scoped:VECTOR",
+      "request_hash": "d0cf203ada365d3ff033de4350a95bb5baa1c74ef8eac3de622bc47ad4a0de9d",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 196.6322,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 4,
+          "allows": 255,
+          "edge": 46,
+          "evidence": 74,
+          "require_scope": 2,
+          "source": 105
+        },
+        "acl_elapsed_ms": 38.9075,
+        "domain_hops": {
+          "required_closure:disjoint_domain_transitions": 10,
+          "required_closure:membership_changing_transitions": 10,
+          "required_closure:transitions": 14
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 0
+      },
+      "quality": {
+        "evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 97,
+        "candidates": 1,
+        "nodes": 3,
+        "edges": 2,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 2,
+        "tokens": 3032,
+        "graph_queries": 1,
+        "vector_queries": 1
+      },
+      "selected_assertion_count": 2,
+      "selected_source_count": 2,
+      "context_hash": "153b6d56518dff7d17d723c6edd952d7abfac197323a9c44f8ef15c2594f5e0c"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "community:unscoped",
+      "pair_id": "community",
+      "operation": "query:unscoped:COMMUNITY",
+      "request_hash": "6ec69fbd326ea98b27996ab0e9d1ab66b85557de160c7991bfdc0474bbde7766",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 102.6812,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 164,
+          "edge": 36,
+          "evidence": 36,
+          "require_scope": 2,
+          "source": 41
+        },
+        "acl_elapsed_ms": 36.3842,
+        "domain_hops": {
+          "community:disjoint_domain_transitions": 1,
+          "community:membership_changing_transitions": 3,
+          "community:transitions": 6
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 43,
+        "candidates": 1,
+        "nodes": 4,
+        "edges": 5,
+        "paths": 0,
+        "communities": 1,
+        "decisions": 0,
+        "source_spans": 5,
+        "tokens": 3094,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 5,
+      "selected_source_count": 5,
+      "context_hash": "070d208957a53d2ec83bf1b4d7cd4223801d323dc86440f30e028c867a609e38"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "path:unscoped",
+      "pair_id": "path",
+      "operation": "query:unscoped:PATH",
+      "request_hash": "e14e29efdf0788d63c9a1876d47d11db6623ca0c4a3bdbd7d3abde20260062f5",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 109.3002,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 139,
+          "edge": 30,
+          "evidence": 30,
+          "require_scope": 2,
+          "source": 34
+        },
+        "acl_elapsed_ms": 4.5164,
+        "domain_hops": {
+          "path:disjoint_domain_transitions": 1,
+          "path:membership_changing_transitions": 3,
+          "path:transitions": 3
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 50,
+        "candidates": 3,
+        "nodes": 3,
+        "edges": 4,
+        "paths": 3,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 4,
+        "tokens": 4911,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 4,
+      "selected_source_count": 4,
+      "context_hash": "9b3b8effb7ef7cdea07db1310e293ae450ae109ca210e193deb6626e37cb04d8"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "community:scoped",
+      "pair_id": "community",
+      "operation": "query:scoped:COMMUNITY",
+      "request_hash": "2420817d19db6e3265c636033e03156e012ef611ab0c626ae26920496da8fce0",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 112.187,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 259,
+          "edge": 54,
+          "evidence": 54,
+          "require_scope": 2,
+          "source": 81
+        },
+        "acl_elapsed_ms": 5.9458,
+        "domain_hops": {
+          "community:membership_changing_transitions": 1,
+          "community:transitions": 4,
+          "required_closure:disjoint_domain_transitions": 8,
+          "required_closure:membership_changing_transitions": 8,
+          "required_closure:transitions": 16
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 99,
+        "candidates": 1,
+        "nodes": 4,
+        "edges": 3,
+        "paths": 0,
+        "communities": 1,
+        "decisions": 0,
+        "source_spans": 3,
+        "tokens": 3275,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 3,
+      "selected_source_count": 3,
+      "context_hash": "a2c14e09103c66152ce8b9585b50afb289eb176962dc91a04c1f1e0c291c484c"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "path:scoped",
+      "pair_id": "path",
+      "operation": "query:scoped:PATH",
+      "request_hash": "c16101ff52e0ed3ae4f37ae59f265a8d8d93d7a8c9b6e5d0f3eb357d2d0dc1e5",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 117.2765,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 235,
+          "edge": 48,
+          "evidence": 48,
+          "require_scope": 2,
+          "source": 75
+        },
+        "acl_elapsed_ms": 6.6295,
+        "domain_hops": {
+          "path:membership_changing_transitions": 1,
+          "path:transitions": 1,
+          "required_closure:disjoint_domain_transitions": 8,
+          "required_closure:membership_changing_transitions": 8,
+          "required_closure:transitions": 16
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 98,
+        "candidates": 1,
+        "nodes": 4,
+        "edges": 3,
+        "paths": 1,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 3,
+        "tokens": 3378,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 3,
+      "selected_source_count": 3,
+      "context_hash": "eb3817b6d0054a9a3557735f9e6bf96345b9418d435f0f534f84f06e0e9b01ec"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "lexical-conflict:unscoped",
+      "pair_id": "lexical-conflict",
+      "operation": "query:unscoped:LEXICAL",
+      "request_hash": "8cca18c8dab637f5b347e95c9c35f083212da1bc6454aab157fa6c288feaca3e",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 109.4882,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 124,
+          "edge": 24,
+          "evidence": 39,
+          "require_scope": 2,
+          "source": 40
+        },
+        "acl_elapsed_ms": 48.3545,
+        "domain_hops": {},
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": 0.5,
+        "missed_contradiction_pairs": 1,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 27,
+        "candidates": 1,
+        "nodes": 0,
+        "edges": 0,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 1,
+        "tokens": 1087,
+        "graph_queries": 1,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 0,
+      "selected_source_count": 1,
+      "context_hash": "55c4eb48da05527f98da00be387c1fbc68f4ea55c42472b54d9b59a712761368"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "community:unscoped",
+      "pair_id": "community",
+      "operation": "query:unscoped:COMMUNITY",
+      "request_hash": "6ec69fbd326ea98b27996ab0e9d1ab66b85557de160c7991bfdc0474bbde7766",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 151.88,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 164,
+          "edge": 36,
+          "evidence": 36,
+          "require_scope": 2,
+          "source": 41
+        },
+        "acl_elapsed_ms": 5.3627,
+        "domain_hops": {
+          "community:disjoint_domain_transitions": 1,
+          "community:membership_changing_transitions": 3,
+          "community:transitions": 6
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 43,
+        "candidates": 1,
+        "nodes": 4,
+        "edges": 5,
+        "paths": 0,
+        "communities": 1,
+        "decisions": 0,
+        "source_spans": 5,
+        "tokens": 3094,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 5,
+      "selected_source_count": 5,
+      "context_hash": "c9afaaf926222d761d8cc39845965f9243baddf2be403c8603f9b2b704d23461"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "lexical-conflict:scoped",
+      "pair_id": "lexical-conflict",
+      "operation": "query:scoped:LEXICAL",
+      "request_hash": "efebebf4680380ab2447712d61a7452906a8c18b9517280641fa27a9eeb89cc1",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 102.363,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 250,
+          "edge": 46,
+          "evidence": 74,
+          "require_scope": 2,
+          "source": 100
+        },
+        "acl_elapsed_ms": 5.9528,
+        "domain_hops": {
+          "required_closure:disjoint_domain_transitions": 10,
+          "required_closure:membership_changing_transitions": 10,
+          "required_closure:transitions": 14
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 92,
+        "candidates": 1,
+        "nodes": 3,
+        "edges": 2,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 2,
+        "tokens": 3032,
+        "graph_queries": 1,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 2,
+      "selected_source_count": 2,
+      "context_hash": "23ed5076be373371f215811f9f6549bb07f038bdaa37cf8d253efffbd1dc9aaf"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "vector-conflict:unscoped",
+      "pair_id": "vector-conflict",
+      "operation": "query:unscoped:VECTOR",
+      "request_hash": "e6f063dfc7c6fe90df1384a3825a346023c27308d3c16d128d815d7a16b25781",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 125.5608,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 4,
+          "allows": 136,
+          "edge": 24,
+          "evidence": 39,
+          "require_scope": 2,
+          "source": 52
+        },
+        "acl_elapsed_ms": 5.777,
+        "domain_hops": {},
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": 0.5,
+        "missed_contradiction_pairs": 1,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 39,
+        "candidates": 1,
+        "nodes": 0,
+        "edges": 0,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 1,
+        "tokens": 1087,
+        "graph_queries": 1,
+        "vector_queries": 1
+      },
+      "selected_assertion_count": 0,
+      "selected_source_count": 1,
+      "context_hash": "7a76a496b8c18bc972bd29330a9d6a9f5f3198b6e3969c211b4c0372975d6da1"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "community:scoped",
+      "pair_id": "community",
+      "operation": "query:scoped:COMMUNITY",
+      "request_hash": "2420817d19db6e3265c636033e03156e012ef611ab0c626ae26920496da8fce0",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 178.4847,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 259,
+          "edge": 54,
+          "evidence": 54,
+          "require_scope": 2,
+          "source": 81
+        },
+        "acl_elapsed_ms": 5.6545,
+        "domain_hops": {
+          "community:membership_changing_transitions": 1,
+          "community:transitions": 4,
+          "required_closure:disjoint_domain_transitions": 8,
+          "required_closure:membership_changing_transitions": 8,
+          "required_closure:transitions": 16
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 99,
+        "candidates": 1,
+        "nodes": 4,
+        "edges": 3,
+        "paths": 0,
+        "communities": 1,
+        "decisions": 0,
+        "source_spans": 3,
+        "tokens": 3275,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 3,
+      "selected_source_count": 3,
+      "context_hash": "1df8e47e98e2dea8c1ea380b8cde1554746bdbc449f308a8ea5d1f7bd6557a09"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "lexical-conflict:unscoped",
+      "pair_id": "lexical-conflict",
+      "operation": "query:unscoped:LEXICAL",
+      "request_hash": "8cca18c8dab637f5b347e95c9c35f083212da1bc6454aab157fa6c288feaca3e",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 55.0952,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 124,
+          "edge": 24,
+          "evidence": 39,
+          "require_scope": 2,
+          "source": 40
+        },
+        "acl_elapsed_ms": 4.9216,
+        "domain_hops": {},
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": 0.5,
+        "missed_contradiction_pairs": 1,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 27,
+        "candidates": 1,
+        "nodes": 0,
+        "edges": 0,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 1,
+        "tokens": 1087,
+        "graph_queries": 1,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 0,
+      "selected_source_count": 1,
+      "context_hash": "e06a68f9cdff2f938f9a8a99f7cd5120afff0a0cbe166a3376a695cf3207e4b1"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "lexical-conflict:scoped",
+      "pair_id": "lexical-conflict",
+      "operation": "query:scoped:LEXICAL",
+      "request_hash": "efebebf4680380ab2447712d61a7452906a8c18b9517280641fa27a9eeb89cc1",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 123.1748,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 250,
+          "edge": 46,
+          "evidence": 74,
+          "require_scope": 2,
+          "source": 100
+        },
+        "acl_elapsed_ms": 22.5695,
+        "domain_hops": {
+          "required_closure:disjoint_domain_transitions": 10,
+          "required_closure:membership_changing_transitions": 10,
+          "required_closure:transitions": 14
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 92,
+        "candidates": 1,
+        "nodes": 3,
+        "edges": 2,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 2,
+        "tokens": 3032,
+        "graph_queries": 1,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 2,
+      "selected_source_count": 2,
+      "context_hash": "1211467487a1f43f0c9b8a84760716bb60f0f052e2e615a06a911b8ccb5c9680"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "vector-conflict:unscoped",
+      "pair_id": "vector-conflict",
+      "operation": "query:unscoped:VECTOR",
+      "request_hash": "e6f063dfc7c6fe90df1384a3825a346023c27308d3c16d128d815d7a16b25781",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 67.9382,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 4,
+          "allows": 136,
+          "edge": 24,
+          "evidence": 39,
+          "require_scope": 2,
+          "source": 52
+        },
+        "acl_elapsed_ms": 6.3046,
+        "domain_hops": {},
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": 0.5,
+        "missed_contradiction_pairs": 1,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 39,
+        "candidates": 1,
+        "nodes": 0,
+        "edges": 0,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 1,
+        "tokens": 1087,
+        "graph_queries": 1,
+        "vector_queries": 1
+      },
+      "selected_assertion_count": 0,
+      "selected_source_count": 1,
+      "context_hash": "627e4bac7b969a467117d0e1d5d1aaf88302b66220b9741340f832bac36b6af7"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "vector-conflict:scoped",
+      "pair_id": "vector-conflict",
+      "operation": "query:scoped:VECTOR",
+      "request_hash": "d0cf203ada365d3ff033de4350a95bb5baa1c74ef8eac3de622bc47ad4a0de9d",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 309.5393,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 4,
+          "allows": 255,
+          "edge": 46,
+          "evidence": 74,
+          "require_scope": 2,
+          "source": 105
+        },
+        "acl_elapsed_ms": 103.5816,
+        "domain_hops": {
+          "required_closure:disjoint_domain_transitions": 10,
+          "required_closure:membership_changing_transitions": 10,
+          "required_closure:transitions": 14
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 97,
+        "candidates": 1,
+        "nodes": 3,
+        "edges": 2,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 2,
+        "tokens": 3032,
+        "graph_queries": 1,
+        "vector_queries": 1
+      },
+      "selected_assertion_count": 2,
+      "selected_source_count": 2,
+      "context_hash": "96e69c2f8bb2b662819a9d7c9944b5af29b968794a83104f4a4fdbb5c5a246b2"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "vector-conflict:scoped",
+      "pair_id": "vector-conflict",
+      "operation": "query:scoped:VECTOR",
+      "request_hash": "d0cf203ada365d3ff033de4350a95bb5baa1c74ef8eac3de622bc47ad4a0de9d",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 130.212,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 4,
+          "allows": 255,
+          "edge": 46,
+          "evidence": 74,
+          "require_scope": 2,
+          "source": 105
+        },
+        "acl_elapsed_ms": 10.9784,
+        "domain_hops": {
+          "required_closure:disjoint_domain_transitions": 10,
+          "required_closure:membership_changing_transitions": 10,
+          "required_closure:transitions": 14
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 97,
+        "candidates": 1,
+        "nodes": 3,
+        "edges": 2,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 2,
+        "tokens": 3032,
+        "graph_queries": 1,
+        "vector_queries": 1
+      },
+      "selected_assertion_count": 2,
+      "selected_source_count": 2,
+      "context_hash": "4843b80ccdfdbdf01cbcc83f57f312dedb3b65116e294aacf251cf1c3cda9071"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "path:unscoped",
+      "pair_id": "path",
+      "operation": "query:unscoped:PATH",
+      "request_hash": "e14e29efdf0788d63c9a1876d47d11db6623ca0c4a3bdbd7d3abde20260062f5",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 169.3835,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 139,
+          "edge": 30,
+          "evidence": 30,
+          "require_scope": 2,
+          "source": 34
+        },
+        "acl_elapsed_ms": 4.8409,
+        "domain_hops": {
+          "path:disjoint_domain_transitions": 1,
+          "path:membership_changing_transitions": 3,
+          "path:transitions": 3
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 50,
+        "candidates": 3,
+        "nodes": 3,
+        "edges": 4,
+        "paths": 3,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 4,
+        "tokens": 4911,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 4,
+      "selected_source_count": 4,
+      "context_hash": "016af6419fe0c14eb0f3490648d091e8d280091812292ef6d8b210b93c93ab4a"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "path:scoped",
+      "pair_id": "path",
+      "operation": "query:scoped:PATH",
+      "request_hash": "c16101ff52e0ed3ae4f37ae59f265a8d8d93d7a8c9b6e5d0f3eb357d2d0dc1e5",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 103.5499,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 235,
+          "edge": 48,
+          "evidence": 48,
+          "require_scope": 2,
+          "source": 75
+        },
+        "acl_elapsed_ms": 5.4965,
+        "domain_hops": {
+          "path:membership_changing_transitions": 1,
+          "path:transitions": 1,
+          "required_closure:disjoint_domain_transitions": 8,
+          "required_closure:membership_changing_transitions": 8,
+          "required_closure:transitions": 16
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 98,
+        "candidates": 1,
+        "nodes": 4,
+        "edges": 3,
+        "paths": 1,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 3,
+        "tokens": 3378,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 3,
+      "selected_source_count": 3,
+      "context_hash": "9faaeae10fd06cdad94062dbb7e9fc97359a379c31c0841e03945b078f4f48fb"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "community:unscoped",
+      "pair_id": "community",
+      "operation": "query:unscoped:COMMUNITY",
+      "request_hash": "6ec69fbd326ea98b27996ab0e9d1ab66b85557de160c7991bfdc0474bbde7766",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 85.1607,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 164,
+          "edge": 36,
+          "evidence": 36,
+          "require_scope": 2,
+          "source": 41
+        },
+        "acl_elapsed_ms": 5.9318,
+        "domain_hops": {
+          "community:disjoint_domain_transitions": 1,
+          "community:membership_changing_transitions": 3,
+          "community:transitions": 6
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 43,
+        "candidates": 1,
+        "nodes": 4,
+        "edges": 5,
+        "paths": 0,
+        "communities": 1,
+        "decisions": 0,
+        "source_spans": 5,
+        "tokens": 3094,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 5,
+      "selected_source_count": 5,
+      "context_hash": "0b2b5d338493fd3825d2f8f03da52e5bad19cd38411ddfbd4ee2c60c64bc96a5"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "path:unscoped",
+      "pair_id": "path",
+      "operation": "query:unscoped:PATH",
+      "request_hash": "e14e29efdf0788d63c9a1876d47d11db6623ca0c4a3bdbd7d3abde20260062f5",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 331.858,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 139,
+          "edge": 30,
+          "evidence": 30,
+          "require_scope": 2,
+          "source": 34
+        },
+        "acl_elapsed_ms": 23.0781,
+        "domain_hops": {
+          "path:disjoint_domain_transitions": 1,
+          "path:membership_changing_transitions": 3,
+          "path:transitions": 3
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 50,
+        "candidates": 3,
+        "nodes": 3,
+        "edges": 4,
+        "paths": 3,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 4,
+        "tokens": 4911,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 4,
+      "selected_source_count": 4,
+      "context_hash": "3b714c6427b5f9d5436a152e4e83cba3c26eb78962d5145f7cfaa58aa5589ff3"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "community:scoped",
+      "pair_id": "community",
+      "operation": "query:scoped:COMMUNITY",
+      "request_hash": "2420817d19db6e3265c636033e03156e012ef611ab0c626ae26920496da8fce0",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 188.3346,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 259,
+          "edge": 54,
+          "evidence": 54,
+          "require_scope": 2,
+          "source": 81
+        },
+        "acl_elapsed_ms": 6.8243,
+        "domain_hops": {
+          "community:membership_changing_transitions": 1,
+          "community:transitions": 4,
+          "required_closure:disjoint_domain_transitions": 8,
+          "required_closure:membership_changing_transitions": 8,
+          "required_closure:transitions": 16
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 99,
+        "candidates": 1,
+        "nodes": 4,
+        "edges": 3,
+        "paths": 0,
+        "communities": 1,
+        "decisions": 0,
+        "source_spans": 3,
+        "tokens": 3275,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 3,
+      "selected_source_count": 3,
+      "context_hash": "deb4bc02d211a7d3c817b1996d373d1fe71ca37fddc4e98dde71b6522efcae6c"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "path:scoped",
+      "pair_id": "path",
+      "operation": "query:scoped:PATH",
+      "request_hash": "c16101ff52e0ed3ae4f37ae59f265a8d8d93d7a8c9b6e5d0f3eb357d2d0dc1e5",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 162.9726,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 235,
+          "edge": 48,
+          "evidence": 48,
+          "require_scope": 2,
+          "source": 75
+        },
+        "acl_elapsed_ms": 5.2755,
+        "domain_hops": {
+          "path:membership_changing_transitions": 1,
+          "path:transitions": 1,
+          "required_closure:disjoint_domain_transitions": 8,
+          "required_closure:membership_changing_transitions": 8,
+          "required_closure:transitions": 16
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 98,
+        "candidates": 1,
+        "nodes": 4,
+        "edges": 3,
+        "paths": 1,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 3,
+        "tokens": 3378,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 3,
+      "selected_source_count": 3,
+      "context_hash": "b9833fb28c1ae565b7c1c6aeb63223650e6a5485ea0215a883d0fcf16aac8b4f"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "community:unscoped",
+      "pair_id": "community",
+      "operation": "query:unscoped:COMMUNITY",
+      "request_hash": "6ec69fbd326ea98b27996ab0e9d1ab66b85557de160c7991bfdc0474bbde7766",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 128.6413,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 164,
+          "edge": 36,
+          "evidence": 36,
+          "require_scope": 2,
+          "source": 41
+        },
+        "acl_elapsed_ms": 38.2247,
+        "domain_hops": {
+          "community:disjoint_domain_transitions": 1,
+          "community:membership_changing_transitions": 3,
+          "community:transitions": 6
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 43,
+        "candidates": 1,
+        "nodes": 4,
+        "edges": 5,
+        "paths": 0,
+        "communities": 1,
+        "decisions": 0,
+        "source_spans": 5,
+        "tokens": 3094,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 5,
+      "selected_source_count": 5,
+      "context_hash": "2e7f8f5ebd94704a79e9f7fea845a07cc7d8dd93d1952c1bee23bc73b4624814"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "lexical-conflict:unscoped",
+      "pair_id": "lexical-conflict",
+      "operation": "query:unscoped:LEXICAL",
+      "request_hash": "8cca18c8dab637f5b347e95c9c35f083212da1bc6454aab157fa6c288feaca3e",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 196.4127,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 124,
+          "edge": 24,
+          "evidence": 39,
+          "require_scope": 2,
+          "source": 40
+        },
+        "acl_elapsed_ms": 5.7055,
+        "domain_hops": {},
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": 0.5,
+        "missed_contradiction_pairs": 1,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 27,
+        "candidates": 1,
+        "nodes": 0,
+        "edges": 0,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 1,
+        "tokens": 1087,
+        "graph_queries": 1,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 0,
+      "selected_source_count": 1,
+      "context_hash": "d6680be3135135f5289705193c91a0bc4c0c003938bfe187bde8c0dfe6888fe9"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "community:scoped",
+      "pair_id": "community",
+      "operation": "query:scoped:COMMUNITY",
+      "request_hash": "2420817d19db6e3265c636033e03156e012ef611ab0c626ae26920496da8fce0",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 205.5709,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 259,
+          "edge": 54,
+          "evidence": 54,
+          "require_scope": 2,
+          "source": 81
+        },
+        "acl_elapsed_ms": 6.0094,
+        "domain_hops": {
+          "community:membership_changing_transitions": 1,
+          "community:transitions": 4,
+          "required_closure:disjoint_domain_transitions": 8,
+          "required_closure:membership_changing_transitions": 8,
+          "required_closure:transitions": 16
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 99,
+        "candidates": 1,
+        "nodes": 4,
+        "edges": 3,
+        "paths": 0,
+        "communities": 1,
+        "decisions": 0,
+        "source_spans": 3,
+        "tokens": 3275,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 3,
+      "selected_source_count": 3,
+      "context_hash": "e6ad0eb51a2652ee295de6ffea58508b05752ef2538e3a7b9a16acd3f94afbfb"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "lexical-conflict:scoped",
+      "pair_id": "lexical-conflict",
+      "operation": "query:scoped:LEXICAL",
+      "request_hash": "efebebf4680380ab2447712d61a7452906a8c18b9517280641fa27a9eeb89cc1",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 202.8144,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 250,
+          "edge": 46,
+          "evidence": 74,
+          "require_scope": 2,
+          "source": 100
+        },
+        "acl_elapsed_ms": 27.228,
+        "domain_hops": {
+          "required_closure:disjoint_domain_transitions": 10,
+          "required_closure:membership_changing_transitions": 10,
+          "required_closure:transitions": 14
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 92,
+        "candidates": 1,
+        "nodes": 3,
+        "edges": 2,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 2,
+        "tokens": 3032,
+        "graph_queries": 1,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 2,
+      "selected_source_count": 2,
+      "context_hash": "b3c663085d1d75e849261df56e9f423c71fc00162be512924b7939e522f5acbe"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "lexical-conflict:unscoped",
+      "pair_id": "lexical-conflict",
+      "operation": "query:unscoped:LEXICAL",
+      "request_hash": "8cca18c8dab637f5b347e95c9c35f083212da1bc6454aab157fa6c288feaca3e",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 134.9018,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 124,
+          "edge": 24,
+          "evidence": 39,
+          "require_scope": 2,
+          "source": 40
+        },
+        "acl_elapsed_ms": 5.7871,
+        "domain_hops": {},
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": 0.5,
+        "missed_contradiction_pairs": 1,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 27,
+        "candidates": 1,
+        "nodes": 0,
+        "edges": 0,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 1,
+        "tokens": 1087,
+        "graph_queries": 1,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 0,
+      "selected_source_count": 1,
+      "context_hash": "f4ca2b18bc5ddae07432e54c48e70e1a6092fa5e895ddde8e0ae81dbac59dd47"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "vector-conflict:unscoped",
+      "pair_id": "vector-conflict",
+      "operation": "query:unscoped:VECTOR",
+      "request_hash": "e6f063dfc7c6fe90df1384a3825a346023c27308d3c16d128d815d7a16b25781",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 229.3119,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 4,
+          "allows": 136,
+          "edge": 24,
+          "evidence": 39,
+          "require_scope": 2,
+          "source": 52
+        },
+        "acl_elapsed_ms": 6.7154,
+        "domain_hops": {},
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": 0.5,
+        "missed_contradiction_pairs": 1,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 39,
+        "candidates": 1,
+        "nodes": 0,
+        "edges": 0,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 1,
+        "tokens": 1087,
+        "graph_queries": 1,
+        "vector_queries": 1
+      },
+      "selected_assertion_count": 0,
+      "selected_source_count": 1,
+      "context_hash": "e0153d4a00f461a723b4b32ce9af6e9e092801bc729ae06822c29faffc46a69d"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "lexical-conflict:scoped",
+      "pair_id": "lexical-conflict",
+      "operation": "query:scoped:LEXICAL",
+      "request_hash": "efebebf4680380ab2447712d61a7452906a8c18b9517280641fa27a9eeb89cc1",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 199.0345,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 250,
+          "edge": 46,
+          "evidence": 74,
+          "require_scope": 2,
+          "source": 100
+        },
+        "acl_elapsed_ms": 9.0723,
+        "domain_hops": {
+          "required_closure:disjoint_domain_transitions": 10,
+          "required_closure:membership_changing_transitions": 10,
+          "required_closure:transitions": 14
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 92,
+        "candidates": 1,
+        "nodes": 3,
+        "edges": 2,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 2,
+        "tokens": 3032,
+        "graph_queries": 1,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 2,
+      "selected_source_count": 2,
+      "context_hash": "cd333e1cc860c062ff6cd5a38ec771a8df4fc9d643dafbaaf4799d4addf2be10"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "vector-conflict:scoped",
+      "pair_id": "vector-conflict",
+      "operation": "query:scoped:VECTOR",
+      "request_hash": "d0cf203ada365d3ff033de4350a95bb5baa1c74ef8eac3de622bc47ad4a0de9d",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 228.5262,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 4,
+          "allows": 255,
+          "edge": 46,
+          "evidence": 74,
+          "require_scope": 2,
+          "source": 105
+        },
+        "acl_elapsed_ms": 8.9921,
+        "domain_hops": {
+          "required_closure:disjoint_domain_transitions": 10,
+          "required_closure:membership_changing_transitions": 10,
+          "required_closure:transitions": 14
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 97,
+        "candidates": 1,
+        "nodes": 3,
+        "edges": 2,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 2,
+        "tokens": 3032,
+        "graph_queries": 1,
+        "vector_queries": 1
+      },
+      "selected_assertion_count": 2,
+      "selected_source_count": 2,
+      "context_hash": "d90e46091c38a72ecc105bb3374a644ad93389329c7a5324635b42f83e4d60db"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "vector-conflict:unscoped",
+      "pair_id": "vector-conflict",
+      "operation": "query:unscoped:VECTOR",
+      "request_hash": "e6f063dfc7c6fe90df1384a3825a346023c27308d3c16d128d815d7a16b25781",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 318.9434,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 4,
+          "allows": 136,
+          "edge": 24,
+          "evidence": 39,
+          "require_scope": 2,
+          "source": 52
+        },
+        "acl_elapsed_ms": 7.8907,
+        "domain_hops": {},
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": 0.5,
+        "missed_contradiction_pairs": 1,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 39,
+        "candidates": 1,
+        "nodes": 0,
+        "edges": 0,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 1,
+        "tokens": 1087,
+        "graph_queries": 1,
+        "vector_queries": 1
+      },
+      "selected_assertion_count": 0,
+      "selected_source_count": 1,
+      "context_hash": "d0da3886d65036336398309c55f4bb81300a0191c5575aec50634650bf7a64ad"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "path:unscoped",
+      "pair_id": "path",
+      "operation": "query:unscoped:PATH",
+      "request_hash": "e14e29efdf0788d63c9a1876d47d11db6623ca0c4a3bdbd7d3abde20260062f5",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 262.5854,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 139,
+          "edge": 30,
+          "evidence": 30,
+          "require_scope": 2,
+          "source": 34
+        },
+        "acl_elapsed_ms": 6.6024,
+        "domain_hops": {
+          "path:disjoint_domain_transitions": 1,
+          "path:membership_changing_transitions": 3,
+          "path:transitions": 3
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 50,
+        "candidates": 3,
+        "nodes": 3,
+        "edges": 4,
+        "paths": 3,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 4,
+        "tokens": 4911,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 4,
+      "selected_source_count": 4,
+      "context_hash": "85c11bf17d3239059e05bb9098dcd4fb8ed5e6c69e0122adb77a5aede98c2981"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "vector-conflict:scoped",
+      "pair_id": "vector-conflict",
+      "operation": "query:scoped:VECTOR",
+      "request_hash": "d0cf203ada365d3ff033de4350a95bb5baa1c74ef8eac3de622bc47ad4a0de9d",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 212.87,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 4,
+          "allows": 255,
+          "edge": 46,
+          "evidence": 74,
+          "require_scope": 2,
+          "source": 105
+        },
+        "acl_elapsed_ms": 25.6361,
+        "domain_hops": {
+          "required_closure:disjoint_domain_transitions": 10,
+          "required_closure:membership_changing_transitions": 10,
+          "required_closure:transitions": 14
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 97,
+        "candidates": 1,
+        "nodes": 3,
+        "edges": 2,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 2,
+        "tokens": 3032,
+        "graph_queries": 1,
+        "vector_queries": 1
+      },
+      "selected_assertion_count": 2,
+      "selected_source_count": 2,
+      "context_hash": "43ec40a960e7814fe97cf8f310c3ca1ad0acdd64e09e88257995801a93988a03"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "path:scoped",
+      "pair_id": "path",
+      "operation": "query:scoped:PATH",
+      "request_hash": "c16101ff52e0ed3ae4f37ae59f265a8d8d93d7a8c9b6e5d0f3eb357d2d0dc1e5",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 266.792,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 235,
+          "edge": 48,
+          "evidence": 48,
+          "require_scope": 2,
+          "source": 75
+        },
+        "acl_elapsed_ms": 9.2511,
+        "domain_hops": {
+          "path:membership_changing_transitions": 1,
+          "path:transitions": 1,
+          "required_closure:disjoint_domain_transitions": 8,
+          "required_closure:membership_changing_transitions": 8,
+          "required_closure:transitions": 16
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 98,
+        "candidates": 1,
+        "nodes": 4,
+        "edges": 3,
+        "paths": 1,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 3,
+        "tokens": 3378,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 3,
+      "selected_source_count": 3,
+      "context_hash": "7c2545984ece8713867f74594d4f2f5b872c70725f3a4385390cd80926bfdbdf"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "path:unscoped",
+      "pair_id": "path",
+      "operation": "query:unscoped:PATH",
+      "request_hash": "e14e29efdf0788d63c9a1876d47d11db6623ca0c4a3bdbd7d3abde20260062f5",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 312.9848,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 139,
+          "edge": 30,
+          "evidence": 30,
+          "require_scope": 2,
+          "source": 34
+        },
+        "acl_elapsed_ms": 43.8045,
+        "domain_hops": {
+          "path:disjoint_domain_transitions": 1,
+          "path:membership_changing_transitions": 3,
+          "path:transitions": 3
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 50,
+        "candidates": 3,
+        "nodes": 3,
+        "edges": 4,
+        "paths": 3,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 4,
+        "tokens": 4911,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 4,
+      "selected_source_count": 4,
+      "context_hash": "21850ade03b6700aea5f3c7f14c0e99d5b2ea7106d630e45a176fccdab9e67c6"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "community:unscoped",
+      "pair_id": "community",
+      "operation": "query:unscoped:COMMUNITY",
+      "request_hash": "6ec69fbd326ea98b27996ab0e9d1ab66b85557de160c7991bfdc0474bbde7766",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 402.4169,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 164,
+          "edge": 36,
+          "evidence": 36,
+          "require_scope": 2,
+          "source": 41
+        },
+        "acl_elapsed_ms": 24.2423,
+        "domain_hops": {
+          "community:disjoint_domain_transitions": 1,
+          "community:membership_changing_transitions": 3,
+          "community:transitions": 6
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 43,
+        "candidates": 1,
+        "nodes": 4,
+        "edges": 5,
+        "paths": 0,
+        "communities": 1,
+        "decisions": 0,
+        "source_spans": 5,
+        "tokens": 3094,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 5,
+      "selected_source_count": 5,
+      "context_hash": "0f76235dbd17d7e6ab9535a365307205e57d21baa17a3c7a16bc860db2c6d36c"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "path:scoped",
+      "pair_id": "path",
+      "operation": "query:scoped:PATH",
+      "request_hash": "c16101ff52e0ed3ae4f37ae59f265a8d8d93d7a8c9b6e5d0f3eb357d2d0dc1e5",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 261.2048,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 235,
+          "edge": 48,
+          "evidence": 48,
+          "require_scope": 2,
+          "source": 75
+        },
+        "acl_elapsed_ms": 7.8362,
+        "domain_hops": {
+          "path:membership_changing_transitions": 1,
+          "path:transitions": 1,
+          "required_closure:disjoint_domain_transitions": 8,
+          "required_closure:membership_changing_transitions": 8,
+          "required_closure:transitions": 16
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 98,
+        "candidates": 1,
+        "nodes": 4,
+        "edges": 3,
+        "paths": 1,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 3,
+        "tokens": 3378,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 3,
+      "selected_source_count": 3,
+      "context_hash": "9eb3021e77792d54c37614d1b8098e128a01cbcaa7d48fffa71502586949dd59"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "community:unscoped",
+      "pair_id": "community",
+      "operation": "query:unscoped:COMMUNITY",
+      "request_hash": "6ec69fbd326ea98b27996ab0e9d1ab66b85557de160c7991bfdc0474bbde7766",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 267.9302,
+      "domain_scoped": false,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 164,
+          "edge": 36,
+          "evidence": 36,
+          "require_scope": 2,
+          "source": 41
+        },
+        "acl_elapsed_ms": 8.0634,
+        "domain_hops": {
+          "community:disjoint_domain_transitions": 1,
+          "community:membership_changing_transitions": 3,
+          "community:transitions": 6
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 43,
+        "candidates": 1,
+        "nodes": 4,
+        "edges": 5,
+        "paths": 0,
+        "communities": 1,
+        "decisions": 0,
+        "source_spans": 5,
+        "tokens": 3094,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 5,
+      "selected_source_count": 5,
+      "context_hash": "82e81e392f383dcef70b9a35832e9ab042a326ee83c651e106cffe752fbd1945"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "community:scoped",
+      "pair_id": "community",
+      "operation": "query:scoped:COMMUNITY",
+      "request_hash": "2420817d19db6e3265c636033e03156e012ef611ab0c626ae26920496da8fce0",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 344.8862,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 259,
+          "edge": 54,
+          "evidence": 54,
+          "require_scope": 2,
+          "source": 81
+        },
+        "acl_elapsed_ms": 8.9662,
+        "domain_hops": {
+          "community:membership_changing_transitions": 1,
+          "community:transitions": 4,
+          "required_closure:disjoint_domain_transitions": 8,
+          "required_closure:membership_changing_transitions": 8,
+          "required_closure:transitions": 16
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 99,
+        "candidates": 1,
+        "nodes": 4,
+        "edges": 3,
+        "paths": 0,
+        "communities": 1,
+        "decisions": 0,
+        "source_spans": 3,
+        "tokens": 3275,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 3,
+      "selected_source_count": 3,
+      "context_hash": "0b35a8655dec4578a4deb330ce694503ef3b027bb1b49e779ae8383f6770ccd4"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "community:scoped",
+      "pair_id": "community",
+      "operation": "query:scoped:COMMUNITY",
+      "request_hash": "2420817d19db6e3265c636033e03156e012ef611ab0c626ae26920496da8fce0",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 203.0679,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 2,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "cbb37be1325bfc0395d71df38eb421ba2c142a79375f680be0adee08682f0d2c",
+        "migrated": true
+      },
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 259,
+          "edge": 54,
+          "evidence": 54,
+          "require_scope": 2,
+          "source": 81
+        },
+        "acl_elapsed_ms": 7.611,
+        "domain_hops": {
+          "community:membership_changing_transitions": 1,
+          "community:transitions": 4,
+          "required_closure:disjoint_domain_transitions": 8,
+          "required_closure:membership_changing_transitions": 8,
+          "required_closure:transitions": 16
+        },
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 1
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 99,
+        "candidates": 1,
+        "nodes": 4,
+        "edges": 3,
+        "paths": 0,
+        "communities": 1,
+        "decisions": 0,
+        "source_spans": 3,
+        "tokens": 3275,
+        "graph_queries": 3,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 3,
+      "selected_source_count": 3,
+      "context_hash": "8fce76db7ba12d3540aaf06e4edb901c09ecfe3e71f9d04e91df97d607c93b7f"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "acl-scope-rejected",
+      "pair_id": null,
+      "operation": "query:rejected",
+      "request_hash": "63818a49e98f56787df92cbc7db5fd44a95a08fc4b7b9239041604994e3fa7f5",
+      "request_hash_status": "HASHED",
+      "outcome": "SECURITY_SCOPE",
+      "completed": false,
+      "error_type": "ContractError",
+      "domain_scoped": true,
+      "elapsed_ms": 8.3338,
+      "graph_version": null,
+      "classification_identity": null,
+      "quality": null,
+      "adapter_metrics": {},
+      "measurements": {
+        "acl_calls": {
+          "__init__": 1,
+          "require_scope": 1
+        },
+        "acl_elapsed_ms": 1.988,
+        "domain_hops": {},
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 0,
+        "invalidations": 0,
+        "evictions": 0
+      }
+    },
+    {
+      "kind": "PUBLICATION",
+      "operation": "publication",
+      "plan_hash": "99d19d79dc9ea8b73d210b7cda93d03a4a92e55f1113b98ca240afec6c308e54",
+      "outcome": "COMMITTED",
+      "elapsed_ms": 69.9098,
+      "event_hash": "b5b791618def682d81cdcef122be6c97495551735f2b191439c4e96a260100ff",
+      "graph_version": 3,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 1,
+        "hash": "39abf5db9dd454ef0e10c5fdded9a8d771d9fff90a88da8afe1bd5b311873fe2",
+        "migrated": true
+      },
+      "write_domains": {
+        "touched_sources": 0,
+        "distinct_taxonomy_domain_pairs": 0,
+        "multi_domain_sources_after": 0,
+        "cross_domain_batch": false
+      },
+      "write_definition": "domain union of exact pre/post source assignments touched by the signed plan; retries are not writes"
+    },
+    {
+      "kind": "PUBLICATION",
+      "operation": "publication",
+      "plan_hash": "99d19d79dc9ea8b73d210b7cda93d03a4a92e55f1113b98ca240afec6c308e54",
+      "outcome": "REPLAYED",
+      "elapsed_ms": 69.6445,
+      "event_hash": "b5b791618def682d81cdcef122be6c97495551735f2b191439c4e96a260100ff",
+      "graph_version": 3,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 1,
+        "hash": "39abf5db9dd454ef0e10c5fdded9a8d771d9fff90a88da8afe1bd5b311873fe2",
+        "migrated": true
+      },
+      "write_domains": {
+        "touched_sources": 0,
+        "distinct_taxonomy_domain_pairs": 0,
+        "multi_domain_sources_after": 0,
+        "cross_domain_batch": false
+      },
+      "write_definition": "domain union of exact pre/post source assignments touched by the signed plan; retries are not writes"
+    },
+    {
+      "kind": "PUBLICATION",
+      "operation": "publication",
+      "plan_hash": "1ce0c41a8f82ab8d738c41a8c6faea32089cae4e4337a6231b117604549b656e",
+      "outcome": "COMMITTED",
+      "elapsed_ms": 107.3657,
+      "event_hash": "eeeed64ff24ab9ca9381aa0885ede4df99fa0ead03cf6b370b599f75f902fb97",
+      "graph_version": 4,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "03dda2b0e3883f82f2eb17f4153e684edd307ddd978b2ce3d7cf140cfa45ed64",
+        "migrated": true
+      },
+      "write_domains": {
+        "touched_sources": 1,
+        "distinct_taxonomy_domain_pairs": 2,
+        "multi_domain_sources_after": 1,
+        "cross_domain_batch": true
+      },
+      "write_definition": "domain union of exact pre/post source assignments touched by the signed plan; retries are not writes"
+    },
+    {
+      "kind": "PUBLICATION",
+      "operation": "publication",
+      "plan_hash": "1ce0c41a8f82ab8d738c41a8c6faea32089cae4e4337a6231b117604549b656e",
+      "outcome": "REPLAYED",
+      "elapsed_ms": 99.96,
+      "event_hash": "eeeed64ff24ab9ca9381aa0885ede4df99fa0ead03cf6b370b599f75f902fb97",
+      "graph_version": 4,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "03dda2b0e3883f82f2eb17f4153e684edd307ddd978b2ce3d7cf140cfa45ed64",
+        "migrated": true
+      },
+      "write_domains": {
+        "touched_sources": 1,
+        "distinct_taxonomy_domain_pairs": 2,
+        "multi_domain_sources_after": 1,
+        "cross_domain_batch": true
+      },
+      "write_definition": "domain union of exact pre/post source assignments touched by the signed plan; retries are not writes"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "sqlite-reclassification-1",
+      "pair_id": null,
+      "operation": "query:scoped:LEXICAL",
+      "request_hash": "87692ffdae0400cb4834dec582c6ffef0f82c2e7802d46b2224d8a2069053309",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 115.2686,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 4,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "03dda2b0e3883f82f2eb17f4153e684edd307ddd978b2ce3d7cf140cfa45ed64",
+        "migrated": true
+      },
+      "adapter_metrics": {
+        "authority_audit_seconds": 0.04762960004154593,
+        "version": "trace-domain-index-v1",
+        "source_rows": 2,
+        "membership_rows": 3,
+        "logical_bytes": 1255,
+        "built": true,
+        "validation_seconds": 0.0010038000764325261,
+        "read_seconds": 0.06937789998482913
+      },
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 74,
+          "decision": 6,
+          "edge": 8,
+          "evidence": 25,
+          "require_scope": 2,
+          "source": 30
+        },
+        "acl_elapsed_ms": 5.113,
+        "domain_hops": {},
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 0,
+        "evictions": 0
+      },
+      "quality": {
+        "evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 17,
+        "candidates": 1,
+        "nodes": 2,
+        "edges": 1,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 1,
+        "source_spans": 1,
+        "tokens": 2761,
+        "graph_queries": 1,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 1,
+      "selected_source_count": 1,
+      "context_hash": "88c57bc943ccaeeda4e753f0520d085f040500a96a7bdab589968343a0f98e64"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "sqlite-reclassification-1",
+      "pair_id": null,
+      "operation": "query:scoped:LEXICAL",
+      "request_hash": "87692ffdae0400cb4834dec582c6ffef0f82c2e7802d46b2224d8a2069053309",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 97.5693,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 4,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 2,
+        "hash": "03dda2b0e3883f82f2eb17f4153e684edd307ddd978b2ce3d7cf140cfa45ed64",
+        "migrated": true
+      },
+      "adapter_metrics": {
+        "authority_audit_seconds": 0.046441399957984686,
+        "version": "trace-domain-index-v1",
+        "source_rows": 2,
+        "membership_rows": 3,
+        "logical_bytes": 1255,
+        "built": false,
+        "validation_seconds": 0.0005721000488847494,
+        "read_seconds": 0.0683191999560222
+      },
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 61,
+          "decision": 4,
+          "edge": 8,
+          "evidence": 18,
+          "require_scope": 2,
+          "source": 23
+        },
+        "acl_elapsed_ms": 3.5707,
+        "domain_hops": {},
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 1,
+        "misses": 0,
+        "invalidations": 0,
+        "evictions": 0
+      },
+      "quality": {
+        "evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 14,
+        "candidates": 0,
+        "nodes": 2,
+        "edges": 1,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 1,
+        "source_spans": 1,
+        "tokens": 2761,
+        "graph_queries": 1,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 1,
+      "selected_source_count": 1,
+      "context_hash": "2cd972a07cee806135252f42c43b2eb6f5ce64c15eb0f3d66dfcfa98560b1418"
+    },
+    {
+      "kind": "PUBLICATION",
+      "operation": "publication",
+      "plan_hash": "5e31ba9df6cd0daa24297ab459b23c2bec75c247f2bfd22b2683ee3c196b8c01",
+      "outcome": "COMMITTED",
+      "elapsed_ms": 164.1065,
+      "event_hash": "404084d791c5581d5e180b2fc69fb7bad6529efb565bf0fd137dc9ff1df8e617",
+      "graph_version": 5,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 3,
+        "hash": "7a022a49afa3c2672202e677b1ca04d211b478005baa3425186e686d2058a323",
+        "migrated": true
+      },
+      "write_domains": {
+        "touched_sources": 1,
+        "distinct_taxonomy_domain_pairs": 3,
+        "multi_domain_sources_after": 0,
+        "cross_domain_batch": true
+      },
+      "write_definition": "domain union of exact pre/post source assignments touched by the signed plan; retries are not writes"
+    },
+    {
+      "kind": "PUBLICATION",
+      "operation": "publication",
+      "plan_hash": "5e31ba9df6cd0daa24297ab459b23c2bec75c247f2bfd22b2683ee3c196b8c01",
+      "outcome": "REPLAYED",
+      "elapsed_ms": 221.0397,
+      "event_hash": "404084d791c5581d5e180b2fc69fb7bad6529efb565bf0fd137dc9ff1df8e617",
+      "graph_version": 5,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 3,
+        "hash": "7a022a49afa3c2672202e677b1ca04d211b478005baa3425186e686d2058a323",
+        "migrated": true
+      },
+      "write_domains": {
+        "touched_sources": 1,
+        "distinct_taxonomy_domain_pairs": 3,
+        "multi_domain_sources_after": 0,
+        "cross_domain_batch": true
+      },
+      "write_definition": "domain union of exact pre/post source assignments touched by the signed plan; retries are not writes"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "sqlite-reclassification-2",
+      "pair_id": null,
+      "operation": "query:scoped:LEXICAL",
+      "request_hash": "87692ffdae0400cb4834dec582c6ffef0f82c2e7802d46b2224d8a2069053309",
+      "request_hash_status": "HASHED",
+      "outcome": "EMPTY",
+      "elapsed_ms": 183.9868,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 5,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 3,
+        "hash": "7a022a49afa3c2672202e677b1ca04d211b478005baa3425186e686d2058a323",
+        "migrated": true
+      },
+      "adapter_metrics": {
+        "authority_audit_seconds": 0.08834729995578527,
+        "version": "trace-domain-index-v1",
+        "source_rows": 2,
+        "membership_rows": 2,
+        "logical_bytes": 1234,
+        "built": true,
+        "validation_seconds": 0.0014106000307947397,
+        "read_seconds": 0.1275877000298351
+      },
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 42,
+          "edge": 8,
+          "evidence": 12,
+          "require_scope": 2,
+          "source": 16
+        },
+        "acl_elapsed_ms": 3.8872,
+        "domain_hops": {},
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 1,
+        "evictions": 0
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 15,
+        "candidates": 0,
+        "nodes": 0,
+        "edges": 0,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 0,
+        "tokens": 0,
+        "graph_queries": 1,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 0,
+      "selected_source_count": 0,
+      "context_hash": "11fd59e5d3b031594fc1cd35688860bfdc7df252b8d1efb73e5f0204c724b6de"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "sqlite-reclassification-2",
+      "pair_id": null,
+      "operation": "query:scoped:LEXICAL",
+      "request_hash": "87692ffdae0400cb4834dec582c6ffef0f82c2e7802d46b2224d8a2069053309",
+      "request_hash_status": "HASHED",
+      "outcome": "EMPTY",
+      "elapsed_ms": 161.0016,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 5,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 3,
+        "hash": "7a022a49afa3c2672202e677b1ca04d211b478005baa3425186e686d2058a323",
+        "migrated": true
+      },
+      "adapter_metrics": {
+        "authority_audit_seconds": 0.08665930002462119,
+        "version": "trace-domain-index-v1",
+        "source_rows": 2,
+        "membership_rows": 2,
+        "logical_bytes": 1234,
+        "built": false,
+        "validation_seconds": 0.000951100024394691,
+        "read_seconds": 0.12314460007473826
+      },
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 38,
+          "edge": 8,
+          "evidence": 8,
+          "require_scope": 2,
+          "source": 12
+        },
+        "acl_elapsed_ms": 2.7972,
+        "domain_hops": {},
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 1,
+        "misses": 0,
+        "invalidations": 0,
+        "evictions": 0
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 13,
+        "candidates": 0,
+        "nodes": 0,
+        "edges": 0,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 0,
+        "tokens": 0,
+        "graph_queries": 1,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 0,
+      "selected_source_count": 0,
+      "context_hash": "8beb166b559acababe4360425bd3785eb046d5fa41319ded5177e63d41d0b239"
+    },
+    {
+      "kind": "PUBLICATION",
+      "operation": "publication",
+      "plan_hash": "6ae433f5eb53a10dfe31cff6dc15bbbd3723d8323c4b34ce3399dd58f7cda516",
+      "outcome": "COMMITTED",
+      "elapsed_ms": 275.7056,
+      "event_hash": "e572f7442e4a69b7099708d881f989090923f4b48219fd2c9c99f62815ed0d8a",
+      "graph_version": 6,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 4,
+        "hash": "2c752de7a53cf88d00d8427291db2ba749ea31686cb2a7d3c833fea50e4f9c37",
+        "migrated": true
+      },
+      "write_domains": {
+        "touched_sources": 1,
+        "distinct_taxonomy_domain_pairs": 3,
+        "multi_domain_sources_after": 1,
+        "cross_domain_batch": true
+      },
+      "write_definition": "domain union of exact pre/post source assignments touched by the signed plan; retries are not writes"
+    },
+    {
+      "kind": "PUBLICATION",
+      "operation": "publication",
+      "plan_hash": "6ae433f5eb53a10dfe31cff6dc15bbbd3723d8323c4b34ce3399dd58f7cda516",
+      "outcome": "REPLAYED",
+      "elapsed_ms": 290.7324,
+      "event_hash": "e572f7442e4a69b7099708d881f989090923f4b48219fd2c9c99f62815ed0d8a",
+      "graph_version": 6,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 4,
+        "hash": "2c752de7a53cf88d00d8427291db2ba749ea31686cb2a7d3c833fea50e4f9c37",
+        "migrated": true
+      },
+      "write_domains": {
+        "touched_sources": 1,
+        "distinct_taxonomy_domain_pairs": 3,
+        "multi_domain_sources_after": 1,
+        "cross_domain_batch": true
+      },
+      "write_definition": "domain union of exact pre/post source assignments touched by the signed plan; retries are not writes"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "sqlite-reclassification-3",
+      "pair_id": null,
+      "operation": "query:scoped:LEXICAL",
+      "request_hash": "87692ffdae0400cb4834dec582c6ffef0f82c2e7802d46b2224d8a2069053309",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 205.7781,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 6,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 4,
+        "hash": "2c752de7a53cf88d00d8427291db2ba749ea31686cb2a7d3c833fea50e4f9c37",
+        "migrated": true
+      },
+      "adapter_metrics": {
+        "authority_audit_seconds": 0.09161500004120171,
+        "version": "trace-domain-index-v1",
+        "source_rows": 2,
+        "membership_rows": 3,
+        "logical_bytes": 1255,
+        "built": true,
+        "validation_seconds": 0.0016801999881863594,
+        "read_seconds": 0.1394453999819234
+      },
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 74,
+          "decision": 6,
+          "edge": 8,
+          "evidence": 25,
+          "require_scope": 2,
+          "source": 30
+        },
+        "acl_elapsed_ms": 3.5775,
+        "domain_hops": {},
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 1,
+        "evictions": 0
+      },
+      "quality": {
+        "evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 17,
+        "candidates": 1,
+        "nodes": 2,
+        "edges": 1,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 1,
+        "source_spans": 1,
+        "tokens": 2761,
+        "graph_queries": 1,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 1,
+      "selected_source_count": 1,
+      "context_hash": "f42c6e8d17cf6daa28ee0744e0f72769c5cbba4be952467c54ca3e82329a40c3"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "sqlite-reclassification-3",
+      "pair_id": null,
+      "operation": "query:scoped:LEXICAL",
+      "request_hash": "87692ffdae0400cb4834dec582c6ffef0f82c2e7802d46b2224d8a2069053309",
+      "request_hash_status": "HASHED",
+      "outcome": "COMPLETE",
+      "elapsed_ms": 208.2549,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 6,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 4,
+        "hash": "2c752de7a53cf88d00d8427291db2ba749ea31686cb2a7d3c833fea50e4f9c37",
+        "migrated": true
+      },
+      "adapter_metrics": {
+        "authority_audit_seconds": 0.10986920003779233,
+        "version": "trace-domain-index-v1",
+        "source_rows": 2,
+        "membership_rows": 3,
+        "logical_bytes": 1255,
+        "built": false,
+        "validation_seconds": 0.0011905999854207039,
+        "read_seconds": 0.1565983999753371
+      },
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 61,
+          "decision": 4,
+          "edge": 8,
+          "evidence": 18,
+          "require_scope": 2,
+          "source": 23
+        },
+        "acl_elapsed_ms": 3.9537,
+        "domain_hops": {},
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 1,
+        "misses": 0,
+        "invalidations": 0,
+        "evictions": 0
+      },
+      "quality": {
+        "evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 14,
+        "candidates": 0,
+        "nodes": 2,
+        "edges": 1,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 1,
+        "source_spans": 1,
+        "tokens": 2761,
+        "graph_queries": 1,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 1,
+      "selected_source_count": 1,
+      "context_hash": "fac4402abbaf7ae013811e1f29a9850054a9f644e0db76b3c5f2f1e0fe250892"
+    },
+    {
+      "kind": "QUERY",
+      "case_id": "sqlite-historical-current-revocation",
+      "pair_id": null,
+      "operation": "query:scoped:LEXICAL",
+      "request_hash": "915c78f9fd2482095630d0408552a361dfe1f9360bcfd9d3a532e8ffa447d350",
+      "request_hash_status": "HASHED",
+      "outcome": "EMPTY",
+      "elapsed_ms": 227.7879,
+      "domain_scoped": true,
+      "completed": true,
+      "error_type": null,
+      "graph_version": 6,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 4,
+        "hash": "2c752de7a53cf88d00d8427291db2ba749ea31686cb2a7d3c833fea50e4f9c37",
+        "migrated": true
+      },
+      "adapter_metrics": {
+        "authority_audit_seconds": 0.13542609999421984,
+        "version": "trace-domain-index-v1",
+        "source_rows": 2,
+        "membership_rows": 3,
+        "logical_bytes": 1255,
+        "built": false,
+        "validation_seconds": 0.0011439999798312783,
+        "read_seconds": 0.1830340001033619
+      },
+      "measurements": {
+        "acl_calls": {
+          "__init__": 3,
+          "allows": 33,
+          "edge": 6,
+          "evidence": 9,
+          "require_scope": 2,
+          "source": 13
+        },
+        "acl_elapsed_ms": 2.4887,
+        "domain_hops": {},
+        "acl_timing": "outermost ACL call wall time; nested calls counted but not double-timed"
+      },
+      "cache_delta": {
+        "hits": 0,
+        "misses": 1,
+        "invalidations": 1,
+        "evictions": 0
+      },
+      "quality": {
+        "evidence_recall": null,
+        "missed_contradiction_pairs": 0,
+        "forbidden_sources_returned": 0
+      },
+      "usage": {
+        "cost_units": 10,
+        "candidates": 0,
+        "nodes": 0,
+        "edges": 0,
+        "paths": 0,
+        "communities": 0,
+        "decisions": 0,
+        "source_spans": 0,
+        "tokens": 0,
+        "graph_queries": 1,
+        "vector_queries": 0
+      },
+      "selected_assertion_count": 0,
+      "selected_source_count": 0,
+      "context_hash": "de6ed3304ef303f85099a22fef0337be315a68ca9d53060df3f0736ad7c61327"
+    },
+    {
+      "kind": "PUBLICATION",
+      "operation": "publication",
+      "plan_hash": "c70582ddc8741a1b382bc39dc407fdf257f7d1370b464a6fac2bca6a3054c11e",
+      "outcome": "COMMITTED",
+      "elapsed_ms": 770.6817,
+      "event_hash": "4f98ca1ee4af6fe2c6ce2a0fd19690f130b609012ad27fad727143501f3dc8ef",
+      "graph_version": 8,
+      "classification_identity": {
+        "contract_version": 1,
+        "revision": 5,
+        "hash": "31e9dd83aea4f6ebd82a3589d4e0c47bef9948c18aeea02ee6dee65509481886",
+        "migrated": true
+      },
+      "write_domains": {
+        "touched_sources": 1,
+        "distinct_taxonomy_domain_pairs": 1,
+        "multi_domain_sources_after": 0,
+        "cross_domain_batch": false
+      },
+      "write_definition": "domain union of exact pre/post source assignments touched by the signed plan; retries are not writes"
+    },
+    {
+      "kind": "PUBLICATION",
+      "operation": "publication",
+      "plan_hash": "1b5bb304d707f6dde127bbfd9c421e1d94a11aebf4d67edbb37ff7f94e831d32",
+      "outcome": "STALE_GRAPH_VERSION",
+      "elapsed_ms": 951.8777
+    }
+  ],
+  "topology": {
+    "memory_read_fixture": {
+      "nodes": 13,
+      "active_original_assertions": 11,
+      "degree": {
+        "count": 13,
+        "p50": 1,
+        "p95": 4,
+        "p99": 4,
+        "maximum": 4
+      },
+      "degree_gini": 0.3356643356643356,
+      "top_one_percent_node_degree_share": 0.18181818181818182,
+      "degree_definition": "incident active original assertions; a self-loop is counted once"
+    },
+    "sqlite_write_fixture": {
+      "nodes": 5,
+      "active_original_assertions": 1,
+      "degree": {
+        "count": 5,
+        "p50": 0,
+        "p95": 1,
+        "p99": 1,
+        "maximum": 1
+      },
+      "degree_gini": 0.6000000000000001,
+      "top_one_percent_node_degree_share": 0.5,
+      "degree_definition": "incident active original assertions; a self-loop is counted once"
+    }
+  },
+  "sqlite_storage": {
+    "index_btree_bytes_by_object": null,
+    "index_btree_measurement": "UNAVAILABLE",
+    "page_bytes": 540672,
+    "main_file_bytes": 4096,
+    "wal_file_bytes": 910552,
+    "scope": "local reference database/WAL only; not resident set size or a distributed index"
+  },
+  "sqlite_input_manifest": {
+    "snapshot_hash": "d833f313c0b0e29ac0d3f59dfcb5a471fcda80f3e6e8851e14ed77ef70513854",
+    "source_hashes": [
+      "3c10a069fa8a84d26b8d21b0a8d10610f500aa1fec23a9a3ad295fbc304d1a34",
+      "fd28aa81850f425be68180cfdae2cea106993edbd94caba91201c2e5671e62e3"
+    ],
+    "evidence_hashes": [
+      "6b155fec1c6d6a2c72d6cabffd1fbf045f4079f58d3db00729e1c6ba1c1083b3",
+      "d63c6109f15b2c4d264466e69dae3111cb99c8417878606fb338c2700fa13b71"
+    ],
+    "label_origin": "FABRICATED_FIXTURE_NOT_INDEPENDENT"
+  },
+  "sqlite_audit": {
+    "events": 8,
+    "head_hash": "4f98ca1ee4af6fe2c6ce2a0fd19690f130b609012ad27fad727143501f3dc8ef",
+    "state_hash": "b7bb0d65f1bb50d388c750543117fd35e7380e18ab4d5dc2898344cea1206c1b",
+    "sandbox": true,
+    "classification_replay": "PASS",
+    "classification_events": 5,
+    "classification_authority_verified": true,
+    "erased_record_count": 0
+  },
+  "concurrent_write_outcomes": [
+    "COMMITTED",
+    "STALE_GRAPH_VERSION"
+  ],
+  "provider_calls": 0,
+  "production_graph_writes": 0,
+  "placement_decision": "DEFERRED_PENDING_REPRESENTATIVE_DATA_OWNER_ISOLATION_AND_SLOS",
+  "process_memory": {
+    "scope": "entire harness process, including previously imported modules",
+    "resident_bytes": null,
+    "peak_resident_bytes": null
+  },
+  "implementation_hashes": {
+    "workloads.py": "5ff566c1ba215b7b79791290e4864040d9d769741cd89cc15a85aceabd915e5d",
+    "telemetry.py": "d4af83ae13443b46819d6bc61caede30b8e469499cbe883ecde58cccd0f61fde",
+    "items.py": "3b5282b60340db222c6ddf34f2c7519ce587de408e0594a477fa55bd19cddc52",
+    "service.py": "239065dcbf556bb86692d372c15e08128a4499528f94b97481a98936e2259633",
+    "store.py": "5de07467052482e0983b1408cd49a9d5e591f4ca36ce86042b0d65f8b0ef603e",
+    "domain_index.py": "5a99ed46d857b516400c0ee9392886cc6752bddb7855c703052ad1a96cba2fa1",
+    "domains.py": "54696e9571b9987f2ed3ea8700c56d35152ceae590f43cd72989a3ee57eb7792",
+    "security.py": "39ec50cb716622fbd57ba01d659a088d506ce663a411a93f9dd06955f60e5617",
+    "strategies.py": "555780fa67bfd5efb996168c8565cec001fdd952007e669a6ff24ae86beee68f",
+    "fixtures.py": "881bae1cde7138f8a1ed5a8b6cd996a20765015aad37495043b31f2035887216",
+    "../backend.py": "5c75f6754b031ddc36fbbe3ce80ac598efe3e0d9d70fe89366b0b8586c672429",
+    "../constraints.py": "17ca63d4e24fe2627ef18dfb2070d7c4f5eddb8d42fb329ef00550a228ccaacd",
+    "../domains.py": "11ddcb6bc0b761f0345824d1874395ba7f7ebf7113abd412a692f18b8b054e18",
+    "../domain_publication.py": "e413270100fdeba7e42afb81ae9221691a7a137b4270176fdea43be51efb01da",
+    "../plans.py": "826c66c36bbec9a809007c58be7d628440b1f7fbf3683ee85090a4a372ef3dfc",
+    "../trust.py": "91a8a7d270b87070714f0e7b68715a0a9ffb165387174a185460f8b0a0917f0e",
+    "../compiler.py": "069d1fae36bcccfea056855ac4301adcafaa22543c1a2229ce705cc5b91d1ce1",
+    "../canonical.py": "2ab85ad82e4a193306ecd3b485d559634a0a870f22a1385ce0512b7cc6cfe7df",
+    "../demo.py": "ab8c88246e8b7fdcd71f2535c44cf1f770f91ab8810bcdadce7cf4a96253e182"
+  },
+  "reproduction": {
+    "command": "python -m trace_gc domain-workload --output REPORT.json --repetitions 3 --workers 2",
+    "timings_and_ephemeral_receipt_hashes": "expected to differ between runs"
+  }
+}

@@ -20,16 +20,43 @@ class SearchSpace:
     conflicts: list[list[str]]
     meter: BudgetMeter
     embedding: EmbeddingModel
+    domain_selection: Any = None
+    source_guard: Any = None
+
+    def __post_init__(self) -> None:
+        from .domains import ResearchDomainSelection
+        if self.domain_selection is None:
+            self.domain_selection = ResearchDomainSelection(self.view, self.access, self.query, self.edges, self.conflicts, self.meter)
+        self.edges = self.domain_selection.allowed_edges
+        self.conflicts = [pair for pair in self.conflicts if all(ref in self.edges for ref in pair)]
+
+    def allows(self, kind: str, ref: str, members: list[str] | None = None) -> bool:
+        return self.domain_selection.allows(kind, ref, members)
 
     def make(self, kind: str, ref: str, members: list[str] | None = None) -> dict[str, Any]:
         self.meter.work(candidate=True)
         return canonical_item(self.view, self.access, self.query, kind=kind, ref=ref, members=members,
-                              edges=self.edges, conflicts=self.conflicts)
+                              edges=self.edges, conflicts=self.conflicts, domain_selection=self.domain_selection)
+
+    def measure_transition(self, left: str | None, right: str, channel: str) -> None:
+        from .telemetry import active, domain_hop
+        if left is None or not active():
+            return
+        def membership(ref):
+            fact = self.edges[ref]
+            if not self.access.edge(ref, fact):
+                return set()
+            sources = {self.view.catalog.get(e, "evidence")["source_snapshot_id"] for e in fact["evidence_ids"]}
+            return {(self.view.classification_rows[source]["taxonomy_hash"], domain)
+                    for source in sources for domain in self.view.classification_rows[source]["domain_ids"]}
+        domain_hop(membership(left), membership(right), channel=channel)
 
     def adjacency(self) -> dict[str, list[tuple[str, str]]]:
         result: dict[str, list[tuple[str, str]]] = {}
         for ref, fact in self.edges.items():
             self.meter.work()
+            if not self.domain_selection.search_edge(ref):
+                continue
             a = fact["assertion"]
             result.setdefault(a["subject"], []).append((a["object"], ref))
             result.setdefault(a["object"], []).append((a["subject"], ref))
@@ -42,20 +69,20 @@ class GraphRetriever(Protocol):
 
 
 class BuiltinStrategy:
-    version = "bounded-strategies-v1"
+    version = "bounded-domain-strategies-v1"
     def __init__(self, name: str):
         self.name = name
 
     def retrieve(self, space: SearchSpace) -> Iterable[dict[str, Any]]:
         q, c, snap, m = space.query, space.view.catalog, space.view.snapshot, space.meter
-        focus = {x for x in q["focus_entities"] if space.access.allows("node", x)}
+        focus = {x for x in q["focus_entities"] if space.access.allows("node", x) and space.allows("NODE", x)}
         text_terms = terms(q["text"])
         name = self.name
         if name in {"ENTITY", "CLAIM"}:
             candidates = sorted(snap["nodes"]) if name == "ENTITY" else sorted(r["id"] for r in c.all("claim"))
             for ref in candidates:
                 m.work()
-                if not space.access.allows("node", ref):
+                if not space.access.allows("node", ref) or not space.allows("NODE" if name == "ENTITY" else "CLAIM", ref):
                     continue
                 if ref in focus or (text_terms and text_terms & terms(ref if name == "ENTITY" else c.get(ref, "claim")["text"])):
                     if name == "ENTITY" or ref in space.view.available_record_ids:
@@ -76,15 +103,18 @@ class BuiltinStrategy:
                     m.work()
                     if target in nodes:
                         continue
+                    space.measure_transition(path[-1] if path else None, ref, name.lower())
                     next_path = path + [ref]
                     if name == "NEIGHBORHOOD" and ref not in visited_edges:
                         visited_edges.add(ref)
-                        yield space.make("EDGE", ref)
+                        if space.allows("EDGE", ref):
+                            yield space.make("EDGE", ref)
                     elif name == "PATH" and len(next_path) >= 2:
                         identity = min(tuple(next_path), tuple(reversed(next_path)))
                         if identity not in paths_seen:
                             paths_seen.add(identity)
-                            yield space.make("PATH", digest(list(identity)), next_path)
+                            if space.allows("PATH", digest(list(identity)), next_path):
+                                yield space.make("PATH", digest(list(identity)), next_path)
                     queue.append((target, nodes+[target], next_path))
         elif name in {"LEXICAL", "VECTOR", "SOURCE", "EVIDENCE"}:
             evidence = []
@@ -97,7 +127,7 @@ class BuiltinStrategy:
             for r in sorted(c.all("evidence"), key=lambda r: r["id"]):
                 m.work()
                 ref, b = r["id"], r["body"]
-                if ref not in space.view.available_record_ids or not space.access.evidence(ref):
+                if ref not in space.view.available_record_ids or not space.access.evidence(ref) or not space.allows("EVIDENCE", ref):
                     continue
                 if relevant_sources and b["source_snapshot_id"] not in relevant_sources:
                     continue
@@ -115,6 +145,8 @@ class BuiltinStrategy:
                 m.work(len(evidence))
                 m.used["vector_queries"] += 1
                 # Only authorized original spans reach the injectable embedding model.
+                if space.source_guard is not None:
+                    space.source_guard({c.get(ref, "evidence")["source_snapshot_id"] for ref, _ in evidence})
                 vectors = space.embedding.embed([q["text"]] + [text for _, text in evidence])
                 m.check()  # Adapters must also enforce their own I/O deadline.
                 from ..errors import require
@@ -131,6 +163,8 @@ class BuiltinStrategy:
             relations = c.get(snap["schema_id"], "schema")["relations"]
             for ref, rule in sorted(relations.items()):
                 m.work()
+                if not space.allows("ONTOLOGY" if name == "ONTOLOGY" else "SCHEMA", ref):
+                    continue
                 relevant = (ref in q["focus_relationships"] or ref in q["ontology_scope"] or
                             rule["domain"] in q["ontology_scope"] or rule["range"] in q["ontology_scope"] or
                             (q["candidate_id"] in c and c.get(q["candidate_id"], "candidate")["assertion"]["predicate"] == ref))
@@ -155,7 +189,8 @@ class BuiltinStrategy:
                         if edge_ref not in visited and (not frontier or frontier & {a["subject"], a["object"]}):
                             visited.add(edge_ref)
                             following.update([a["subject"], a["object"]])
-                            yield space.make("EDGE", edge_ref)
+                            if space.allows("EDGE", edge_ref):
+                                yield space.make("EDGE", edge_ref)
                     frontier = following
                     if not frontier:
                         break
@@ -163,16 +198,18 @@ class BuiltinStrategy:
             for pair in space.conflicts:
                 m.work()
                 entities = {x for ref in pair for x in (space.edges[ref]["assertion"]["subject"], space.edges[ref]["assertion"]["object"])}
-                if not focus or focus & entities:
+                if (not focus or focus & entities) and space.allows("CONFLICT", digest(pair), pair):
                     yield space.make("CONFLICT", digest(pair), pair)
                     for ref in pair:
-                        yield space.make("EDGE", ref)
+                        if space.allows("EDGE", ref):
+                            yield space.make("EDGE", ref)
         elif name in {"DECISION", "SIMILAR_CASE"}:
             for record in sorted(c.all(), key=lambda r: r["id"]):
                 m.work()
                 if record["kind"] not in {"resolution", "evaluation", "observation", "candidate"} or record["id"] not in space.view.available_record_ids:
                     continue
-                if not space.access.decision(record["id"]):
+                if not space.access.decision(record["id"]) or not space.allows(
+                        "HYPOTHESIS" if record["kind"] == "candidate" else "DECISION", record["id"]):
                     continue
                 b = record["body"]
                 if q["candidate_id"] is not None and (b.get("candidate_id") == q["candidate_id"] or record["id"] == q["candidate_id"]):
@@ -194,6 +231,8 @@ class BuiltinStrategy:
         elif name in {"RELATION", "TEMPORAL", "PROVENANCE", "GLOBAL"}:
             for ref, fact in space.edges.items():
                 m.work()
+                if not space.allows("PROVENANCE" if name == "PROVENANCE" else "EDGE", ref):
+                    continue
                 a = fact["assertion"]
                 if q["focus_relationships"] and a["predicate"] not in q["focus_relationships"]:
                     continue
@@ -211,10 +250,10 @@ class BuiltinStrategy:
             for root in sorted(focus or set(adj)):
                 if root in seen:
                     continue
-                nodes, members, queue = set(), set(), deque([root])
+                nodes, members, queue = set(), set(), deque([(root, None)])
                 while queue:
                     m.work()
-                    node = queue.popleft()
+                    node, incoming_edge = queue.popleft()
                     if node in nodes:
                         continue
                     nodes.add(node)
@@ -224,11 +263,12 @@ class BuiltinStrategy:
                         m.work()
                         if len(members) >= m.limits.maximum_edges:
                             break
+                        space.measure_transition(incoming_edge, edge, "community")
                         members.add(edge)
                         if target not in nodes:
-                            queue.append(target)
+                            queue.append((target, edge))
                 seen.update(nodes)
                 if members:
                     ref = "community-" + digest(sorted(members))[:20]
-                    if not q["community_scope"] or ref in q["community_scope"]:
+                    if (not q["community_scope"] or ref in q["community_scope"]) and space.allows("COMMUNITY", ref, sorted(members)):
                         yield space.make("COMMUNITY", ref, sorted(members))

@@ -74,6 +74,10 @@ def main():
         benchmark=run_benchmark(ROOT/"benchmarks/graphrag")
         checks["graphrag_benchmark"]={k:benchmark[k] for k in ("status","cases","runs","upstream_configurations","downstream_configurations","provider_calls","production_graph_writes","real_model_accuracy","heldout_production_results","interpretation")}
     except Exception as exc:checks["graphrag_benchmark"]={"status":"FAIL","error":str(exc)};overall=False
+    try:
+        from trace_gc.domain_conformance import run_domain_conformance
+        checks["domain_classification_conformance"]=run_domain_conformance()
+    except Exception as exc:checks["domain_classification_conformance"]={"status":"FAIL","error":str(exc)};overall=False
     external=bool(os.environ.get("TRACE_GC_LEGACY_CORE"))
     legacy_test=next((r for r in result.records if r["test"].endswith("test_pinned_upstream_conformance")),None)
     gates={"pinned_legacy":{"status":legacy_test["status"] if legacy_test else "NOT_RUN","expected_git_blob":PINNED_CORE_BLOB,
@@ -87,7 +91,7 @@ def main():
             "environment":{"python":platform.python_version(),"platform":platform.platform(),"jsonschema":importlib.metadata.version("jsonschema"),"cryptography":importlib.metadata.version("cryptography")},
             "tests_run":result.testsRun,"tests_passed":sum(x["status"]=="PASS" for x in result.records),"failures":len(result.failures),"errors":len(result.errors),
             "skipped":len(result.skipped),"tests":result.records,"checks":checks,"external_gates":gates,
-            "test_groups":{"original_baseline":sum("test_graphrag_" not in x["test"] for x in result.records),"graphrag":sum("test_graphrag_" in x["test"] for x in result.records)},
+            "test_groups":{"original_baseline":sum("test_graphrag_" not in x["test"] and "test_research_domain" not in x["test"] for x in result.records),"graphrag":sum("test_graphrag_" in x["test"] for x in result.records),"research_domain":sum("test_research_domain" in x["test"] for x in result.records)},
             "provider_calls":0,"production_graph_writes":0,"isolated_database_transactions":"Executed in temporary test databases; demo count is reported separately.",
             "claims_not_established":["production semantic accuracy","empirical production calibration","completed controlled pilot","live API acceptance","distributed deployment safety","paper novelty or measured performance improvement"]}
     (ROOT/"VALIDATION_REPORT.json").write_text(json.dumps(report,indent=2)+"\n",encoding="utf-8")

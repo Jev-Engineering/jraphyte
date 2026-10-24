@@ -40,3 +40,5 @@ Bounded solver exhaustion, malformed provider answers, unavailable source bytes,
 ## GraphRAG deployment gates
 
 Read `18_graphrag_security.md` before exposing the query service. Provide authenticated application-owned ACLs, a consistent graph adapter, source status/epoch propagation, provider deadlines and exact-version embedding/tokenizer/model implementations. The included allow-all fixture grant helper is only for isolated synthetic examples. GraphRAG does not grant production write authority; the existing policy, reviewer, signature, CAS and qualification requirements remain unchanged.
+
+Research-domain views are logical metadata over one authority; see `research_domain_deployment_gates.md` and ADR 0001 before selecting a deployment backend or physical placement. The shipped adapters are the in-memory and single-host SQLite references only.
