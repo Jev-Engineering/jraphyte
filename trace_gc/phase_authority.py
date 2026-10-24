@@ -8,8 +8,10 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import ctypes
+import functools
 from pathlib import Path
 import os
+import re
 import threading
 
 from .canonical import bytes_digest, digest, dumps, loads
@@ -61,6 +63,97 @@ def directory_dacl_sddl(path: str | Path) -> str:
             kernel.LocalFree(ctypes.cast(value, ctypes.c_void_p))
     finally:
         kernel.LocalFree(descriptor)
+
+
+_NUMERIC_SID = re.compile(r"S-1-[0-9]+(?:-[0-9]+)+")
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+@functools.lru_cache(maxsize=256)
+def _windows_trustee(sid: str) -> str:
+    """Spell one numeric SID exactly as this machine's Windows writes it in a DACL.
+
+    The numeric SID is parsed into an in-memory descriptor and encoded back by the
+    same conversion ``directory_dacl_sddl`` uses, so the result is whatever the
+    OS would have serialized (an alias such as ``BU``, or ``LA`` only when the SID
+    is this machine's own RID-500 account). No account lookup, DACL or file is
+    touched, and an alias is never mapped back to a numeric SID.
+    """
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.LocalFree.argtypes = (ctypes.c_void_p,)
+    kernel.LocalFree.restype = ctypes.c_void_p
+    parse = advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW
+    parse.argtypes = (ctypes.c_wchar_p, ctypes.c_uint32,
+                      ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p)
+    parse.restype = ctypes.c_int
+    encode = advapi.ConvertSecurityDescriptorToStringSecurityDescriptorW
+    encode.argtypes = (ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32,
+                       ctypes.POINTER(ctypes.c_wchar_p), ctypes.c_void_p)
+    encode.restype = ctypes.c_int
+    descriptor = ctypes.c_void_p()
+    require(bool(parse("D:(D;;DCLC;;;" + sid + ")", 1, ctypes.byref(descriptor), None)),
+            "PHASE_FENCE", "cannot parse SID trustee")
+    try:
+        value = ctypes.c_wchar_p()
+        require(bool(encode(descriptor, 1, 4, ctypes.byref(value), None)),
+                "PHASE_FENCE", "cannot encode SID trustee")
+        try:
+            text = value.value
+        finally:
+            kernel.LocalFree(ctypes.cast(value, ctypes.c_void_p))
+    finally:
+        kernel.LocalFree(descriptor)
+    match = re.fullmatch(r"D:\(D;;DCLC;;;([^;()]+)\)", text)
+    require(match is not None, "PHASE_FENCE", "unexpected SID trustee encoding")
+    return match.group(1)
+
+
+def canonical_dacl_trustee(trustee: str) -> str:
+    """Return ``trustee`` spelled as Windows serializes it in this machine's DACL text.
+
+    Only a strictly numeric ``S-1-...`` SID is translated, forward to the OS
+    spelling, so distinct account/domain SIDs that share a RID (for example two
+    RID-500 administrators) stay distinct. Aliases and any other text are
+    returned unchanged. Off Windows the alias relation cannot be established, so
+    a numeric SID fails closed (``PHASE_PLATFORM``) instead of being compared
+    literally; a receipt written on another machine is judged only by what this
+    machine's DACL text and this machine's serialization say.
+    """
+    if _NUMERIC_SID.fullmatch(trustee) is None:
+        return trustee
+    require(_is_windows(), "PHASE_PLATFORM",
+            "SID/SDDL trustee aliases can only be resolved on Windows")
+    return _windows_trustee(trustee)
+
+
+def canonical_dacl_ace(ace: str) -> str:
+    """Normalize only the trustee field of one six-field ACE; all else stays exact."""
+    fields = ace[1:-1].split(";")
+    if len(fields) != 6:
+        return ace
+    fields[5] = canonical_dacl_trustee(fields[5])
+    return "(" + ";".join(fields) + ")"
+
+
+def canonical_dacl_aces(sddl: str) -> list[str]:
+    """ACEs in DACL order with trustees spelled canonically (type, flags, rights untouched)."""
+    return [canonical_dacl_ace(ace) for ace in re.findall(r"\([^)]*\)", sddl)]
+
+
+def dacl_has_ace(sddl: str, template: str, sid: str) -> bool:
+    """Whether the DACL holds the exact ACE ``template`` for ``sid`` under any trustee spelling."""
+    return canonical_dacl_ace(template.format(sid=sid)) in canonical_dacl_aces(sddl)
+
+
+def dacl_has_deny_trustee(sddl: str, sid: str) -> bool:
+    """Whether any plain deny ACE in the DACL names ``sid``, in any trustee spelling."""
+    trustee = canonical_dacl_trustee(sid)
+    return any(ace.startswith("(D;") and ace.endswith(";;;" + trustee + ")")
+               for ace in canonical_dacl_aces(sddl))
 
 
 class PhaseAuthority:
@@ -172,7 +265,8 @@ class PhaseAuthority:
                 fence["old_root_path"] == str(old) and
                 fence["archived_root_path"] == str(archived) and
                 fence["status"] == "OLD_PATH_FENCED_NEW_PHASE_ALLOWED" and
-                type(deny_sid) is str and f"(D;;LC;;;{deny_sid})" in sddl and
+                type(deny_sid) is str and
+                dacl_has_ace(sddl, "(D;;LC;;;{sid})", deny_sid) and
                 bytes_digest(sddl.encode("utf-8")) == fence["old_parent_dacl_sha256"] and
                 set(fence["archived_files_sha256"]) == names and
                 not old.exists() and archived.is_dir() and

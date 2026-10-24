@@ -54,6 +54,40 @@ jobs:
           python -m unittest discover -s tests -p "test_windows_fence_diagnostics.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
           grep -Eq '^Ran 8 tests in ' "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
           grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
+      - name: Run the thirty-three native v1/v4 fence and packaged receipt-validator trustee cases
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_paper_pilot_phase_trustees_v1_v4.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-phase-trustees.log"
+          grep -Eq '^Ran 33 tests in ' "$RUNNER_TEMP/windows-phase-trustees.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-phase-trustees.log"
+      - name: Run the existing three v1 and eight v4 native fence cases as the runner identity
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_paper_pilot_phase_fence.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-phase-v1.log"
+          grep -Eq '^Ran 3 tests in ' "$RUNNER_TEMP/windows-phase-v1.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-phase-v1.log"
+          python -m unittest discover -s tests -p "test_paper_pilot_phase_cutover_guarded_v4.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-phase-v4.log"
+          grep -Eq '^Ran 8 tests in ' "$RUNNER_TEMP/windows-phase-v4.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-phase-v4.log"
+      - name: Validate phase-fence receipts with the installed wheel, outside the checkout
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip wheel --no-deps -w "$RUNNER_TEMP/wheelhouse" .
+          python -m venv "$RUNNER_TEMP/installed-venv"
+          INSTALLED="$RUNNER_TEMP/installed-venv/Scripts/python.exe"
+          "$INSTALLED" -m pip install -r requirements.txt
+          "$INSTALLED" -m pip install --no-deps "$RUNNER_TEMP"/wheelhouse/trace_gc-*.whl
+          SOURCE_SHA="$(python -c "import hashlib;print(hashlib.sha256(open('trace_gc/phase_authority.py','rb').read()).hexdigest())")"
+          mkdir "$RUNNER_TEMP/outside-checkout"
+          cd "$RUNNER_TEMP/outside-checkout"
+          "$INSTALLED" -I "$GITHUB_WORKSPACE/tools/windows_installed_phase_authority_check.py" --source-sha256 "$SOURCE_SHA" | tee "$RUNNER_TEMP/installed-phase-check.json"
+          python -c "import json,os;d=json.load(open(os.environ['RUNNER_TEMP']+'/installed-phase-check.json'));assert len(d['checks'])==26 and all(d['checks'].values()),d"
       - name: Sanitized Windows trustee serialization diagnostics
         if: always()
         continue-on-error: true
