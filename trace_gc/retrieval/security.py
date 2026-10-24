@@ -54,7 +54,7 @@ class AccessFilter:
         status = self.statuses.get(source_id)
         return (self.allows("source", source_id) and source["security_scope"] == self.policy["tenant"] and
                 bool(status) and status["permission"] == "READ" and not status["tombstone"] and
-                (status["active"] or self.historical))
+                status["active"])
 
     def edge(self, ref: str, fact: dict[str, Any]) -> bool:
         a = fact["assertion"]
