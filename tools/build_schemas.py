@@ -132,6 +132,8 @@ from local_semantic_schemas import extend as extend_local_semantic
 extend_local_semantic(SCHEMAS)
 from phase_schemas import extend as extend_phase
 extend_phase(SCHEMAS)
+from verifier_closure_schemas import extend as extend_verifier_closure
+extend_verifier_closure(SCHEMAS)
 
 EVENT=obj({"id":S,"run_id":S,"execution_mode":MODE,"sequence":{"type":"integer","minimum":1},
            "stage":{"enum":["SOURCE","CLAIM","EVIDENCE","CANDIDATE","PACK","OBSERVATION","RESOLUTION","EVALUATION","QUALIFICATION","PLAN","RECEIPT","TRANSACTION","SCHEMA","SNAPSHOT","POLICY","RETRIEVAL"]},

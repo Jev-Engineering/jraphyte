@@ -1,0 +1,1724 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:trace-gc:0.3.0:paper-verifier-closure-receipt",
+  "title": "TRACE-GC paper-verifier-closure-receipt v0.3.0",
+  "type": "object",
+  "properties": {
+    "version": {
+      "const": "paper-verifier-closure-receipt-v1"
+    },
+    "status": {
+      "enum": [
+        "PASS",
+        "HOLD",
+        "REJECTED"
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "failure_class": {
+      "anyOf": [
+        {
+          "enum": [
+            "arguments",
+            "closure",
+            "containment",
+            "execution",
+            "input",
+            "protocol",
+            "release",
+            "runtime"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "manifest_sha256": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "release_sha256": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "implementation": {
+      "anyOf": [
+        {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "prefixItems": [
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "const": "trace_gc/__init__.py"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4194304
+                }
+              },
+              "required": [
+                "path",
+                "sha256",
+                "bytes"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "const": "trace_gc/canonical.py"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4194304
+                }
+              },
+              "required": [
+                "path",
+                "sha256",
+                "bytes"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "const": "trace_gc/errors.py"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4194304
+                }
+              },
+              "required": [
+                "path",
+                "sha256",
+                "bytes"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "const": "trace_gc/verifier_closure.py"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4194304
+                }
+              },
+              "required": [
+                "path",
+                "sha256",
+                "bytes"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "const": "trace_gc/verifier_closure_bootstrap.py"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4194304
+                }
+              },
+              "required": [
+                "path",
+                "sha256",
+                "bytes"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "const": "trace_gc/verifier_closure_launcher.py"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4194304
+                }
+              },
+              "required": [
+                "path",
+                "sha256",
+                "bytes"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "items": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "implementation_source": {
+      "anyOf": [
+        {
+          "enum": [
+            "launcher_capture",
+            "disk_reread"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "runtime": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "implementation": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "cache_tag": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "magic": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "platform": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "bits": {
+              "type": "integer"
+            },
+            "invoked_executable": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "executable_resolved": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "executable_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "pyvenv_cfg_sha256": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "base_executable": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "base_executable_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "base_prefix": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "sys_path": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            },
+            "core_files": {
+              "type": "array",
+              "maxItems": 256,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            },
+            "census_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "census_files": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "startup_modules_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "preload_modules_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "startup_files": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                ],
+                "items": false
+              }
+            },
+            "startup_files_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "startup_config": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      {
+                        "const": "absent"
+                      }
+                    ]
+                  }
+                ],
+                "items": false
+              }
+            },
+            "natives": {
+              "type": "array",
+              "maxItems": 4096,
+              "uniqueItems": true,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "implementation",
+            "version",
+            "cache_tag",
+            "magic",
+            "platform",
+            "bits",
+            "invoked_executable",
+            "executable_resolved",
+            "executable_sha256",
+            "pyvenv_cfg_sha256",
+            "base_executable",
+            "base_executable_sha256",
+            "base_prefix",
+            "sys_path",
+            "core_files",
+            "census_sha256",
+            "census_files",
+            "startup_modules_sha256",
+            "preload_modules_sha256",
+            "startup_files",
+            "startup_files_sha256",
+            "startup_config",
+            "natives"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "runtime_protection": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "inspected": {
+              "type": "boolean"
+            },
+            "enforced": {
+              "type": "boolean"
+            },
+            "paths_checked": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1099511627776
+            },
+            "exposed": {
+              "type": "array",
+              "maxItems": 50,
+              "items": {
+                "type": "string",
+                "maxLength": 4096
+              }
+            },
+            "policy": {
+              "enum": [
+                "posix-owner-mode-acl-v2",
+                "windows-owner-dacl-v1",
+                "unavailable"
+              ]
+            },
+            "trusted": {
+              "type": "array",
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^(uid:[0-9]{1,10}|sid:S-1-[0-9-]{1,200})$"
+              }
+            }
+          },
+          "required": [
+            "inspected",
+            "enforced",
+            "paths_checked",
+            "exposed",
+            "policy",
+            "trusted"
+          ],
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "policy": {
+                    "const": "unavailable"
+                  }
+                },
+                "required": [
+                  "policy"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "inspected": {
+                    "const": false
+                  },
+                  "trusted": {
+                    "type": "array",
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "closure": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "modules": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 4096,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "bytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 4194304
+                  }
+                },
+                "required": [
+                  "name",
+                  "sha256",
+                  "bytes"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "packages": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "distribution": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                  },
+                  "version": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "census_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "distribution",
+                  "version",
+                  "census_sha256"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "modules",
+            "packages"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "inputs": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 268435456
+          }
+        },
+        "required": [
+          "sha256",
+          "bytes"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "params_sha256": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "request": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "nonce": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            },
+            "header_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "nonce",
+            "header_sha256"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "verifier": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "returned": {
+              "type": "boolean"
+            },
+            "exception_type": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "result_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "result": {
+              "anyOf": [
+                {
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "returned",
+            "exception_type",
+            "result_sha256",
+            "result"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "loaded": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "closure": {
+              "type": "object",
+              "maxProperties": 4096,
+              "propertyNames": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+              },
+              "additionalProperties": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "builtin": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1048576
+            },
+            "frozen": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1048576
+            },
+            "stdlib": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1048576
+            },
+            "startup": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1048576
+            },
+            "package": {
+              "type": "object",
+              "maxProperties": 256,
+              "propertyNames": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "maxLength": 200
+              },
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1048576
+              }
+            },
+            "native": {
+              "type": "object",
+              "maxProperties": 4096,
+              "propertyNames": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+              },
+              "additionalProperties": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          },
+          "required": [
+            "closure",
+            "builtin",
+            "frozen",
+            "stdlib",
+            "startup",
+            "package",
+            "native"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "violations": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "string",
+        "minLength": 0,
+        "maxLength": 120
+      }
+    },
+    "refused": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "string",
+        "minLength": 0,
+        "maxLength": 120
+      }
+    },
+    "process": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "exit_code": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "exclusiveMinimum": -1099511627776,
+                  "exclusiveMaximum": 1099511627776
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "timed_out": {
+              "type": "boolean"
+            },
+            "stdout_bytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1099511627776
+            },
+            "stderr_bytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1099511627776
+            },
+            "stderr_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "descendants": {
+              "type": "boolean"
+            },
+            "cleanup_failed": {
+              "type": "boolean"
+            },
+            "overflow": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "stdout",
+                    "stderr"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600000
+            },
+            "containment": {
+              "enum": [
+                "job_object",
+                "subreaper"
+              ]
+            }
+          },
+          "required": [
+            "exit_code",
+            "timed_out",
+            "stdout_bytes",
+            "stderr_bytes",
+            "stderr_sha256",
+            "descendants",
+            "cleanup_failed",
+            "overflow",
+            "timeout_ms",
+            "containment"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "post_checks": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "closure_unchanged": {
+              "type": "boolean"
+            },
+            "inputs_unchanged": {
+              "type": "boolean"
+            },
+            "runtime_unchanged": {
+              "type": "boolean"
+            },
+            "bytecode_dir_empty": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "closure_unchanged",
+            "inputs_unchanged",
+            "runtime_unchanged",
+            "bytecode_dir_empty"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "evidence": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "report_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "runtime_modules": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65536
+            },
+            "runtime_modules_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "runtime_rows": {
+              "type": "array",
+              "maxItems": 65536,
+              "items": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "string",
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                ],
+                "items": false
+              }
+            },
+            "native_files": {
+              "type": "array",
+              "maxItems": 4096,
+              "items": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "prefixItems": [
+                  {
+                    "type": "string",
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+                  },
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                ],
+                "items": false
+              }
+            },
+            "native_plan": {
+              "type": "array",
+              "maxItems": 4096,
+              "items": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                ],
+                "items": false
+              }
+            },
+            "mapped": {
+              "type": "array",
+              "maxItems": 8192,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            },
+            "mapped_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "module_table_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "report_sha256",
+            "runtime_modules",
+            "runtime_modules_sha256",
+            "runtime_rows",
+            "native_files",
+            "native_plan",
+            "mapped",
+            "mapped_sha256",
+            "module_table_sha256"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "parent_sys_modules_collisions": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+      }
+    },
+    "binding_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "required": [
+    "version",
+    "status",
+    "reason",
+    "failure_class",
+    "manifest_sha256",
+    "release_sha256",
+    "implementation",
+    "implementation_source",
+    "runtime",
+    "runtime_protection",
+    "closure",
+    "inputs",
+    "params_sha256",
+    "request",
+    "verifier",
+    "loaded",
+    "violations",
+    "refused",
+    "process",
+    "post_checks",
+    "evidence",
+    "parent_sys_modules_collisions",
+    "binding_sha256"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "PASS",
+              "HOLD"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "failure_class": {
+            "type": "null"
+          },
+          "manifest_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "release_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "params_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "implementation": {
+            "type": "array"
+          },
+          "implementation_source": {
+            "enum": [
+              "launcher_capture",
+              "disk_reread"
+            ]
+          },
+          "runtime": {
+            "type": "object"
+          },
+          "runtime_protection": {
+            "type": "object"
+          },
+          "closure": {
+            "type": "object"
+          },
+          "request": {
+            "type": "object"
+          },
+          "loaded": {
+            "type": "object"
+          },
+          "evidence": {
+            "type": "object"
+          },
+          "verifier": {
+            "type": "object",
+            "properties": {
+              "returned": {
+                "const": true
+              },
+              "exception_type": {
+                "type": "null"
+              }
+            }
+          },
+          "process": {
+            "type": "object",
+            "properties": {
+              "exit_code": {
+                "const": 0
+              },
+              "timed_out": {
+                "const": false
+              },
+              "descendants": {
+                "const": false
+              },
+              "cleanup_failed": {
+                "const": false
+              },
+              "overflow": {
+                "type": "null"
+              }
+            }
+          },
+          "post_checks": {
+            "type": "object",
+            "properties": {
+              "closure_unchanged": {
+                "const": true
+              },
+              "inputs_unchanged": {
+                "const": true
+              },
+              "runtime_unchanged": {
+                "const": true
+              },
+              "bytecode_dir_empty": {
+                "const": true
+              }
+            }
+          },
+          "violations": {
+            "type": "array",
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "PASS"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reason": {
+            "const": "ok"
+          },
+          "verifier": {
+            "type": "object",
+            "properties": {
+              "result": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "status": {
+                        "const": "PASS"
+                      }
+                    },
+                    "required": [
+                      "status"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "HOLD"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reason": {
+            "const": "verifier_hold"
+          },
+          "verifier": {
+            "type": "object",
+            "properties": {
+              "result": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "status": {
+                        "const": "HOLD"
+                      }
+                    },
+                    "required": [
+                      "status"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "REJECTED"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "failure_class": {
+            "type": "string"
+          },
+          "verifier": {
+            "type": "null"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "reason": {
+                  "pattern": "^(containment_|process_containment)"
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            },
+            "then": {
+              "properties": {
+                "failure_class": {
+                  "const": "containment"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "failure_class": {
+                  "not": {
+                    "const": "containment"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "reason": {
+                  "pattern": "^(protocol_)"
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            },
+            "then": {
+              "properties": {
+                "failure_class": {
+                  "const": "protocol"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "failure_class": {
+                  "not": {
+                    "const": "protocol"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "reason": {
+                  "pattern": "^(execution_|operation_)"
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            },
+            "then": {
+              "properties": {
+                "failure_class": {
+                  "const": "execution"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "failure_class": {
+                  "not": {
+                    "const": "execution"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "reason": {
+                  "pattern": "^(release_|implementation_|expected_release|expected_digest|manifest_digest|bootstrap_)"
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            },
+            "then": {
+              "properties": {
+                "failure_class": {
+                  "const": "release"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "failure_class": {
+                  "not": {
+                    "const": "release"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "reason": {
+                  "pattern": "^(runtime_|unsupported_runtime|census_|native_|interpreter_)"
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            },
+            "then": {
+              "properties": {
+                "failure_class": {
+                  "const": "runtime"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "failure_class": {
+                  "not": {
+                    "const": "runtime"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "reason": {
+                  "pattern": "^(input_|inputs_|params_)"
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            },
+            "then": {
+              "properties": {
+                "failure_class": {
+                  "const": "input"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "failure_class": {
+                  "not": {
+                    "const": "input"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "reason": {
+                  "pattern": "^(invalid_arguments|roots_|root_)"
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            },
+            "then": {
+              "properties": {
+                "failure_class": {
+                  "const": "arguments"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "failure_class": {
+                  "not": {
+                    "const": "arguments"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "reason": {
+                  "pattern": "^(containment_|process_containment|protocol_|execution_|operation_|release_|implementation_|expected_release|expected_digest|manifest_digest|bootstrap_|runtime_|unsupported_runtime|census_|native_|interpreter_|input_|inputs_|params_|invalid_arguments|roots_|root_)"
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            },
+            "then": {
+              "properties": {
+                "failure_class": {
+                  "not": {
+                    "const": "closure"
+                  }
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "failure_class": {
+                  "const": "closure"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "reason": {
+                  "pattern": "^(containment_cleanup_failed)(:|$)"
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            },
+            "then": {
+              "properties": {
+                "process": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "cleanup_failed": {
+                          "const": true
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "reason": {
+                  "pattern": "^(execution_timeout)(:|$)"
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            },
+            "then": {
+              "properties": {
+                "process": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "timed_out": {
+                          "const": true
+                        },
+                        "cleanup_failed": {
+                          "const": false
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "reason": {
+                  "pattern": "^(protocol_output_overflow)(:|$)"
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            },
+            "then": {
+              "properties": {
+                "process": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "overflow": {
+                          "enum": [
+                            "stdout",
+                            "stderr"
+                          ]
+                        },
+                        "timed_out": {
+                          "const": false
+                        },
+                        "cleanup_failed": {
+                          "const": false
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "reason": {
+                  "pattern": "^(containment_unresolved_descendants)(:|$)"
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            },
+            "then": {
+              "properties": {
+                "process": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "descendants": {
+                          "const": true
+                        },
+                        "overflow": {
+                          "type": "null"
+                        },
+                        "timed_out": {
+                          "const": false
+                        },
+                        "cleanup_failed": {
+                          "const": false
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "reason": {
+                  "not": {
+                    "pattern": "^(containment_cleanup_failed|execution_timeout|protocol_output_overflow|containment_unresolved_descendants|operation_deadline_exceeded|execution_internal_error)(:|$)"
+                  }
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            },
+            "then": {
+              "properties": {
+                "process": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "cleanup_failed": {
+                          "const": false
+                        },
+                        "timed_out": {
+                          "const": false
+                        },
+                        "descendants": {
+                          "const": false
+                        },
+                        "overflow": {
+                          "type": "null"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,416 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:trace-gc:0.3.0:paper-verifier-closure-manifest",
+  "title": "TRACE-GC paper-verifier-closure-manifest v0.3.0",
+  "type": "object",
+  "properties": {
+    "version": {
+      "const": "paper-verifier-closure-v1"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "entry": {
+      "type": "object",
+      "properties": {
+        "module": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+        },
+        "callable": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        }
+      },
+      "required": [
+        "module",
+        "callable"
+      ],
+      "additionalProperties": false
+    },
+    "modules": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+          },
+          "root": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4194304
+          },
+          "package": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "root",
+          "path",
+          "sha256",
+          "bytes",
+          "package"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "edges": {
+      "type": "object",
+      "maxProperties": 4096,
+      "additionalProperties": {
+        "type": "array",
+        "maxItems": 4096,
+        "uniqueItems": true,
+        "items": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+        }
+      }
+    },
+    "dynamic": {
+      "type": "array",
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "properties": {
+          "module": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+          },
+          "target": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+          }
+        },
+        "required": [
+          "module",
+          "target"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "dependency_operations": {
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "properties": {
+          "importer": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+          },
+          "form": {
+            "enum": [
+              "import",
+              "import_module",
+              "find_spec"
+            ]
+          },
+          "module": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+          }
+        },
+        "required": [
+          "importer",
+          "form",
+          "module"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "packages": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "properties": {
+          "distribution": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._+!-]*$"
+          },
+          "root": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+          },
+          "top_level": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4096,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            }
+          },
+          "census_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "census_files": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "distribution",
+          "version",
+          "root",
+          "top_level",
+          "census_sha256",
+          "census_files"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "properties": {
+        "implementation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "cache_tag": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "magic": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "platform": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "bits": {
+          "type": "integer"
+        },
+        "invoked_executable": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "executable_resolved": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "executable_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "pyvenv_cfg_sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "base_executable": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "base_executable_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "base_prefix": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "sys_path": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        },
+        "core_files": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        },
+        "census_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "census_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "startup_modules_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "preload_modules_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "startup_files": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "prefixItems": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            ],
+            "items": false
+          }
+        },
+        "startup_files_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "startup_config": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "prefixItems": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  {
+                    "const": "absent"
+                  }
+                ]
+              }
+            ],
+            "items": false
+          }
+        },
+        "natives": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "required": [
+              "path",
+              "sha256"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "implementation",
+        "version",
+        "cache_tag",
+        "magic",
+        "platform",
+        "bits",
+        "invoked_executable",
+        "executable_resolved",
+        "executable_sha256",
+        "pyvenv_cfg_sha256",
+        "base_executable",
+        "base_executable_sha256",
+        "base_prefix",
+        "sys_path",
+        "core_files",
+        "census_sha256",
+        "census_files",
+        "startup_modules_sha256",
+        "preload_modules_sha256",
+        "startup_files",
+        "startup_files_sha256",
+        "startup_config",
+        "natives"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "version",
+    "name",
+    "entry",
+    "modules",
+    "edges",
+    "dynamic",
+    "dependency_operations",
+    "packages",
+    "runtime"
+  ],
+  "additionalProperties": false
+}
