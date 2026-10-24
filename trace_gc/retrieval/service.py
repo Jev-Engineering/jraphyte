@@ -10,10 +10,12 @@ from ..compiler import now
 from ..errors import ContractError, require
 from .budget import BudgetMeter, conservative_tokens
 from .contracts import RetrievalBudget, STRATEGIES, VERSION, validate_query
-from .items import canonical_item, conflict_pairs, visible_edges
+from .items import canonical_item, conflict_pairs, visible_edges, authorized_scope_edges
 from .security import AccessFilter
 from .store import GraphQueryAdapter, GraphReadView
 from .strategies import BuiltinStrategy, GraphRetriever, SearchSpace
+from .domains import ResearchDomainSelection
+from ..domain_publication import classification_identity
 from .vector import EmbeddingModel, HashingEmbedding, terms
 
 
@@ -25,7 +27,7 @@ class RetrievalCache:
         self.capacity = capacity
         self._entries: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
         self._lock = threading.RLock()
-        self.hits = self.misses = self.invalidations = 0
+        self.hits = self.misses = self.invalidations = self.evictions = 0
 
     def get(self, key: str) -> list[dict[str, Any]] | None:
         with self._lock:
@@ -44,6 +46,7 @@ class RetrievalCache:
             self._entries.move_to_end(key)
             while len(self._entries) > self.capacity:
                 self._entries.popitem(last=False)
+                self.evictions += 1
 
     def invalidate(self) -> None:
         with self._lock:
@@ -90,15 +93,18 @@ def effective_strategies(query: dict[str, Any]) -> list[str]:
     return sorted(dict.fromkeys(methods), key=lambda x: (x != "CONFLICT", methods.index(x)))
 
 
-def retrieval_fingerprint(query, versions, embedding_version, adapter_version, acl_version):
-    """The precise retrieval configuration participates in qualification/replay scope."""
+def retrieval_fingerprint(query, versions, embedding_version, adapter_version, acl_version, classification=None):
+    """Precise retrieval scope participates in qualification and historical replay."""
     methods = effective_strategies(query)
-    return digest({"retrieval": VERSION, "strategies": versions, "embedding": embedding_version,
-                              "adapter": adapter_version, "ranking": query["ranking_strategy"],
-                              "budget": query["budget"], "methods": methods, "hop_limit": query["hop_limit"],
-                              "mode": query["mode"], "relation_filters": [query["allowed_relation_types"], query["excluded_relation_types"]],
-                              "history": [query["include_historical"], query["include_superseded"]],
-                              "provenance": query["include_provenance"], "acl_version": acl_version})
+    body = {"retrieval": VERSION, "strategies": versions, "embedding": embedding_version,
+            "adapter": adapter_version, "ranking": query["ranking_strategy"],
+            "budget": query["budget"], "methods": methods, "hop_limit": query["hop_limit"],
+            "mode": query["mode"], "relation_filters": [query["allowed_relation_types"], query["excluded_relation_types"]],
+            "history": [query["include_historical"], query["include_superseded"]],
+            "provenance": query["include_provenance"], "acl_version": acl_version}
+    if classification is not None:
+        body.update(classification_identity=classification, research_domain_scope=query.get("research_domain_scope"))
+    return digest(body)
 
 
 class HybridRetriever:
@@ -124,6 +130,7 @@ class HybridRetriever:
         self.cache = cache if cache is not None else RetrievalCache()
         self.run_budget, self.token_counter = run_budget, token_counter
         self._last_read_identity: str | None = None
+        self.last_read_metrics: dict[str, Any] = {}
         self._lock = threading.RLock()
 
     def set_access_policy(self, policy: dict[str, Any]) -> None:
@@ -138,12 +145,32 @@ class HybridRetriever:
         with self._lock:
             return self._retrieve(deepcopy(query), plan_id=plan_id)
 
+    def _assert_current_sources(self, view: GraphReadView, source_ids, *, domain_scoped: bool = False) -> None:
+        getter = getattr(self.adapter, "current_source_status", None)
+        require(callable(getter) or not (domain_scoped or view.snapshot.get("classifications")), "SOURCE_STATUS_CAPABILITY",
+                "classified or domain-scoped reads require a present-status adapter hook")
+        live = getter() if callable(getter) else view.source_status
+        current = AccessFilter(self.access_policy, view.catalog, live)
+        for source_id in source_ids:
+            require(current.source(source_id), "ACCESS_DENIED", "source revoked before materialization/model use")
+            require(live.get(source_id) == view.source_status.get(source_id), "STALE_SOURCE_EPOCH",
+                    "source status changed during retrieval; retry a new consistent read")
+
+    def validate_live_context(self, context_id: str) -> None:
+        getter = getattr(self.adapter, "current_source_status", None)
+        context = self.catalog.get(context_id, "graph-context")
+        require(callable(getter) or not context.get("research_domain_scope"), "SOURCE_STATUS_CAPABILITY",
+                "domain-scoped model use requires current source status")
+        statuses = getter() if callable(getter) else context["source_status"]
+        validate_context(self.catalog, context_id, current_access=self.access_policy, current_status=statuses)
+
     def _retrieve(self, query: dict[str, Any], *, plan_id: str | None = None) -> str:
         validate_query(query)
         meter = BudgetMeter(RetrievalBudget(**query["budget"]))
         if self.run_budget is not None:
             self.run_budget.consume("retrieval_requests")
         view = self.adapter.read(query)
+        self.last_read_metrics = deepcopy(view.read_metrics)
         # Current source status participates in identity even for an old graph version.
         access = AccessFilter(self.access_policy, view.catalog, view.source_status,
                               historical=query["include_historical"] or query["mode"] == "HISTORICAL")
@@ -152,13 +179,15 @@ class HybridRetriever:
             self.catalog.add(record)
         if plan_id is not None:
             plan = self.catalog.get(plan_id, "retrieval-plan")
-            require(plan["candidate_id"] == query["candidate_id"], "RETRIEVAL_PLAN_BINDING", "candidate differs")
+            require(plan["candidate_id"] == query["candidate_id"] and
+                    plan.get("research_domain_scope") == query.get("research_domain_scope"),
+                    "RETRIEVAL_PLAN_BINDING", "candidate or research-domain scope differs")
         query_id = self.catalog.put("retrieval-query", query)
         access_id = self.catalog.put("graph-access", self.access_policy)
         methods = effective_strategies(query)
         versions = {name: self.strategies[name].version for name in methods}
         fingerprint = retrieval_fingerprint(query, versions, self.embedding.version,
-                                            view.adapter_version, self.access_policy["version"])
+                                            view.adapter_version, self.access_policy["version"], view.classification_identity)
         key_query = {k: v for k, v in query.items() if k not in {"created_at", "retrieval_round"}}
         key = digest({"view": view.identity, "query": key_query, "acl": access.fingerprint,
                       "retrieval_fingerprint": fingerprint})
@@ -170,14 +199,32 @@ class HybridRetriever:
         partial = False
         meter.used["graph_queries"] = 1  # Consistent read, including on a cache hit.
         stop = "SEARCH_COMPLETE"
+        if candidates is not None:
+            try:
+                visible = authorized_scope_edges(view, access, query, meter)
+                conflicts = conflict_pairs(visible, view.catalog.get(view.snapshot["schema_id"], "schema")["relations"], meter)
+                selection = ResearchDomainSelection(view, access, query, visible, conflicts, meter)
+                for row in candidates:
+                    meter.check()
+                    item = row["item"]
+                    expected = canonical_item(view, access, query, kind=item["kind"], ref=item["canonical_ref"],
+                                              members=item["member_assertion_ids"], edges=visible, conflicts=conflicts,
+                                              domain_selection=selection)
+                    require(item == expected, "CONTEXT_MATERIALIZATION", "cached context differs from authority")
+            except ContractError as exc:
+                if exc.code != "RETRIEVAL_BUDGET_EXHAUSTED":
+                    raise
+                candidates, partial, stop = [], True, "RETRIEVAL_BUDGET_EXHAUSTED"
         if candidates is None:
             candidates_by_id: dict[str, dict[str, Any]] = {}
             try:
                 meter.check()
                 # ACL filtering precedes path expansion, embeddings and semantic models.
-                visible = visible_edges(view, access, query, meter)
+                visible = authorized_scope_edges(view, access, query, meter)
                 conflicts = conflict_pairs(visible, view.catalog.get(view.snapshot["schema_id"], "schema")["relations"], meter)
-                space = SearchSpace(view, access, query, visible, conflicts, meter, self.embedding)
+                selection = ResearchDomainSelection(view, access, query, visible, conflicts, meter)
+                space = SearchSpace(view, access, query, visible, conflicts, meter, self.embedding, selection,
+                                    lambda sources: self._assert_current_sources(view, sources, domain_scoped=query.get("research_domain_scope") is not None))
                 for name in methods:
                     meter.check()
                     if name not in {"LEXICAL", "VECTOR", "SOURCE", "EVIDENCE"}:
@@ -189,7 +236,7 @@ class HybridRetriever:
                         # trust classes, provenance or access labels.
                         canonical = canonical_item(view, access, query, kind=raw_item["kind"],
                             ref=raw_item["canonical_ref"], members=raw_item["member_assertion_ids"],
-                            edges=visible, conflicts=conflicts)
+                            edges=visible, conflicts=conflicts, domain_selection=selection)
                         require(canonical == raw_item, "CONTEXT_MATERIALIZATION", "retriever changed canonical context")
                         features = ranking_features(canonical, query, similarity)
                         row = candidates_by_id.setdefault(canonical["id"], {"item": canonical, "methods": [],
@@ -203,8 +250,6 @@ class HybridRetriever:
                     raise
                 partial, stop = True, "RETRIEVAL_BUDGET_EXHAUSTED"
             candidates = list(candidates_by_id.values())
-            if not partial:
-                self.cache.put(key, candidates)
         selected, discarded, rows = [], [], []
         seen = {resource: set() for resource in ("nodes", "edges", "paths", "communities", "decisions", "source_spans")}
         ranked = sorted(candidates, key=lambda r: (r["item"]["kind"] != "CONFLICT",
@@ -242,7 +287,9 @@ class HybridRetriever:
         source_ids = sorted({s for i in selected for s in i["source_ids"]})
         # Internal lineage stores only IDs needed to revalidate selected material.
         available = sorted({r for i in selected for r in i["record_refs"] if r in view.available_record_ids})
+        self._assert_current_sources(view, source_ids, domain_scoped=query.get("research_domain_scope") is not None)
         body = {"version": VERSION, "query_id": query_id, "snapshot_id": view.snapshot_id,
+                "classification_identity": view.classification_identity, "research_domain_scope": query.get("research_domain_scope"),
                 "graph_version": view.snapshot["graph_version"], "security_scope": query["security_scope"],
                 "access_id": access_id, "source_status": {s: status for s, status in view.source_status.items() if access.allows("source", s)},
                 "available_record_ids": available, "focus_entities": [x for x in query["focus_entities"] if access.allows("node", x)],
@@ -259,8 +306,16 @@ class HybridRetriever:
                 "embedding_version": self.embedding.version, "adapter_version": view.adapter_version,
                 "strategy_versions": versions, "created_at": now()}
         context_id = self.catalog.put("graph-context", body)
+        # Independently reconstruct from the immutable records copied BEFORE any
+        # candidate plugin executes. A mutable SearchSpace or membership cache is
+        # not authoritative. Do not cache candidates until this verification passes.
+        validate_context(self.catalog, context_id, current_access=self.access_policy,
+                         current_status=view.source_status)
+        if not partial and not cache_hit:
+            self.cache.put(key, candidates)
         lineage = {"version": VERSION, "query_id": query_id, "graph_context_id": context_id, "plan_id": plan_id,
                    "requesting_component": query["requesting_component"], "graph_version": body["graph_version"],
+                   "classification_identity": view.classification_identity, "research_domain_scope": query.get("research_domain_scope"),
                    "retrieval_strategies": methods, "strategy_versions": versions, "candidates": rows,
                    "selected": [{"item_id": i["id"], "reason": "atomic_conflict_pair" if i["kind"] == "CONFLICT" else "bounded_utility"} for i in selected],
                    "discarded": discarded, "budget": query["budget"], "usage": deepcopy(meter.used),
@@ -273,7 +328,8 @@ class HybridRetriever:
         if blocked_conflict_members:
             warnings.append("CONFLICT_PAIR_EXCLUDED_BY_BUDGET")
         if not query["include_conflicts"]:
-            warnings.append("CONFLICT_SEARCH_DISABLED_BY_REQUEST")
+            warnings.append("EXPLICIT_CONFLICT_SEARCH_DISABLED_REQUIRED_CLOSURE_RETAINED" if query.get("research_domain_scope")
+                            else "CONFLICT_SEARCH_DISABLED_BY_REQUEST")
         if any(i["generated_summary"] for i in selected):
             warnings.append("SUMMARIES_ARE_NOT_CANONICAL_EVIDENCE")
         if any(i["trust_class"] in {"HISTORICAL_GRAPH_FACT", "SUPERSEDED_GRAPH_FACT"} for i in selected):
@@ -295,11 +351,15 @@ def validate_context(catalog: Catalog, context_id: str, *, current_access: dict[
             "STALE_GRAPH_CONTEXT", "query/snapshot/scope differs")
     require(query["graph_version"] is None or query["graph_version"] == snap["graph_version"],
             "STALE_GRAPH_CONTEXT", "explicit graph version differs")
+    if ("classification_identity" in context or "research_domain_scope" in query or "classifications" in snap):
+        require(context.get("classification_identity") == classification_identity(snap) and
+                "research_domain_scope" in context and context["research_domain_scope"] == query.get("research_domain_scope"),
+                "DOMAIN_REVISION", "context taxonomy scope or classification revision differs from its exact snapshot")
     policy = catalog.get(context["access_id"], "graph-access")
     require(set(context["strategy_versions"]) == set(effective_strategies(query)) and
             context["retrieval_methods"] == effective_strategies(query), "RETRIEVAL_CONFIGURATION", "strategies differ")
     base_fingerprint = retrieval_fingerprint(query, context["strategy_versions"], context["embedding_version"],
-                                            context["adapter_version"], policy["version"])
+                                            context["adapter_version"], policy["version"], context.get("classification_identity"))
     if "reranking_observation_ids" not in context:
         require("reranking_base_context_id" not in context and context["retrieval_fingerprint"] == base_fingerprint,
                 "RETRIEVAL_CONFIGURATION", "retrieval fingerprint differs")
@@ -313,13 +373,15 @@ def validate_context(catalog: Catalog, context_id: str, *, current_access: dict[
     view = GraphReadView(catalog, context["snapshot_id"], statuses, set(context["available_record_ids"]), [], context["adapter_version"])
     # Reconstruct conflicts using the complete authorized snapshot, including their
     # sources. Persisted context statuses include selected conflicts' source spans.
-    edges = visible_edges(view, access, query)
+    edges = authorized_scope_edges(view, access, query)
     conflicts = conflict_pairs(edges, catalog.get(snap["schema_id"], "schema")["relations"])
+    selection = ResearchDomainSelection(view, access, query, edges, conflicts)
     ids = [i["id"] for i in context["items"]]
     require(len(ids) == len(set(ids)), "DUPLICATE_ID", "context item IDs")
     for item in context["items"]:
         expected = canonical_item(view, access, query, kind=item["kind"], ref=item["canonical_ref"],
-                                  members=item["member_assertion_ids"], edges=edges, conflicts=conflicts)
+                                  members=item["member_assertion_ids"], edges=edges, conflicts=conflicts,
+                                  domain_selection=selection)
         require(item == expected, "CONTEXT_MATERIALIZATION", "source-derived context differs from canonical records")
     projections = {"retrieved_nodes": {e for i in context["items"] for e in i["entity_ids"]},
                    "retrieved_edges": {e for i in context["items"] for e in i["assertion_ids"]},
@@ -354,7 +416,7 @@ class GraphRAGQueryService:
         c = self.retriever.catalog
         result = c.get(result_id, "retrieval-result")
         context = c.get(result["graph_context_id"], "graph-context")
-        validate_context(c, result["graph_context_id"], current_access=self.retriever.access_policy)
+        self.retriever.validate_live_context(result["graph_context_id"])
         citations = []
         for ref in context["selected_evidence_ids"]:
             evidence = c.get(ref, "evidence")
@@ -365,12 +427,13 @@ class GraphRAGQueryService:
         warnings = list(result["warnings"])
         if any(i["assertion_ids"] and not i["provenance_complete"] for i in context["items"]):
             warnings.append("INCOMPLETE_PROVENANCE_NOT_TRUSTED_TRUTH")
-        if context["conflict_refs"]:
+        if context["conflict_refs"] or any(i["trust_class"] == "CONFLICTED_GRAPH_FACT" for i in context["items"]):
             warnings.append("CONFLICTING_EVIDENCE_PRESENT")
         if not context["items"]:
             warnings.append("NO_AUTHORIZED_CONTEXT")
         answer = {"version": VERSION, "query_id": result["query_id"], "result_id": result_id,
                   "graph_context_id": result["graph_context_id"], "graph_version": context["graph_version"],
+                  "classification_identity": context["classification_identity"], "research_domain_scope": context["research_domain_scope"],
                   "mode": request["mode"], "answer_status": "CONTEXT_ONLY", "items": context["items"],
                   "citations": citations, "warnings": sorted(set(warnings)), "can_mutate_graph": False, "created_at": now()}
         answer_id = c.put("graphrag-answer", answer)

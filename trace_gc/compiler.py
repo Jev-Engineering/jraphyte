@@ -152,6 +152,13 @@ def materialize(catalog: Catalog, candidate_ids: list[str], prior_ids: list[str]
             state["graph_context"].append({"context_id": ref, "items": deepcopy(context["items"]),
                                            "instruction_authority": False})
             trace(f"/graph_context/{i}/items", ref, "/items")
+            # Topical selection metadata is traceable context, never additional
+            # scientific evidence or an authorization grant. Do not pull review
+            # basis spans into the Minimum Evidence Closure as claim support.
+            for field in ("classification_identity", "research_domain_scope"):
+                if field in context:
+                    state["graph_context"][i][field] = deepcopy(context[field])
+                    trace(f"/graph_context/{i}/{field}", ref, f"/{field}")
     return state,closed,traces
 
 def wire_request(pack: dict[str, Any]) -> bytes:

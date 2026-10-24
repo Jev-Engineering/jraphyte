@@ -1,12 +1,14 @@
 """Read adapters over the existing graph authority; algorithms never write it."""
 from __future__ import annotations
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 from ..canonical import digest, loads
 from ..catalog import Catalog
 from ..compiler import timestamp
 from ..errors import require
+from ..domain_publication import snapshot_body, classification_identity
+from .domain_index import authoritative_rows, SQLiteClassificationIndex
 
 @dataclass
 class GraphReadView:
@@ -16,6 +18,25 @@ class GraphReadView:
     available_record_ids: set[str]
     events: list[dict[str, Any]]
     adapter_version: str
+    classification_rows: dict[str, dict[str, Any]] | None = None
+    read_metrics: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        expected = authoritative_rows(self.catalog, self.snapshot)
+        require(self.classification_rows is None or self.classification_rows == expected,
+                "DOMAIN_INDEX_CORRUPT", "read projection differs from accepted snapshot")
+        self.classification_rows = expected
+
+    @property
+    def classification_identity(self) -> dict[str, Any]:
+        return classification_identity(self.snapshot)
+
+    def source_classification(self, source_id: str, access: Any) -> dict[str, Any] | None:
+        # Authorization and PRESENT source status precede any membership selection.
+        if not access.source(source_id):
+            return None
+        row = self.classification_rows.get(source_id)
+        return deepcopy(row) if row is not None else None
 
     @property
     def snapshot(self) -> dict[str, Any]:
@@ -23,7 +44,7 @@ class GraphReadView:
 
     @property
     def identity(self) -> str:
-        return digest({"snapshot": self.catalog.hash(self.snapshot_id), "source_status": self.source_status,
+        return digest({"snapshot": self.catalog.hash(self.snapshot_id), "classifications": self.classification_identity, "source_status": self.source_status,
                        "available": sorted(ref for ref in self.available_record_ids
                             if ref in self.catalog and self.catalog.record(ref)["kind"] not in {
                                 "retrieval-query", "retrieval-plan", "graph-access", "graph-context", "retrieval-result",
@@ -34,16 +55,20 @@ class GraphReadView:
 class GraphQueryAdapter(Protocol):
     version: str
     def read(self, query: dict[str, Any]) -> GraphReadView: ...
+    def current_source_status(self) -> dict[str, Any]: ...
 
 
 class InMemoryGraphAdapter:
     """Immutable-snapshot reference adapter, useful for tests and custom stores."""
-    version = "memory-snapshot-v1"
+    version = "memory-snapshot-domain-v1"
 
     def __init__(self, catalog: Catalog, snapshot_ids: list[str], source_status: dict[str, Any],
                  events: list[dict[str, Any]] | None = None):
         self.catalog, self.snapshot_ids, self.source_status = catalog, list(snapshot_ids), deepcopy(source_status)
         self.events = deepcopy(events or [])
+
+    def current_source_status(self) -> dict[str, Any]:
+        return deepcopy(self.source_status)
 
     def read(self, query: dict[str, Any]) -> GraphReadView:
         version = resolve_version(query, self.events)
@@ -52,7 +77,14 @@ class InMemoryGraphAdapter:
         require(bool(candidates), "GRAPH_VERSION_UNAVAILABLE", "requested snapshot unavailable")
         selected = max(candidates, key=lambda x: self.catalog.get(x, "graph-snapshot")["graph_version"])
         v = self.catalog.get(selected, "graph-snapshot")["graph_version"]
+        require(len({self.catalog.hash(ref) for ref in candidates
+                     if self.catalog.get(ref, "graph-snapshot")["graph_version"] == v}) == 1,
+                "GRAPH_VERSION_AMBIGUOUS", "one accepted snapshot is required per graph version")
         history = [e for e in self.events if e["version"] <= v]
+        selected_events = [e for e in history if e["version"] == v]
+        if selected_events:
+            require(self.catalog.get(selected, "graph-snapshot") == snapshot_body(selected_events[-1]["state_after"]),
+                    "SNAPSHOT_BINDING", "memory snapshot differs from its authoritative event")
         available = set().union(*(set(e.get("record_hashes", {})) for e in history)) if history else set()
         # A custom adapter without an event journal can retrieve snapshot facts,
         # but cannot assert when historical decisions became known.
@@ -85,18 +117,46 @@ class SQLiteGraphAdapter:
     Reuses state/journal/records. Does not maintain an alternate authoritative graph.
     Current permissions and tombstones govern even historical snapshot retrieval.
     """
-    version = "sqlite-trace-read-v1"
+    version = "sqlite-trace-domain-read-v1"
 
-    def __init__(self, backend: Any, catalog: Catalog | None = None):
-        self.backend, self.working_catalog = backend, catalog
+    def __init__(self, backend: Any, catalog: Catalog | None = None, *, audit_trust: Any = None):
+        self.backend, self.working_catalog, self.audit_trust = backend, catalog, audit_trust
+        self.index = SQLiteClassificationIndex(backend.db)
+        with backend._lock:
+            own = not backend.db.in_transaction
+            if own: backend.db.execute("BEGIN IMMEDIATE")
+            try:
+                self.index.ensure_tables()
+                if own: backend.db.execute("COMMIT")
+            except BaseException:
+                if own and backend.db.in_transaction: backend.db.execute("ROLLBACK")
+                raise
+
+    def current_source_status(self) -> dict[str, Any]:
+        with self.backend._lock:
+            return self.backend.statuses()
+
+    def rebuild_classification_index(self, query: dict[str, Any]) -> GraphReadView:
+        return self._read(query, rebuild=True)
 
     def read(self, query: dict[str, Any]) -> GraphReadView:
+        return self._read(query)
+
+    def _read(self, query: dict[str, Any], *, rebuild: bool = False) -> GraphReadView:
+        from time import perf_counter
+        start = perf_counter()
         backend = self.backend
         with backend._lock:
             own = not backend.db.in_transaction
             if own:
                 backend.db.execute("BEGIN")
             try:
+                audit_start = perf_counter()
+                require(backend.sandbox or self.audit_trust is not None or not
+                        (backend.state().get("classifications") or query.get("research_domain_scope")),
+                        "CLASSIFICATION_TRUST_REQUIRED", "non-sandbox domain reads require application-enrolled audit trust")
+                backend.audit(trust=self.audit_trust)
+                audit_seconds = perf_counter() - audit_start
                 events = [loads(row[0]) for row in backend.db.execute("SELECT body FROM trace_journal ORDER BY version")]
                 version = resolve_version(query, events)
                 state = backend.state()
@@ -112,14 +172,20 @@ class SQLiteGraphAdapter:
                 history = [e for e in events if e["version"] <= state["graph_version"]]
                 available = set().union(*(set(e["record_hashes"]) for e in history))
                 available |= {r["id"] for r in catalog.all("transaction") if r["body"]["version"] <= state["graph_version"]}
+                body = snapshot_body(state)
+                snapshot_id = catalog.put("graph-snapshot", body)
+                # Compute/validate index ONLY from persisted authority, never proposals
+                # carried in the caller's mutable working catalog.
+                rows = self.index.read(catalog, snapshot_id, rebuild=rebuild)
                 if self.working_catalog is not None and version is None:
                     for record in self.working_catalog.all():
                         catalog.add(record)
                     available |= {r["id"] for r in self.working_catalog.all()}
-                body = {k: state[k] for k in ("graph_version", "schema_id", "schema_hash", "nodes", "assertions", "source_epochs")}
-                snapshot_id = catalog.put("graph-snapshot", body)
                 available.add(snapshot_id)
-                result = GraphReadView(catalog, snapshot_id, backend.statuses(), available, history, self.version)
+                result = GraphReadView(catalog, snapshot_id, backend.statuses(), available, history, self.version,
+                                       classification_rows=rows,
+                                       read_metrics={"authority_audit_seconds": audit_seconds, **self.index.last_metrics,
+                                                     "read_seconds": perf_counter() - start})
                 if own:
                     backend.db.execute("COMMIT")
                 return result

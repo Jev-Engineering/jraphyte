@@ -37,6 +37,10 @@ class JevReranker:
             graph_context_ids=[result["graph_context_id"]], source_retrieval_ids=[result_id],
             token_counter=self.token_counter, tokenizer_version=self.tokenizer_version)
         started = time.monotonic()
+        retriever.validate_live_context(result["graph_context_id"])
+        from .integration import validate_pack_lineage
+        statuses = retriever.adapter.current_source_status() if hasattr(retriever.adapter, "current_source_status") else None
+        validate_pack_lineage(c, c.get(pack_id, "pack"), current_access=retriever.access_policy, current_status=statuses)
         observation_ids = self.execute(pack_id)
         latency = (time.monotonic()-started)*1000
         pack = c.get(pack_id, "pack")

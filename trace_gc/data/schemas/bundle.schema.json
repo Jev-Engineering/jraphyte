@@ -195,7 +195,9 @@
               "retrieval-lineage",
               "graphrag-answer",
               "retrieval-replay",
-              "retrieval-evaluation"
+              "retrieval-evaluation",
+              "research-domain-taxonomy",
+              "classification-assignment"
             ]
           },
           "hash": {
@@ -257,7 +259,9 @@
               "SCHEMA",
               "SNAPSHOT",
               "POLICY",
-              "RETRIEVAL"
+              "RETRIEVAL",
+              "DOMAIN_TAXONOMY",
+              "CLASSIFICATION"
             ]
           },
           "created_at": {

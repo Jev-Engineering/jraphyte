@@ -43,6 +43,12 @@ def parser() -> argparse.ArgumentParser:
     gd.add_argument("--output",type=Path,default=Path("trace-gc-graphrag-demo"))
     gb=sub.add_parser("graphrag-benchmark",help="Run the synthetic retrieval/pipeline ablations; not a real-model accuracy evaluation")
     gb.add_argument("--output",type=Path,default=Path("trace-gc-graphrag-benchmark"))
+    dw=sub.add_parser("domain-workload",help="Measure fabricated domain workloads in disposable reference stores; not a placement qualification")
+    dw.add_argument("--output",type=Path,required=True)
+    dw.add_argument("--repetitions",type=int,default=3)
+    dw.add_argument("--workers",type=int,default=2)
+    dc=sub.add_parser("domain-conformance",help="Run isolated signed reference classification conformance; not production qualification")
+    dc.add_argument("--output",type=Path)
     c=sub.add_parser("canonical",help="Generate a TRACE-C14N-1 hash and byte vector")
     c.add_argument("input",type=Path)
     e=sub.add_parser("evaluate-labels",help="Calculate an UNSIGNED qualification artifact from independent labels")
@@ -76,6 +82,14 @@ def main(argv: list[str] | None=None) -> int:
             report=run_benchmark(args.output)
             result={k:report[k] for k in ("status","cases","runs","provider_calls","production_graph_writes","interpretation")}
             result["output"]=str(args.output)
+        elif args.command=="domain-workload":
+            from .retrieval.workloads import run_reference_domain_workload
+            report=run_reference_domain_workload(args.output,repetitions=args.repetitions,workers=args.workers)
+            result={k:report[k] for k in ("status","sample_count","query_latency_ms","publication_latency_ms","writes","placement_decision")}
+            result["output"]=str(args.output)
+        elif args.command=="domain-conformance":
+            from .domain_conformance import run_domain_conformance
+            result=run_domain_conformance(args.output)
         elif args.command=="canonical":
             value=load(args.input);result={"profile":"TRACE-C14N-1","sha256":digest(value),"bytes_hex":canonical_bytes(value).hex()}
         elif args.command=="evaluate-labels":

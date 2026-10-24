@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:trace-gc:0.3.0:research-domain-taxonomy",
+  "title": "TRACE-GC research-domain-taxonomy v0.3.0",
+  "type": "object",
+  "properties": {
+    "contract_version": {
+      "const": 1
+    },
+    "taxonomy_key": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "domains": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^research:[a-z0-9][a-z0-9._-]*$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "definition": {
+            "type": "string",
+            "minLength": 1
+          },
+          "parent_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^research:[a-z0-9][a-z0-9._-]*$"
+            },
+            "minItems": 0,
+            "uniqueItems": true
+          },
+          "status": {
+            "enum": [
+              "ACTIVE",
+              "RETIRED"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "definition",
+          "parent_ids",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "supersedes": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "supersedes_hash": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "const": "CURATED"
+        },
+        "method_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "basis": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "method",
+        "method_version",
+        "basis"
+      ],
+      "additionalProperties": false
+    },
+    "review": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "PROPOSED",
+            "APPROVED"
+          ]
+        },
+        "reviewer_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reviewed_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "status",
+        "reviewer_id",
+        "reviewed_at",
+        "rationale"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "contract_version",
+    "taxonomy_key",
+    "version",
+    "domains",
+    "supersedes",
+    "supersedes_hash",
+    "provenance",
+    "review"
+  ],
+  "additionalProperties": false
+}

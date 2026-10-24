@@ -95,6 +95,18 @@ def visible_edges(view: GraphReadView, access: AccessFilter, query: dict[str, An
     return result
 
 
+
+def authorized_scope_edges(view: GraphReadView, access: AccessFilter, query: dict[str, Any], meter=None) -> dict[str, Any]:
+    """ACL/current-status universe for domain selection and required closure.
+
+    Relation/source filters constrain anchors, not necessary identity/refutation
+    proof. Unscoped requests keep their legacy filter semantics unchanged.
+    """
+    if query.get("research_domain_scope") is None:
+        return visible_edges(view, access, query, meter)
+    closure_query = {**query, "allowed_relation_types": [], "excluded_relation_types": [], "source_scope": []}
+    return visible_edges(view, access, closure_query, meter)
+
 def conflict_pairs(edges: dict[str, dict[str, Any]], relations: dict[str, Any], meter=None) -> list[list[str]]:
     """Find explicit incompatible predicates, including cross-paper support/refutation."""
     groups: dict[str, list[str]] = {}
@@ -124,7 +136,7 @@ def conflict_pairs(edges: dict[str, dict[str, Any]], relations: dict[str, Any], 
     return sorted(result)
 
 
-def canonical_item(view: GraphReadView, access: AccessFilter, query: dict[str, Any], *, kind: str,
+def _canonical_item(view: GraphReadView, access: AccessFilter, query: dict[str, Any], *, kind: str,
                    ref: str, members: list[str] | None = None, edges: dict[str, Any] | None = None,
                    conflicts: list[list[str]] | None = None) -> dict[str, Any]:
     """Reconstruct all source-derived text from immutable originals, not caller text."""
@@ -252,3 +264,53 @@ def canonical_item(view: GraphReadView, access: AccessFilter, query: dict[str, A
             "calibration": {"qualified": False, "note": "Retrieval status is not a calibrated truth probability."},
             "generated_summary": generated, "data_origin": "GENERATED_SUMMARY" if generated else "SOURCE_DERIVED",
             "instruction_authority": False}
+
+
+def canonical_item(view: GraphReadView, access: AccessFilter, query: dict[str, Any], *, kind: str,
+                   ref: str, members: list[str] | None = None, edges: dict[str, Any] | None = None,
+                   conflicts: list[list[str]] | None = None, domain_selection=None) -> dict[str, Any]:
+    """Canonical anchor plus atomic, authorized evidence/identity/refutation closure.
+
+    Search paths retain their own ordered member IDs. Explanatory assertions are
+    separately labeled; they are never presented as extra hops in the search path.
+    Unscoped legacy materialization retains its original item shape and text.
+    """
+    from .domains import ResearchDomainSelection
+    from ..canonical import digest
+    if query.get("research_domain_scope") is None:
+        return _canonical_item(view, access, query, kind=kind, ref=ref, members=members, edges=edges, conflicts=conflicts)
+    if domain_selection is None:
+        authorized = authorized_scope_edges(view, access, query)
+        pairs = conflict_pairs(authorized, view.catalog.get(view.snapshot["schema_id"], "schema")["relations"])
+        domain_selection = ResearchDomainSelection(view, access, query, authorized, pairs)
+    selection = domain_selection
+    selection.require_candidate(kind, ref, members)
+    item = _canonical_item(view, access, query, kind=kind, ref=ref, members=members,
+                           edges=selection.allowed_edges, conflicts=selection.conflicts)
+    seeds = selection.basis(kind, ref, members)
+    closure = selection.closure(seeds)
+    direct_assertions = set(item["assertion_ids"])
+    if closure:
+        proof = _canonical_item(view, access, query, kind="COMMUNITY", ref=digest(sorted(closure)), members=sorted(closure),
+                                edges=selection.edges, conflicts=selection.conflicts)
+        for field in ("assertion_ids", "entity_ids", "evidence_ids", "source_ids", "decision_ids", "observation_ids",
+                      "transaction_ids", "plan_ids", "record_refs", "relation_types"):
+            item[field] = sorted(set(item[field]) | set(proof[field]))
+        item["risk_class"] = max(item["risk_class"], proof["risk_class"])
+        item["provenance_complete"] = item["provenance_complete"] and proof["provenance_complete"]
+        if any(set(pair) <= closure for pair in selection.conflicts):
+            item["trust_class"] = "CONFLICTED_GRAPH_FACT"
+        extra = closure - direct_assertions
+        if extra:
+            item["text"] += "\nAUTHORIZED RESEARCH-DOMAIN EVIDENCE CLOSURE (not additional search-path hops): " + dumps([
+                {"assertion_id": edge_id, "role": "DOMAIN_BASIS" if edge_id in seeds else "IDENTITY_OR_CONFLICT_CLOSURE",
+                 **selection.edges[edge_id]["assertion"]} for edge_id in sorted(extra)])
+    item["research_domain"] = selection.item_metadata(item["source_ids"], seeds, closure)
+    refs = set(item["record_refs"])
+    for assignment_id in item["research_domain"]["source_assignments"].values():
+        if assignment_id is not None:
+            refs.add(assignment_id)
+            refs.add(view.catalog.get(assignment_id, "classification-assignment")["taxonomy_id"])
+    refs.add(selection.scope["taxonomy_id"])
+    item["record_refs"] = sorted(refs)
+    return item

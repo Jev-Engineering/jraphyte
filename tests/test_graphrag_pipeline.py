@@ -155,7 +155,10 @@ class PipelineTests(unittest.TestCase):
         current = GraphRAGQueryService(self.r).query(self.request(downstream=True))
         self.assertFalse(any(i["assertion_ids"] for i in current["context"]["items"]))
         historical = GraphRAGQueryService(self.r).query(self.request(downstream=True, graph_version=old_version, include_historical=True, mode="HISTORICAL"))
-        self.assertTrue(any(i["assertion_ids"] for i in historical["context"]["items"]))
+        # Historical facts remain in their immutable snapshot, but present-time
+        # source withdrawal is a use revocation, not just a "latest" filter.
+        self.assertFalse(any(i["assertion_ids"] for i in historical["context"]["items"]))
+        self.assertEqual(historical["context"]["graph_version"], old_version)
 
     def test_historical_does_not_restore_denied_permissions(self):
         commit, _ = self.publish_graph()
