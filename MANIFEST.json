@@ -3,12 +3,12 @@
   "hash_algorithm": "SHA-256",
   "manifest_self_excluded": true,
   "source_only": true,
-  "file_count": 705,
+  "file_count": 706,
   "files": [
     {
       "path": ".github/workflows/test.yml",
-      "bytes": 2602,
-      "sha256": "366583e5f4821ac69889febc3f1c950c1668d0f02443b936abe759995b2a2c94"
+      "bytes": 3098,
+      "sha256": "040fc590b586175bed557b95d1362995760ce2d6e5b77c526f3261744d9fb0e6"
     },
     {
       "path": ".gitignore",
@@ -2297,8 +2297,8 @@
     },
     {
       "path": "src/paper_pilot_phase_cutover_guarded_v2.py",
-      "bytes": 19252,
-      "sha256": "eebb08bc51209e23a50d3b8e89afc84b834ac89d86c6a54e52f03f8ab06ee2d8"
+      "bytes": 21238,
+      "sha256": "be0322b91127817d8188042b647ceb2baab3de6d604516356eb80ea0a346f1de"
     },
     {
       "path": "src/paper_pilot_phase_cutover_guarded_v4.py",
@@ -2636,6 +2636,11 @@
       "sha256": "655b820a4de244c6612bfd2a79854e5f9bda9692ef10ff3903c784a003de4ea5"
     },
     {
+      "path": "tests/test_paper_pilot_phase_cutover_guarded_v2_dacl_shapes.py",
+      "bytes": 15029,
+      "sha256": "9dad909491b49ad789e86a9175b88bd3d519147314e50b1995f62a5f88872d2e"
+    },
+    {
       "path": "tests/test_paper_pilot_phase_cutover_guarded_v2_trustees.py",
       "bytes": 18071,
       "sha256": "387a304dd08056ab73feb4e34df7beb34dfaf21d2cfdfdc0c4803c45181adaf9"
@@ -2947,8 +2952,8 @@
     },
     {
       "path": "tests/test_windows_fence_diagnostics.py",
-      "bytes": 6916,
-      "sha256": "8437f0e838e3832d139d58bb7338a2e7b2bdcf6e217f1640ffab14de1cfbd9fa"
+      "bytes": 11078,
+      "sha256": "9eac2724ad7959d612f4917ac6ab39403a76271b72398b3a3a2936f057e29bcb"
     },
     {
       "path": "tools/build_schemas.py",
@@ -3027,8 +3032,8 @@
     },
     {
       "path": "tools/windows_fence_diagnostics.py",
-      "bytes": 4379,
-      "sha256": "d6abd2c30e6336ed73e4e9aa8e679016a29f6bbcc6b3ec106f93606bc2215322"
+      "bytes": 9454,
+      "sha256": "cbbd6f8a27b7815592f209b958a934a640d815e2e730a8385b319a576a227f11"
     },
     {
       "path": "tools/windows_image_ocr.ps1",

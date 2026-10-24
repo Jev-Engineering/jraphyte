@@ -63,6 +63,19 @@ class ProbeCleanupTests(unittest.TestCase):
             def __exit__(self, *exc):
                 # Independent check, before the directory is removed: no owner
                 # deny may remain on the probe once the tool's own cleanup ran.
+                tree = Path(self.name)
+                if (tree / "old-app").exists():
+                    guarded = test.guarded
+                    leftover = 0
+                    for target in [tree / "old-app"] + [tree / folder / name
+                                                         for folder in ("old-app/state", "archive/state")
+                                                         for name in guarded.NAMES]:
+                        if target.exists():
+                            if guarded._owner_deny_present(test.real_dacl(target), test.sid):
+                                leftover += 1
+                                subprocess.run(["icacls.exe", str(target), "/remove:d", "*" + test.sid],
+                                               capture_output=True, text=True, timeout=30)
+                    test.at_exit["tree_denies"] = leftover
                 probe = Path(self.name) / "probe.bin"
                 if probe.exists():
                     test.at_exit["deny_present"] = test.guarded._owner_deny_present(
@@ -133,6 +146,59 @@ class ProbeCleanupTests(unittest.TestCase):
         self.assertFalse(cleanup_ok)
         # The probe deny really was left for this case, and the harness removed it.
         self.assertIs(self.at_exit["deny_present"], True)
+
+    def test_trace_records_sanitized_parent_and_state_file_dacls(self):
+        trace, ok = diagnostics.trace_fence(self.guarded, temp_factory=self.factory)
+        self.assertTrue(ok, trace)
+        self.assertEqual(trace["outcome"], {"status": "OLD_PATH_FENCED_NEW_PHASE_ALLOWED"})
+        self.assertEqual(trace["cleanup"], {"paths_checked": 6, "denies_remaining": 0})
+        self.assertIs(self.at_exit["tree_denies"], 0)
+        targets = [(step["target"], step["operation"]) for step in trace["steps"]]
+        self.assertIn(("parent", "deny"), targets)
+        self.assertIn(("old:controller.lock", "deny"), targets)
+        self.assertIn(("archived:controller.lock", "remove_deny"), targets)
+        self.assertTrue(trace["parent_before"].startswith("D:"))
+        rendered = json.dumps(trace)
+        self.assertNotIn(tempfile.gettempdir(), rendered)
+        self.assertNotIn(os.environ.get("USERNAME", "<no-user>"), rendered)
+        self.assertNotIn(self.sid.rsplit("-", 1)[0], rendered)
+
+    def test_trace_failure_after_real_denies_still_cleans_up_without_leaking(self):
+        with patch.object(self.guarded.os, "rename", side_effect=PermissionError(SECRET_TEXT)):
+            trace, ok = diagnostics.trace_fence(self.guarded, temp_factory=self.factory)
+        self.assertEqual(trace["outcome"],
+                         {"error": {"type": "PermissionError", "category": "unspecified"}})
+        # The real denies were in place at the failure, and the tool removed them.
+        self.assertTrue(any(step["operation"] == "deny" for step in trace["steps"]))
+        self.assertEqual(trace["cleanup"]["denies_remaining"], 0)
+        self.assertTrue(ok)
+        self.assertIs(self.at_exit["tree_denies"], 0)
+        self.assertNotIn("private-account", json.dumps(trace))
+
+    def test_trace_error_detail_is_only_a_constant_safe_string(self):
+        for error, expected in (
+                (ContractError("PHASE_FENCE", "old parent DACL broadened during fence"),
+                 {"type": "ContractError", "category": "PHASE_FENCE",
+                  "detail": "old parent DACL broadened during fence"}),
+                (ContractError("PHASE_FENCE", SECRET_TEXT),
+                 {"type": "ContractError", "category": "PHASE_FENCE"}),
+                (ContractError("PHASE_FENCE", "bad detail", path=SECRET_TEXT),
+                 {"type": "ContractError", "category": "PHASE_FENCE"})):
+            with patch.object(self.guarded, "fence_closed_old_phase_guarded", side_effect=error):
+                trace, ok = diagnostics.trace_fence(self.guarded, temp_factory=self.factory)
+            self.assertEqual(trace["outcome"], {"error": expected})
+            self.assertTrue(ok)
+
+    def test_collect_includes_the_trace_and_its_cleanup_status(self):
+        report, cleanup_ok = self._collect()
+        self.assertEqual(report["fence_trace"]["outcome"],
+                         {"status": "OLD_PATH_FENCED_NEW_PHASE_ALLOWED"})
+        self.assertTrue(cleanup_ok)
+        with patch.object(diagnostics, "trace_fence",
+                          return_value=({"cleanup": {"denies_remaining": 2}}, False)):
+            report, cleanup_ok = self._collect()
+        self.assertFalse(cleanup_ok)
+        self.assertEqual(report["fence_trace"], {"cleanup": {"denies_remaining": 2}})
 
     def test_main_prints_one_json_object_and_exit_status_follows_cleanup(self):
         for ok, expected in ((True, 0), (False, 1)):
