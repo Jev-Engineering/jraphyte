@@ -44,6 +44,7 @@ class Lifecycle:
 
 def required_sources(catalog: Catalog, operations: list[dict[str,Any]], snapshot_id: str) -> list[str]:
     candidates=[];prior=[];retrieved_sources=set()
+    classification_sources={op["source_snapshot_id"] for op in operations if op["operation"]=="SET_SOURCE_CLASSIFICATION"}
     for op in operations:
         if op["operation"] in {"ADD_ASSERTION","ADD_IDENTITY_ASSERTION"}:
             candidates.append(op["candidate_id"])
@@ -54,8 +55,8 @@ def required_sources(catalog: Catalog, operations: list[dict[str,Any]], snapshot
                 pack = catalog.get(observation["pack_id"], "pack")
                 if "graph_context_ids" in pack:
                     retrieved_sources.update(pack["closure"]["source_snapshot_ids"])
-    if not candidates:return []
-    return sorted(set(closure(catalog,sorted(set(candidates)),sorted(set(prior)),snapshot_id)["source_snapshot_ids"]) | retrieved_sources)
+    if not candidates:return sorted(classification_sources)
+    return sorted(set(closure(catalog,sorted(set(candidates)),sorted(set(prior)),snapshot_id)["source_snapshot_ids"]) | retrieved_sources | classification_sources)
 
 @boundary
 def create_plan(catalog: Catalog, *, run_id: str, snapshot_id: str, operations: list[dict[str,Any]],
@@ -73,6 +74,7 @@ def create_plan(catalog: Catalog, *, run_id: str, snapshot_id: str, operations: 
           "operations":deepcopy(operations),"source_epochs":{ref:source_status[ref]["epoch"] for ref in refs},
           "source_hashes":{ref:catalog.hash(ref) for ref in refs},"contexts":contexts,"policy_version":policy_version,
           "qualification_ids":qualifications,"required_checks":sorted(REQUIRED_CHECKS),"created_at":created_at or now()}
+    if "classifications" in snapshot:body["classification_revision"]=snapshot["classifications"]["revision"]
     validate_plan(catalog,body,source_status=source_status)
     return catalog.put("plan",body)
 
@@ -88,6 +90,7 @@ def validate_plan(catalog: Catalog, plan: dict[str,Any], *, source_status: dict[
     require(all(int(op["risk_class"][1:])<=int(policy["maximum_risk"][1:]) for op in plan["operations"]),"POLICY_RISK","policy risk ceiling")
     snapshot=catalog.get(plan["snapshot_id"],"graph-snapshot")
     require(plan["graph_version"]==snapshot["graph_version"] and plan["schema_hash"]==snapshot["schema_hash"],"STALE_GRAPH_VERSION","plan snapshot")
+    require(plan.get("classification_revision")==snapshot.get("classifications",{}).get("revision"),"DOMAIN_REVISION","plan classification revision differs")
     require(catalog.hash(snapshot["schema_id"])==snapshot["schema_hash"],"SCHEMA_HASH","snapshot schema binding")
     ids=[op["id"] for op in plan["operations"]]
     require(len(ids)==len(set(ids)),"DUPLICATE_OPERATION_ID","operation IDs must be unique")
@@ -101,9 +104,13 @@ def validate_plan(catalog: Catalog, plan: dict[str,Any], *, source_status: dict[
             require(status["active"] and status["permission"]=="READ" and not status["tombstone"],"STALE_EVIDENCE",ref)
     facts=deepcopy(snapshot["assertions"]);nodes=deepcopy(snapshot["nodes"])
     relations=deepcopy(catalog.get(snapshot["schema_id"],"schema")["relations"])
+    from .domain_publication import apply_operations as apply_domain_operations, OPERATIONS as DOMAIN_OPERATIONS
+    classification_projection=apply_domain_operations(catalog,snapshot,plan["operations"],security_scope=plan["security_scope"])
     expected_contexts={};qualifications=set();selected_by_batch:dict[str,set[str]]={};actual_by_batch:dict[str,set[str]]={}
     for op in plan["operations"]:
         operation=op["operation"]
+        if operation in DOMAIN_OPERATIONS:
+            continue
         if operation in {"ADD_ASSERTION","ADD_IDENTITY_ASSERTION"}:
             c=catalog.get(op["candidate_id"],"candidate")
             r=catalog.get(op["resolution_id"],"resolution");e=catalog.get(op["evaluation_id"],"evaluation")
@@ -166,7 +173,9 @@ def validate_plan(catalog: Catalog, plan: dict[str,Any], *, source_status: dict[
         require(actual_by_batch[batch_id]==selected,"PARTIAL_RESOLUTION_PUBLICATION","plan must contain the complete selected batch")
     require(plan["contexts"]==expected_contexts and set(plan["qualification_ids"])==qualifications,"POLICY_BINDING","plan qualification/context projection differs")
     validate_graph(nodes,facts,relations)
-    return {"nodes":nodes,"assertions":facts,"relations":relations}
+    result={"nodes":nodes,"assertions":facts,"relations":relations}
+    if classification_projection is not None:result["classifications"]=classification_projection
+    return result
 
 def deactivate(facts: dict[str,Any], roots: set[str]) -> set[str]:
     from collections import deque

@@ -300,6 +300,66 @@
     "created_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "research_domain_scope": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "contract_version": {
+              "const": 1
+            },
+            "taxonomy_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "taxonomy_hash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "domain_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^research:[a-z0-9][a-z0-9._-]*$"
+              },
+              "uniqueItems": true,
+              "maxItems": 100
+            },
+            "match": {
+              "enum": [
+                "ANY",
+                "ALL"
+              ]
+            },
+            "include_unclassified": {
+              "type": "boolean"
+            },
+            "include_descendants": {
+              "type": "boolean"
+            },
+            "conflict_resolution": {
+              "enum": [
+                "literal-v1",
+                "authorized-identity-v1"
+              ]
+            }
+          },
+          "required": [
+            "contract_version",
+            "taxonomy_id",
+            "taxonomy_hash",
+            "domain_ids",
+            "match",
+            "include_unclassified",
+            "include_descendants"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [

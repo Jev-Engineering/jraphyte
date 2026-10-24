@@ -1,0 +1,445 @@
+{
+  "version": "research-domain-workloads-v1",
+  "status": "MEASURED_NOT_QUALIFIED",
+  "input_manifest": {
+    "data_kind": "SYNTHETIC",
+    "protocol_id": "research-domain-workloads-v1",
+    "corpus_hash": "3641e9ff2c6660977136563d60c388e3fcac2e49da30ddfa4a72d31f2bc1b998",
+    "labels_hash": "be55e71c2e1aab6c049424464bce40db5541e675d947c935d97cc54def433482",
+    "query_protocol_hash": "4b87c3cb98deb470390a43540b28ca33ea5a4464be11ad9c129dd293513194ee",
+    "label_origin": "FABRICATED_FIXTURE_NOT_INDEPENDENT",
+    "owner": null,
+    "slo": null,
+    "isolation_requirements": null,
+    "concurrency": {
+      "workers": 2,
+      "repetitions_per_worker": 3,
+      "kind": "same-process threads over immutable in-memory reference snapshots; not deployment-like concurrency"
+    }
+  },
+  "environment": {
+    "python": "3.13.5",
+    "platform": "Linux-6.18.44-x86_64-with-glibc2.41"
+  },
+  "sample_count": 65,
+  "operations": {
+    "publication": {
+      "latency_ms": {
+        "count": 10,
+        "p50": 83.594165,
+        "p95": 430.981097,
+        "p99": 430.981097,
+        "maximum": 430.981097
+      },
+      "outcomes": {
+        "COMMITTED": 5,
+        "REPLAYED": 4,
+        "STALE_GRAPH_VERSION": 1
+      }
+    },
+    "query:scoped:COMMUNITY": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 143.811798,
+        "p95": 314.413437,
+        "p99": 314.413437,
+        "maximum": 314.413437
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    },
+    "query:scoped:LEXICAL": {
+      "latency_ms": {
+        "count": 13,
+        "p50": 136.188166,
+        "p95": 190.913035,
+        "p99": 190.913035,
+        "maximum": 190.913035
+      },
+      "outcomes": {
+        "COMPLETE": 10,
+        "EMPTY": 3
+      }
+    },
+    "query:scoped:PATH": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 156.028572,
+        "p95": 291.054042,
+        "p99": 291.054042,
+        "maximum": 291.054042
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    },
+    "query:scoped:VECTOR": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 159.600766,
+        "p95": 224.127665,
+        "p99": 224.127665,
+        "maximum": 224.127665
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    },
+    "query:unscoped:COMMUNITY": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 160.551048,
+        "p95": 218.746398,
+        "p99": 218.746398,
+        "maximum": 218.746398
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    },
+    "query:unscoped:LEXICAL": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 140.672836,
+        "p95": 236.714421,
+        "p99": 236.714421,
+        "maximum": 236.714421
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    },
+    "query:unscoped:PATH": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 145.179469,
+        "p95": 202.784137,
+        "p99": 202.784137,
+        "maximum": 202.784137
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    },
+    "query:unscoped:VECTOR": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 125.572855,
+        "p95": 187.005903,
+        "p99": 187.005903,
+        "maximum": 187.005903
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    }
+  },
+  "query_latency_ms": {
+    "count": 55,
+    "p50": 149.818267,
+    "p95": 261.519774,
+    "p99": 314.413437,
+    "maximum": 314.413437
+  },
+  "publication_latency_ms": {
+    "count": 10,
+    "p50": 83.594165,
+    "p95": 430.981097,
+    "p99": 430.981097,
+    "maximum": 430.981097
+  },
+  "committed_publication_latency_ms": {
+    "count": 5,
+    "p50": 93.81761,
+    "p95": 424.42596,
+    "p99": 424.42596,
+    "maximum": 424.42596
+  },
+  "acl_elapsed_ms": {
+    "count": 55,
+    "p50": 10.268171,
+    "p95": 80.25933,
+    "p99": 83.581377,
+    "maximum": 83.581377
+  },
+  "index_validation_ms": {
+    "count": 7,
+    "p50": 0.7935229996292037,
+    "p95": 1.0718240000642254,
+    "p99": 1.0718240000642254,
+    "maximum": 1.0718240000642254
+  },
+  "authority_audit_ms": {
+    "count": 7,
+    "p50": 58.40782599989325,
+    "p95": 87.53342900035932,
+    "p99": 87.53342900035932,
+    "maximum": 87.53342900035932
+  },
+  "cache": {
+    "hits": 3,
+    "misses": 52,
+    "invalidations": 3,
+    "evictions": 40
+  },
+  "domain_hops": {
+    "community:disjoint_domain_transitions": 6,
+    "community:membership_changing_transitions": 24,
+    "community:transitions": 60,
+    "path:disjoint_domain_transitions": 6,
+    "path:membership_changing_transitions": 24,
+    "path:transitions": 24,
+    "required_closure:disjoint_domain_transitions": 216,
+    "required_closure:membership_changing_transitions": 216,
+    "required_closure:transitions": 360
+  },
+  "quality": {
+    "unscoped": {
+      "queries": 24,
+      "labeled_queries": 12,
+      "mean_evidence_recall": 0.5,
+      "missed_contradiction_pairs": 12,
+      "forbidden_sources_returned": 0
+    },
+    "scoped": {
+      "queries": 31,
+      "labeled_queries": 16,
+      "mean_evidence_recall": 1.0,
+      "missed_contradiction_pairs": 0,
+      "forbidden_sources_returned": 0
+    }
+  },
+  "paired_comparison": {
+    "community": {
+      "unscoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 160.551048,
+          "p95": 218.746398,
+          "p99": 218.746398,
+          "maximum": 218.746398
+        },
+        "mean_evidence_recall": null,
+        "missed_contradiction_pairs": 0
+      },
+      "scoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 143.811798,
+          "p95": 314.413437,
+          "p99": 314.413437,
+          "maximum": 314.413437
+        },
+        "mean_evidence_recall": null,
+        "missed_contradiction_pairs": 0
+      }
+    },
+    "lexical-conflict": {
+      "unscoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 140.672836,
+          "p95": 236.714421,
+          "p99": 236.714421,
+          "maximum": 236.714421
+        },
+        "mean_evidence_recall": 0.5,
+        "missed_contradiction_pairs": 6
+      },
+      "scoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 136.188166,
+          "p95": 190.913035,
+          "p99": 190.913035,
+          "maximum": 190.913035
+        },
+        "mean_evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0
+      }
+    },
+    "path": {
+      "unscoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 145.179469,
+          "p95": 202.784137,
+          "p99": 202.784137,
+          "maximum": 202.784137
+        },
+        "mean_evidence_recall": null,
+        "missed_contradiction_pairs": 0
+      },
+      "scoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 156.028572,
+          "p95": 291.054042,
+          "p99": 291.054042,
+          "maximum": 291.054042
+        },
+        "mean_evidence_recall": null,
+        "missed_contradiction_pairs": 0
+      }
+    },
+    "vector-conflict": {
+      "unscoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 125.572855,
+          "p95": 187.005903,
+          "p99": 187.005903,
+          "maximum": 187.005903
+        },
+        "mean_evidence_recall": 0.5,
+        "missed_contradiction_pairs": 6
+      },
+      "scoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 159.600766,
+          "p95": 224.127665,
+          "p99": 224.127665,
+          "maximum": 224.127665
+        },
+        "mean_evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0
+      }
+    }
+  },
+  "writes": {
+    "committed": 5,
+    "cross_domain_batches": 3,
+    "cross_domain_batch_rate": 0.6,
+    "replayed": 4,
+    "rejected": 1
+  },
+  "qualification": {
+    "representativeness": "NOT_ESTABLISHED",
+    "independent_labels": "NOT_ESTABLISHED",
+    "deployment_slos": "NOT_EVALUATED",
+    "storage_decision_owner": "NOT_SELECTED",
+    "production_backend": "NOT_QUALIFIED"
+  },
+  "limitations": [
+    "No synthetic node count or latency threshold authorizes physical sharding.",
+    "Nearest-rank quantiles have no statistical confidence claim; inspect sample counts.",
+    "Cross-domain hops count executed path/community/required-closure transitions, including revalidation; not network RPCs.",
+    "Write latency excludes caller plan preparation/signing and includes trusted publish validation/commit.",
+    "Hash-bound representative-candidate metadata is not an approval or independent qualification."
+  ],
+  "topology": {
+    "memory_read_fixture": {
+      "nodes": 13,
+      "active_original_assertions": 11,
+      "degree": {
+        "count": 13,
+        "p50": 1,
+        "p95": 4,
+        "p99": 4,
+        "maximum": 4
+      },
+      "degree_gini": 0.3356643356643356,
+      "top_one_percent_node_degree_share": 0.18181818181818182,
+      "degree_definition": "incident active original assertions; a self-loop is counted once"
+    },
+    "sqlite_write_fixture": {
+      "nodes": 5,
+      "active_original_assertions": 1,
+      "degree": {
+        "count": 5,
+        "p50": 0,
+        "p95": 1,
+        "p99": 1,
+        "maximum": 1
+      },
+      "degree_gini": 0.6000000000000001,
+      "top_one_percent_node_degree_share": 0.5,
+      "degree_definition": "incident active original assertions; a self-loop is counted once"
+    }
+  },
+  "sqlite_storage": {
+    "index_btree_bytes_by_object": {
+      "sqlite_autoindex_trace_domain_index_membership_1": 4096,
+      "sqlite_autoindex_trace_domain_index_meta_1": 4096,
+      "sqlite_autoindex_trace_domain_index_sources_1": 4096,
+      "trace_domain_index_by_source": 4096,
+      "trace_domain_index_membership": 4096,
+      "trace_domain_index_meta": 4096,
+      "trace_domain_index_sources": 12288
+    },
+    "index_btree_measurement": "dbstat",
+    "page_bytes": 540672,
+    "main_file_bytes": 4096,
+    "wal_file_bytes": 910552,
+    "scope": "local reference database/WAL only; not resident set size or a distributed index"
+  },
+  "sqlite_input_manifest": {
+    "snapshot_hash": "d833f313c0b0e29ac0d3f59dfcb5a471fcda80f3e6e8851e14ed77ef70513854",
+    "source_hashes": [
+      "3c10a069fa8a84d26b8d21b0a8d10610f500aa1fec23a9a3ad295fbc304d1a34",
+      "fd28aa81850f425be68180cfdae2cea106993edbd94caba91201c2e5671e62e3"
+    ],
+    "evidence_hashes": [
+      "6b155fec1c6d6a2c72d6cabffd1fbf045f4079f58d3db00729e1c6ba1c1083b3",
+      "d63c6109f15b2c4d264466e69dae3111cb99c8417878606fb338c2700fa13b71"
+    ],
+    "label_origin": "FABRICATED_FIXTURE_NOT_INDEPENDENT"
+  },
+  "sqlite_audit": {
+    "events": 8,
+    "head_hash": "da26b61deb151cf9d8c9c0f782477f7251843875a4293b9a221e6b28c7419642",
+    "state_hash": "b4f37857af5b8e4207c52135e0da93206b1d1177c101e3030f1b0f122d1f3ef0",
+    "sandbox": true,
+    "classification_replay": "PASS",
+    "classification_events": 5,
+    "classification_authority_verified": true,
+    "erased_record_count": 0
+  },
+  "concurrent_write_outcomes": [
+    "COMMITTED",
+    "STALE_GRAPH_VERSION"
+  ],
+  "provider_calls": 0,
+  "production_graph_writes": 0,
+  "placement_decision": "DEFERRED_PENDING_REPRESENTATIVE_DATA_OWNER_ISOLATION_AND_SLOS",
+  "process_memory": {
+    "scope": "entire harness process, including previously imported modules",
+    "resident_bytes": 128991232,
+    "peak_resident_bytes": 128626688
+  },
+  "implementation_hashes": {
+    "workloads.py": "8a53730cc7eeaf0c91ea79ab8937749d32fadc3f9c611a22c1cad2a752e7f1ac",
+    "telemetry.py": "d4af83ae13443b46819d6bc61caede30b8e469499cbe883ecde58cccd0f61fde",
+    "service.py": "3d3d582b8a36aff6f60edf75d24ada6cd4b791fc05d786ee90337aab5c3ef3e2",
+    "store.py": "5c8092ca0d1b5aa02abacb96eb52422ad6045f5115cc235b0cfd5adc1d20c77c",
+    "domain_index.py": "5a99ed46d857b516400c0ee9392886cc6752bddb7855c703052ad1a96cba2fa1",
+    "domains.py": "ddc410a3f4b39f627ee3d2f8cdc07e6c5da94aa54e55ce90e3a749a9536aee96",
+    "security.py": "39ec50cb716622fbd57ba01d659a088d506ce663a411a93f9dd06955f60e5617",
+    "strategies.py": "555780fa67bfd5efb996168c8565cec001fdd952007e669a6ff24ae86beee68f",
+    "fixtures.py": "881bae1cde7138f8a1ed5a8b6cd996a20765015aad37495043b31f2035887216",
+    "../backend.py": "ec5357927b901bde22b282895d3db6ceb5be8afa3eec7e548e2038dc0345ad6a",
+    "../domains.py": "57b62ff9ce272f902456f27d496e9637df9ace1001ef7c5de73748bb4ad33486",
+    "../domain_publication.py": "3ec5182ecd9a3be1a0d0739fcc442730fca3a88d1da5df73d9de9a19fd80051b",
+    "../plans.py": "826c66c36bbec9a809007c58be7d628440b1f7fbf3683ee85090a4a372ef3dfc",
+    "../trust.py": "91a8a7d270b87070714f0e7b68715a0a9ffb165387174a185460f8b0a0917f0e",
+    "../compiler.py": "183b4aaa611df4a22b69213c6fa335e186b3674cd482abce35cbcf985f66c3ab",
+    "../canonical.py": "2ab85ad82e4a193306ecd3b485d559634a0a870f22a1385ce0512b7cc6cfe7df",
+    "../demo.py": "ab8c88246e8b7fdcd71f2535c44cf1f770f91ab8810bcdadce7cf4a96253e182"
+  },
+  "reproduction": {
+    "command": "python -m trace_gc domain-workload --output REPORT.json --repetitions 3 --workers 2",
+    "timings_and_ephemeral_receipt_hashes": "expected to differ between runs"
+  },
+  "detailed_report_sha256": "5fc4b6c5be78e059dd3b7fbb1d4a70b9bff462bb7eaf86933966d15787822467",
+  "detailed_report_location": "Delivery evidence bundle: evidence/issue10-reference-workload.json"
+}

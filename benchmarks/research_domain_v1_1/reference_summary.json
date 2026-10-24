@@ -1,0 +1,476 @@
+{
+  "version": "research-domain-workloads-v1.1",
+  "status": "MEASURED_NOT_QUALIFIED",
+  "input_manifest": {
+    "data_kind": "SYNTHETIC",
+    "protocol_id": "research-domain-workloads-v1.1",
+    "corpus_hash": "3641e9ff2c6660977136563d60c388e3fcac2e49da30ddfa4a72d31f2bc1b998",
+    "labels_hash": "0995aa41c22da39adecde45e7c5cba51b086cbe56da874aad65ae944e04037b6",
+    "query_protocol_hash": "9734273e7822a242214fecf19654f03ad4c2fbe9a15851d79152c8b3db88eb94",
+    "expected_query_rejections": {
+      "acl-scope-rejected": "SECURITY_SCOPE"
+    },
+    "label_origin": "FABRICATED_FIXTURE_NOT_INDEPENDENT",
+    "owner": null,
+    "slo": null,
+    "isolation_requirements": null,
+    "concurrency": {
+      "workers": 2,
+      "repetitions_per_worker": 3,
+      "kind": "same-process threads over immutable in-memory reference snapshots; not deployment-like concurrency"
+    }
+  },
+  "environment": {
+    "python": "3.13.5",
+    "platform": "Linux-6.18.44-x86_64-with-glibc2.41"
+  },
+  "sample_count": 66,
+  "operations": {
+    "publication": {
+      "latency_ms": {
+        "count": 10,
+        "p50": 74.565146,
+        "p95": 433.435858,
+        "p99": 433.435858,
+        "maximum": 433.435858
+      },
+      "outcomes": {
+        "COMMITTED": 5,
+        "REPLAYED": 4,
+        "STALE_GRAPH_VERSION": 1
+      }
+    },
+    "query:rejected": {
+      "latency_ms": {
+        "count": 1,
+        "p50": 5.282113,
+        "p95": 5.282113,
+        "p99": 5.282113,
+        "maximum": 5.282113
+      },
+      "outcomes": {
+        "SECURITY_SCOPE": 1
+      }
+    },
+    "query:scoped:COMMUNITY": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 152.916755,
+        "p95": 205.999055,
+        "p99": 205.999055,
+        "maximum": 205.999055
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    },
+    "query:scoped:LEXICAL": {
+      "latency_ms": {
+        "count": 13,
+        "p50": 133.325247,
+        "p95": 189.459123,
+        "p99": 189.459123,
+        "maximum": 189.459123
+      },
+      "outcomes": {
+        "COMPLETE": 10,
+        "EMPTY": 3
+      }
+    },
+    "query:scoped:PATH": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 124.461468,
+        "p95": 233.540439,
+        "p99": 233.540439,
+        "maximum": 233.540439
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    },
+    "query:scoped:VECTOR": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 126.957044,
+        "p95": 231.017045,
+        "p99": 231.017045,
+        "maximum": 231.017045
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    },
+    "query:unscoped:COMMUNITY": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 174.675662,
+        "p95": 279.782192,
+        "p99": 279.782192,
+        "maximum": 279.782192
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    },
+    "query:unscoped:LEXICAL": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 151.937102,
+        "p95": 164.746515,
+        "p99": 164.746515,
+        "maximum": 164.746515
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    },
+    "query:unscoped:PATH": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 126.904521,
+        "p95": 199.642013,
+        "p99": 199.642013,
+        "maximum": 199.642013
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    },
+    "query:unscoped:VECTOR": {
+      "latency_ms": {
+        "count": 6,
+        "p50": 130.611568,
+        "p95": 187.672764,
+        "p99": 187.672764,
+        "maximum": 187.672764
+      },
+      "outcomes": {
+        "COMPLETE": 6
+      }
+    }
+  },
+  "query_latency_ms": {
+    "count": 56,
+    "p50": 139.163673,
+    "p95": 231.017045,
+    "p99": 279.782192,
+    "maximum": 279.782192
+  },
+  "query_outcomes": {
+    "completed": 55,
+    "rejected_or_error": 1
+  },
+  "telemetry_coverage": {
+    "queries": 56,
+    "measured_queries": 56,
+    "unmeasured_queries": 0
+  },
+  "publication_latency_ms": {
+    "count": 10,
+    "p50": 74.565146,
+    "p95": 433.435858,
+    "p99": 433.435858,
+    "maximum": 433.435858
+  },
+  "committed_publication_latency_ms": {
+    "count": 5,
+    "p50": 83.966935,
+    "p95": 427.415335,
+    "p99": 427.415335,
+    "maximum": 427.415335
+  },
+  "acl_elapsed_ms": {
+    "count": 56,
+    "p50": 7.402753,
+    "p95": 71.016979,
+    "p99": 80.54455,
+    "maximum": 80.54455
+  },
+  "index_validation_ms": {
+    "count": 7,
+    "p50": 0.7500029998936952,
+    "p95": 0.8938809999108344,
+    "p99": 0.8938809999108344,
+    "maximum": 0.8938809999108344
+  },
+  "authority_audit_ms": {
+    "count": 7,
+    "p50": 48.82080099991981,
+    "p95": 81.35662999984561,
+    "p99": 81.35662999984561,
+    "maximum": 81.35662999984561
+  },
+  "cache": {
+    "hits": 3,
+    "misses": 52,
+    "invalidations": 3,
+    "evictions": 40
+  },
+  "domain_hops": {
+    "community:disjoint_domain_transitions": 6,
+    "community:membership_changing_transitions": 24,
+    "community:transitions": 60,
+    "path:disjoint_domain_transitions": 6,
+    "path:membership_changing_transitions": 24,
+    "path:transitions": 24,
+    "required_closure:disjoint_domain_transitions": 216,
+    "required_closure:membership_changing_transitions": 216,
+    "required_closure:transitions": 360
+  },
+  "quality": {
+    "unscoped": {
+      "queries": 24,
+      "labeled_queries": 12,
+      "mean_evidence_recall": 0.5,
+      "missed_contradiction_pairs": 12,
+      "forbidden_sources_returned": 0
+    },
+    "scoped": {
+      "queries": 31,
+      "labeled_queries": 16,
+      "mean_evidence_recall": 1.0,
+      "missed_contradiction_pairs": 0,
+      "forbidden_sources_returned": 0
+    }
+  },
+  "paired_comparison": {
+    "community": {
+      "unscoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 174.675662,
+          "p95": 279.782192,
+          "p99": 279.782192,
+          "maximum": 279.782192
+        },
+        "mean_evidence_recall": null,
+        "missed_contradiction_pairs": 0
+      },
+      "scoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 152.916755,
+          "p95": 205.999055,
+          "p99": 205.999055,
+          "maximum": 205.999055
+        },
+        "mean_evidence_recall": null,
+        "missed_contradiction_pairs": 0
+      }
+    },
+    "lexical-conflict": {
+      "unscoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 151.937102,
+          "p95": 164.746515,
+          "p99": 164.746515,
+          "maximum": 164.746515
+        },
+        "mean_evidence_recall": 0.5,
+        "missed_contradiction_pairs": 6
+      },
+      "scoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 139.087582,
+          "p95": 189.459123,
+          "p99": 189.459123,
+          "maximum": 189.459123
+        },
+        "mean_evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0
+      }
+    },
+    "path": {
+      "unscoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 126.904521,
+          "p95": 199.642013,
+          "p99": 199.642013,
+          "maximum": 199.642013
+        },
+        "mean_evidence_recall": null,
+        "missed_contradiction_pairs": 0
+      },
+      "scoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 124.461468,
+          "p95": 233.540439,
+          "p99": 233.540439,
+          "maximum": 233.540439
+        },
+        "mean_evidence_recall": null,
+        "missed_contradiction_pairs": 0
+      }
+    },
+    "vector-conflict": {
+      "unscoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 130.611568,
+          "p95": 187.672764,
+          "p99": 187.672764,
+          "maximum": 187.672764
+        },
+        "mean_evidence_recall": 0.5,
+        "missed_contradiction_pairs": 6
+      },
+      "scoped": {
+        "queries": 6,
+        "latency_ms": {
+          "count": 6,
+          "p50": 126.957044,
+          "p95": 231.017045,
+          "p99": 231.017045,
+          "maximum": 231.017045
+        },
+        "mean_evidence_recall": 1.0,
+        "missed_contradiction_pairs": 0
+      }
+    }
+  },
+  "writes": {
+    "committed": 5,
+    "cross_domain_batches": 3,
+    "cross_domain_batch_rate": 0.6,
+    "replayed": 4,
+    "rejected": 1
+  },
+  "qualification": {
+    "representativeness": "NOT_ESTABLISHED",
+    "independent_labels": "NOT_ESTABLISHED",
+    "deployment_slos": "NOT_EVALUATED",
+    "storage_decision_owner": "NOT_SELECTED",
+    "production_backend": "NOT_QUALIFIED"
+  },
+  "limitations": [
+    "No synthetic node count or latency threshold authorizes physical sharding.",
+    "Nearest-rank quantiles have no statistical confidence claim; inspect sample counts.",
+    "ACL/cache/traversal costs include recorded rejections and operational errors; quality excludes them.",
+    "Missing telemetry on imported legacy rows is reported as unmeasured, not imputed as zero cost.",
+    "Cross-domain hops count executed path/community/required-closure transitions, including revalidation; not network RPCs.",
+    "Write latency excludes caller plan preparation/signing and includes trusted publish validation/commit.",
+    "Hash-bound representative-candidate metadata is not an approval or independent qualification."
+  ],
+  "topology": {
+    "memory_read_fixture": {
+      "nodes": 13,
+      "active_original_assertions": 11,
+      "degree": {
+        "count": 13,
+        "p50": 1,
+        "p95": 4,
+        "p99": 4,
+        "maximum": 4
+      },
+      "degree_gini": 0.3356643356643356,
+      "top_one_percent_node_degree_share": 0.18181818181818182,
+      "degree_definition": "incident active original assertions; a self-loop is counted once"
+    },
+    "sqlite_write_fixture": {
+      "nodes": 5,
+      "active_original_assertions": 1,
+      "degree": {
+        "count": 5,
+        "p50": 0,
+        "p95": 1,
+        "p99": 1,
+        "maximum": 1
+      },
+      "degree_gini": 0.6000000000000001,
+      "top_one_percent_node_degree_share": 0.5,
+      "degree_definition": "incident active original assertions; a self-loop is counted once"
+    }
+  },
+  "sqlite_storage": {
+    "index_btree_bytes_by_object": {
+      "sqlite_autoindex_trace_domain_index_membership_1": 4096,
+      "sqlite_autoindex_trace_domain_index_meta_1": 4096,
+      "sqlite_autoindex_trace_domain_index_sources_1": 4096,
+      "trace_domain_index_by_source": 4096,
+      "trace_domain_index_membership": 4096,
+      "trace_domain_index_meta": 4096,
+      "trace_domain_index_sources": 12288
+    },
+    "index_btree_measurement": "dbstat",
+    "page_bytes": 540672,
+    "main_file_bytes": 4096,
+    "wal_file_bytes": 910552,
+    "scope": "local reference database/WAL only; not resident set size or a distributed index"
+  },
+  "sqlite_input_manifest": {
+    "snapshot_hash": "d833f313c0b0e29ac0d3f59dfcb5a471fcda80f3e6e8851e14ed77ef70513854",
+    "source_hashes": [
+      "3c10a069fa8a84d26b8d21b0a8d10610f500aa1fec23a9a3ad295fbc304d1a34",
+      "fd28aa81850f425be68180cfdae2cea106993edbd94caba91201c2e5671e62e3"
+    ],
+    "evidence_hashes": [
+      "6b155fec1c6d6a2c72d6cabffd1fbf045f4079f58d3db00729e1c6ba1c1083b3",
+      "d63c6109f15b2c4d264466e69dae3111cb99c8417878606fb338c2700fa13b71"
+    ],
+    "label_origin": "FABRICATED_FIXTURE_NOT_INDEPENDENT"
+  },
+  "sqlite_audit": {
+    "events": 8,
+    "head_hash": "1023a02ded6349816bd92dbf418dec0891200e646b2952a9e3e9435536b2240b",
+    "state_hash": "5c590bec3c5b0b0cb033e5a2934b54af01e59ca27c4133b940d4af7ef51226fc",
+    "sandbox": true,
+    "classification_replay": "PASS",
+    "classification_events": 5,
+    "classification_authority_verified": true,
+    "erased_record_count": 0
+  },
+  "concurrent_write_outcomes": [
+    "COMMITTED",
+    "STALE_GRAPH_VERSION"
+  ],
+  "provider_calls": 0,
+  "production_graph_writes": 0,
+  "placement_decision": "DEFERRED_PENDING_REPRESENTATIVE_DATA_OWNER_ISOLATION_AND_SLOS",
+  "process_memory": {
+    "scope": "entire harness process, including previously imported modules",
+    "resident_bytes": 57311232,
+    "peak_resident_bytes": 56995840
+  },
+  "implementation_hashes": {
+    "workloads.py": "0a8e647e4ec4b64d4902e666d85ffcbba2f4c176d93b9fa3b30bd7bf62081b82",
+    "telemetry.py": "d4af83ae13443b46819d6bc61caede30b8e469499cbe883ecde58cccd0f61fde",
+    "service.py": "d90582f70faab7543213ecdacf7d737058b409c92cba549bc4a5b1321fa890d6",
+    "store.py": "5c8092ca0d1b5aa02abacb96eb52422ad6045f5115cc235b0cfd5adc1d20c77c",
+    "domain_index.py": "5a99ed46d857b516400c0ee9392886cc6752bddb7855c703052ad1a96cba2fa1",
+    "domains.py": "ddc410a3f4b39f627ee3d2f8cdc07e6c5da94aa54e55ce90e3a749a9536aee96",
+    "security.py": "39ec50cb716622fbd57ba01d659a088d506ce663a411a93f9dd06955f60e5617",
+    "strategies.py": "555780fa67bfd5efb996168c8565cec001fdd952007e669a6ff24ae86beee68f",
+    "fixtures.py": "881bae1cde7138f8a1ed5a8b6cd996a20765015aad37495043b31f2035887216",
+    "../backend.py": "4e32fa35320e900e86501ee00698c32bbcd31c0a07e6a0efc189ffdbb2965686",
+    "../domains.py": "11ddcb6bc0b761f0345824d1874395ba7f7ebf7113abd412a692f18b8b054e18",
+    "../domain_publication.py": "e413270100fdeba7e42afb81ae9221691a7a137b4270176fdea43be51efb01da",
+    "../plans.py": "826c66c36bbec9a809007c58be7d628440b1f7fbf3683ee85090a4a372ef3dfc",
+    "../trust.py": "91a8a7d270b87070714f0e7b68715a0a9ffb165387174a185460f8b0a0917f0e",
+    "../compiler.py": "183b4aaa611df4a22b69213c6fa335e186b3674cd482abce35cbcf985f66c3ab",
+    "../canonical.py": "2ab85ad82e4a193306ecd3b485d559634a0a870f22a1385ce0512b7cc6cfe7df",
+    "../demo.py": "ab8c88246e8b7fdcd71f2535c44cf1f770f91ab8810bcdadce7cf4a96253e182"
+  },
+  "reproduction": {
+    "command": "python -m trace_gc domain-workload --output REPORT.json --repetitions 3 --workers 2",
+    "timings_and_ephemeral_receipt_hashes": "expected to differ between runs"
+  },
+  "receipt_kind": "SYNTHETIC_REFERENCE_WORKLOAD_SUMMARY",
+  "raw_receipt_sha256": "836aaf863ad31ee069046c201c136742f13619013f92748847046081e3c7f85d",
+  "raw_receipt_location": "delivery bundle evidence/reference-workload-v1.1.json",
+  "measurement_execution": "Installed reconstructed reference wheel rebuilt from its sdist; no concurrent validation/build job launched by this execution during this final timing run. Other host load is unmeasured.",
+  "source_scope": "Recovered core/runtime/GraphRAG source with verified touched-main preimages; not complete-current-main release qualification",
+  "reference_database_writes_are_not_production_writes": true,
+  "previous_v1_summary": "benchmarks/research_domain_v1/reference_summary.json retained unchanged"
+}

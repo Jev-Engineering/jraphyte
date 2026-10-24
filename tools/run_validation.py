@@ -40,6 +40,29 @@ def vectors():
 
 def main():
     stream=io.StringIO();checks={};overall=True
+    # Verify the intended suite before importing/discovering any test module.
+    # A partial recovery must not execute a subset and report it as a release.
+    try:
+        from release_suite import check_suite_inventory, test_origin_counts
+        checks["source_test_inventory"] = check_suite_inventory(ROOT)
+    except Exception as exc:
+        checks["source_test_inventory"] = {"status": "FAIL", "error": type(exc).__name__}
+    if checks["source_test_inventory"]["status"] != "PASS":
+        report = {
+            "created_at": datetime.now(timezone.utc).isoformat(), "release": "0.4.0",
+            "status": "FAIL", "reason": "SOURCE_TEST_INVENTORY_INCOMPLETE",
+            "tests_run": 0, "tests_passed": 0, "failures": 0, "errors": 0, "skipped": 0,
+            "tests": [], "checks": checks, "test_execution": "NOT_RUN",
+            "remaining_release_checks": "NOT_RUN; fix the source inventory first",
+            "external_gates": "NOT_RUN_BY_THIS_COMMAND",
+            "provider_calls": 0, "production_graph_writes": 0,
+        }
+        (ROOT / "VALIDATION_REPORT.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        (ROOT / "VALIDATION_LOG.txt").write_text(
+            "Release validation stopped before test discovery: incomplete source test inventory.\n",
+            encoding="utf-8")
+        print(json.dumps(report, indent=2))
+        return 1
     suite=unittest.defaultTestLoader.discover(str(ROOT/"tests"))
     result=unittest.TextTestRunner(stream=stream,verbosity=2,resultclass=RecordedResult).run(suite)
     overall=result.wasSuccessful()
@@ -74,6 +97,10 @@ def main():
         benchmark=run_benchmark(ROOT/"benchmarks/graphrag")
         checks["graphrag_benchmark"]={k:benchmark[k] for k in ("status","cases","runs","upstream_configurations","downstream_configurations","provider_calls","production_graph_writes","real_model_accuracy","heldout_production_results","interpretation")}
     except Exception as exc:checks["graphrag_benchmark"]={"status":"FAIL","error":str(exc)};overall=False
+    try:
+        from trace_gc.domain_conformance import run_domain_conformance
+        checks["domain_classification_conformance"]=run_domain_conformance()
+    except Exception as exc:checks["domain_classification_conformance"]={"status":"FAIL","error":str(exc)};overall=False
     external=bool(os.environ.get("TRACE_GC_LEGACY_CORE"))
     legacy_test=next((r for r in result.records if r["test"].endswith("test_pinned_upstream_conformance")),None)
     gates={"pinned_legacy":{"status":legacy_test["status"] if legacy_test else "NOT_RUN","expected_git_blob":PINNED_CORE_BLOB,
@@ -87,7 +114,7 @@ def main():
             "environment":{"python":platform.python_version(),"platform":platform.platform(),"jsonschema":importlib.metadata.version("jsonschema"),"cryptography":importlib.metadata.version("cryptography")},
             "tests_run":result.testsRun,"tests_passed":sum(x["status"]=="PASS" for x in result.records),"failures":len(result.failures),"errors":len(result.errors),
             "skipped":len(result.skipped),"tests":result.records,"checks":checks,"external_gates":gates,
-            "test_groups":{"original_baseline":sum("test_graphrag_" not in x["test"] for x in result.records),"graphrag":sum("test_graphrag_" in x["test"] for x in result.records)},
+            "test_groups":test_origin_counts(result.records),
             "provider_calls":0,"production_graph_writes":0,"isolated_database_transactions":"Executed in temporary test databases; demo count is reported separately.",
             "claims_not_established":["production semantic accuracy","empirical production calibration","completed controlled pilot","live API acceptance","distributed deployment safety","paper novelty or measured performance improvement"]}
     (ROOT/"VALIDATION_REPORT.json").write_text(json.dumps(report,indent=2)+"\n",encoding="utf-8")

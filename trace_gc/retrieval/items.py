@@ -95,22 +95,70 @@ def visible_edges(view: GraphReadView, access: AccessFilter, query: dict[str, An
     return result
 
 
-def conflict_pairs(edges: dict[str, dict[str, Any]], relations: dict[str, Any], meter=None) -> list[list[str]]:
-    """Find explicit incompatible predicates, including cross-paper support/refutation."""
+
+def authorized_scope_edges(view: GraphReadView, access: AccessFilter, query: dict[str, Any], meter=None) -> dict[str, Any]:
+    """ACL/current-status universe for domain selection and required closure.
+
+    Relation/source filters constrain anchors, not necessary identity/refutation
+    proof. Unscoped requests keep their legacy filter semantics unchanged.
+    """
+    if query.get("research_domain_scope") is None:
+        return visible_edges(view, access, query, meter)
+    closure_query = {**query, "allowed_relation_types": [], "excluded_relation_types": [], "source_scope": []}
+    return visible_edges(view, access, closure_query, meter)
+
+def conflict_pairs(edges: dict[str, dict[str, Any]], relations: dict[str, Any], meter=None, *,
+                   resolve_identities: bool = False) -> list[list[str]]:
+    """Compare explicit incompatibilities inside an already authorized universe.
+
+    The opt-in mode resolves active, authorized same-as links and the schema's
+    inverse/symmetric forms. It does not rewrite graph IDs or treat a domain tag
+    as an identity proof. The default is the original literal algorithm, retained
+    for old query/context pins and unscoped historical replay.
+    """
+    from ..constraints import UnionFind, normalize
+
+    normalized = {}
+    if resolve_identities:
+        nodes = set()
+        for ref, fact in edges.items():
+            if meter is not None:
+                meter.work()
+            normalized[ref] = normalize(fact["assertion"], relations)
+            nodes.update((normalized[ref][0], normalized[ref][2]))
+        identities = UnionFind(nodes)
+        for ref, (subject, predicate, object_) in normalized.items():
+            if meter is not None:
+                meter.work()
+            if predicate == "same_as" and edges[ref]["active"]:
+                identities.union(subject, object_)
+        for ref, (subject, predicate, object_) in normalized.items():
+            if meter is not None:
+                meter.work()
+            if predicate not in {"same_as", "different_from"}:
+                subject, object_ = identities.root(subject), identities.root(object_)
+                if relations[predicate]["symmetric"] and subject > object_:
+                    subject, object_ = object_, subject
+            normalized[ref] = (subject, predicate, object_)
+    else:
+        normalized = {ref: (fact["assertion"]["subject"], fact["assertion"]["predicate"],
+                            fact["assertion"]["object"]) for ref, fact in edges.items()}
     groups: dict[str, list[str]] = {}
-    for ref, fact in edges.items():
-        groups.setdefault(fact["assertion"]["object"], []).append(ref)
+    for ref, (_, _, object_) in normalized.items():
+        groups.setdefault(object_, []).append(ref)
     result = []
     for members in groups.values():
         for i, left in enumerate(members):
             a = edges[left]["assertion"]
+            subject_a, predicate_a, _ = normalized[left]
             for right in members[i+1:]:
                 if meter is not None:
                     meter.work()
                 b = edges[right]["assertion"]
-                opposite = b["predicate"] in relations.get(a["predicate"], {}).get("incompatible", []) or \
-                           a["predicate"] in relations.get(b["predicate"], {}).get("incompatible", [])
-                same_question = a["subject"] == b["subject"] or {a["predicate"], b["predicate"]} == {"supports", "refutes"}
+                subject_b, predicate_b, _ = normalized[right]
+                opposite = predicate_b in relations.get(predicate_a, {}).get("incompatible", []) or \
+                           predicate_a in relations.get(predicate_b, {}).get("incompatible", [])
+                same_question = subject_a == subject_b or {predicate_a, predicate_b} == {"supports", "refutes"}
                 # Disjoint validity intervals represent change, not simultaneous conflict.
                 qa, qb = a["qualifiers"], b["qualifiers"]
                 disjoint = False
@@ -124,14 +172,21 @@ def conflict_pairs(edges: dict[str, dict[str, Any]], relations: dict[str, Any], 
     return sorted(result)
 
 
-def canonical_item(view: GraphReadView, access: AccessFilter, query: dict[str, Any], *, kind: str,
+def query_conflicts(edges: dict[str, dict[str, Any]], relations: dict[str, Any],
+                    query: dict[str, Any], meter=None) -> list[list[str]]:
+    """One pinned algorithm for search, cache validation and canonical replay."""
+    from .domains import identity_aware_scope
+    return conflict_pairs(edges, relations, meter, resolve_identities=identity_aware_scope(query))
+
+
+def _canonical_item(view: GraphReadView, access: AccessFilter, query: dict[str, Any], *, kind: str,
                    ref: str, members: list[str] | None = None, edges: dict[str, Any] | None = None,
                    conflicts: list[list[str]] | None = None) -> dict[str, Any]:
     """Reconstruct all source-derived text from immutable originals, not caller text."""
     c, snap = view.catalog, view.snapshot
     edges = visible_edges(view, access, query) if edges is None else edges
     relations = c.get(snap["schema_id"], "schema")["relations"]
-    conflicts = conflict_pairs(edges, relations) if conflicts is None else conflicts
+    conflicts = query_conflicts(edges, relations, query) if conflicts is None else conflicts
     members = list(members or [])
     evidence_ids: set[str] = set()
     assertion_ids: list[str] = []
@@ -252,3 +307,53 @@ def canonical_item(view: GraphReadView, access: AccessFilter, query: dict[str, A
             "calibration": {"qualified": False, "note": "Retrieval status is not a calibrated truth probability."},
             "generated_summary": generated, "data_origin": "GENERATED_SUMMARY" if generated else "SOURCE_DERIVED",
             "instruction_authority": False}
+
+
+def canonical_item(view: GraphReadView, access: AccessFilter, query: dict[str, Any], *, kind: str,
+                   ref: str, members: list[str] | None = None, edges: dict[str, Any] | None = None,
+                   conflicts: list[list[str]] | None = None, domain_selection=None) -> dict[str, Any]:
+    """Canonical anchor plus atomic, authorized evidence/identity/refutation closure.
+
+    Search paths retain their own ordered member IDs. Explanatory assertions are
+    separately labeled; they are never presented as extra hops in the search path.
+    Unscoped legacy materialization retains its original item shape and text.
+    """
+    from .domains import ResearchDomainSelection
+    from ..canonical import digest
+    if query.get("research_domain_scope") is None:
+        return _canonical_item(view, access, query, kind=kind, ref=ref, members=members, edges=edges, conflicts=conflicts)
+    if domain_selection is None:
+        authorized = authorized_scope_edges(view, access, query)
+        pairs = query_conflicts(authorized, view.catalog.get(view.snapshot["schema_id"], "schema")["relations"], query)
+        domain_selection = ResearchDomainSelection(view, access, query, authorized, pairs)
+    selection = domain_selection
+    selection.require_candidate(kind, ref, members)
+    item = _canonical_item(view, access, query, kind=kind, ref=ref, members=members,
+                           edges=selection.allowed_edges, conflicts=selection.conflicts)
+    seeds = selection.basis(kind, ref, members)
+    closure = selection.closure(seeds)
+    direct_assertions = set(item["assertion_ids"])
+    if closure:
+        proof = _canonical_item(view, access, query, kind="COMMUNITY", ref=digest(sorted(closure)), members=sorted(closure),
+                                edges=selection.edges, conflicts=selection.conflicts)
+        for field in ("assertion_ids", "entity_ids", "evidence_ids", "source_ids", "decision_ids", "observation_ids",
+                      "transaction_ids", "plan_ids", "record_refs", "relation_types"):
+            item[field] = sorted(set(item[field]) | set(proof[field]))
+        item["risk_class"] = max(item["risk_class"], proof["risk_class"])
+        item["provenance_complete"] = item["provenance_complete"] and proof["provenance_complete"]
+        if any(set(pair) <= closure for pair in selection.conflicts):
+            item["trust_class"] = "CONFLICTED_GRAPH_FACT"
+        extra = closure - direct_assertions
+        if extra:
+            item["text"] += "\nAUTHORIZED RESEARCH-DOMAIN EVIDENCE CLOSURE (not additional search-path hops): " + dumps([
+                {"assertion_id": edge_id, "role": "DOMAIN_BASIS" if edge_id in seeds else "IDENTITY_OR_CONFLICT_CLOSURE",
+                 **selection.edges[edge_id]["assertion"]} for edge_id in sorted(extra)])
+    item["research_domain"] = selection.item_metadata(item["source_ids"], seeds, closure)
+    refs = set(item["record_refs"])
+    for assignment_id in item["research_domain"]["source_assignments"].values():
+        if assignment_id is not None:
+            refs.add(assignment_id)
+            refs.add(view.catalog.get(assignment_id, "classification-assignment")["taxonomy_id"])
+    refs.add(selection.scope["taxonomy_id"])
+    item["record_refs"] = sorted(refs)
+    return item

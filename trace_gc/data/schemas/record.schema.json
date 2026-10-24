@@ -35,7 +35,9 @@
         "retrieval-lineage",
         "graphrag-answer",
         "retrieval-replay",
-        "retrieval-evaluation"
+        "retrieval-evaluation",
+        "research-domain-taxonomy",
+        "classification-assignment"
       ]
     },
     "hash": {

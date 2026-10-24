@@ -30,7 +30,7 @@ POLICIES = {
 }
 
 class RetrievalPlanner:
-    version = "task-risk-tier-planner-v1"
+    version = "task-risk-domain-tier-planner-v1"
     def __init__(self, policies: dict[str, list[list[str]]] | None = None, *, policy_version: str = "retrieval-routing-v1"):
         self.policies = deepcopy(policies or POLICIES)
         self.policy_version = policy_version
@@ -38,11 +38,14 @@ class RetrievalPlanner:
 
     def plan(self, catalog: Catalog, *, candidate_id: str | None, question_type: str, risk_class: str,
              known_entities: list[str], known_relations: list[str], budget: RetrievalBudget,
-             uncertainty: float | None = None, retrieval_history: list[str] | None = None, tier: int = 0) -> str:
+             uncertainty: float | None = None, retrieval_history: list[str] | None = None, tier: int = 0,
+             research_domain_scope: dict[str, Any] | None = None) -> str:
         require(question_type in self.policies and risk_class in {f"R{i}" for i in range(6)}, "RETRIEVAL_PLAN", "task/risk not installed")
         require(type(tier) is int and 0 <= tier <= 4, "RETRIEVAL_PLAN", "automatic tiers are 0..4; tier 5 is human-guided")
         if candidate_id:
             catalog.get(candidate_id, "candidate")
+        from .domains import validate_scope
+        validate_scope(catalog, research_domain_scope)
         methods = list(dict.fromkeys(m for layer in self.policies[question_type][:tier+1] for m in layer))
         if int(risk_class[1:]) >= 4 and tier >= 1:
             methods = list(dict.fromkeys(methods + ["CONFLICT", "PROVENANCE"]))
@@ -52,12 +55,16 @@ class RetrievalPlanner:
             "known_relations": sorted(set(known_relations)), "uncertainty": uncertainty,
             "retrieval_history": list(retrieval_history or []), "tier": tier,
             "steps": [{"strategy": m, "max_hops": hop} for m in methods], "expansion_policy": "ON_UNCERTAINTY",
-            "budget": budget.to_dict(), "policy_version": self.policy_version, "created_at": now()})
+            "budget": budget.to_dict(), "policy_version": self.policy_version,
+            "research_domain_scope": deepcopy(research_domain_scope), "created_at": now()})
 
     def request(self, catalog: Catalog, plan_id: str, *, security_scope: str, text: str,
                 retrieval_round: int, **changes: Any) -> dict[str, Any]:
         plan = catalog.get(plan_id, "retrieval-plan")
+        scope = changes.pop("research_domain_scope", plan.get("research_domain_scope"))
+        require(scope == plan.get("research_domain_scope"), "RETRIEVAL_PLAN_BINDING", "request changes the planned domain scope")
         return query(requesting_component="upstream-synthesis", security_scope=security_scope,
+            research_domain_scope=scope,
             candidate_id=plan["candidate_id"], text=text, focus_entities=plan["known_entities"],
             strategies=[s["strategy"] for s in plan["steps"]], budget=RetrievalBudget(**plan["budget"]),
             hop_limit=max((s["max_hops"] for s in plan["steps"]), default=0),
@@ -142,7 +149,8 @@ class UpstreamGraphRAG:
                 known_entities=[candidate["assertion"]["subject"], candidate["assertion"]["object"]],
                 known_relations=[candidate["assertion"]["predicate"]], budget=current,
                 uncertainty=None if confidence_before is None else 1-confidence_before,
-                retrieval_history=results, tier=min(round_, 4))
+                retrieval_history=results, tier=min(round_, 4),
+                research_domain_scope=(query_overrides or {}).get("research_domain_scope"))
             request = self.planner.request(c, plan_id, security_scope=self.retriever.access_policy["tenant"],
                 text=c.get(candidate["claim_id"], "claim")["text"], retrieval_round=round_, **(query_overrides or {}))
             result_id = self.retriever.retrieve(request, plan_id=plan_id)
@@ -164,6 +172,10 @@ class UpstreamGraphRAG:
                 security_scope=self.retriever.access_policy["tenant"], execution_mode=candidate["execution_mode"],
                 model_version=model_version, graph_context_ids=[result["graph_context_id"]], source_retrieval_ids=[result_id],
                 token_counter=token_counter, tokenizer_version=tokenizer_version)
+            self.retriever.validate_live_context(result["graph_context_id"])
+            from .integration import validate_pack_lineage
+            statuses = self.retriever.adapter.current_source_status() if hasattr(self.retriever.adapter, "current_source_status") else None
+            validate_pack_lineage(c, c.get(pack_id, "pack"), current_access=self.retriever.access_policy, current_status=statuses)
             observations = execute(pack_id)
             require(bool(observations) and all(c.get(x, "observation")["pack_id"] == pack_id for x in observations),
                     "REQUEST_BINDING", "executor returned observations for a different pack")
