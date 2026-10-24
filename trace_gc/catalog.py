@@ -13,6 +13,8 @@ from .retrieval.contracts import KINDS as RETRIEVAL_KINDS
 KINDS.update(RETRIEVAL_KINDS)
 from .domains import KINDS as DOMAIN_KINDS
 KINDS.update(DOMAIN_KINDS)
+from .domain_publication import KINDS as PUBLICATION_KINDS
+KINDS.update(PUBLICATION_KINDS)
 
 class Catalog:
     def __init__(self, records: Iterable[dict[str, Any]] = ()):
@@ -25,6 +27,8 @@ class Catalog:
             self._loading = False
         from .domains import validate_catalog
         validate_catalog(self)
+        from .domain_publication import validate_catalog as validate_publication_catalog
+        validate_publication_catalog(self)
 
     @boundary
     def add(self, record: dict[str, Any]) -> str:
@@ -39,6 +43,9 @@ class Catalog:
                 (record["kind"] == "receipt" and record["body"]["purpose"] == "CLASSIFICATION_REVIEW")) and not self._loading:
             from .domains import validate_record
             validate_record(self, record)
+        if not self._loading:
+            from .domain_publication import validate_record as validate_publication_record
+            validate_publication_record(self, record)
         self._records[record["id"]] = deepcopy(record)
         return record["id"]
 

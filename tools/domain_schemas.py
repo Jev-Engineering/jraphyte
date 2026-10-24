@@ -55,3 +55,23 @@ def extend(schemas):
         if kind not in schemas["record"]["properties"]["kind"]["enum"]:
             schemas["record"]["properties"]["kind"]["enum"].append(kind)
     schemas["receipt"]["properties"]["purpose"]["enum"].append("CLASSIFICATION_REVIEW")
+    publication_version = {"const": "trace-domain-publication-v1"}
+    mapping = lambda item: {"type": "object", "additionalProperties": deepcopy(item)}
+    schemas["classification-plan"] = obj({
+        "contract_version": publication_version,
+        "action": {"enum": ["MIGRATE_CLASSIFICATION_STATE", "PUBLISH_CLASSIFICATION"]},
+        "run_id": text, "graph_version": n, "base_state_hash": h,
+        "idempotency_key": text, "security_scope": text,
+        "execution_mode": {"enum": ["SYNTHETIC", "RECORDED", "LIVE"]},
+        "assignment_id": nullable(text), "assignment_hash": nullable(h),
+        "taxonomy_id": nullable(text), "taxonomy_hash": nullable(h),
+        "source_hashes": mapping(h), "source_epochs": mapping(n), "created_at": stamp,
+    })
+    schemas["record"]["properties"]["kind"]["enum"].append("classification-plan")
+    schemas["receipt"]["properties"]["purpose"]["enum"].extend([
+        "CLASSIFICATION_PREFLIGHT", "CLASSIFICATION_PUBLISH"])
+    # Optional: do not rewrite or rehash old graph snapshot bodies.
+    schemas["graph-snapshot"]["properties"]["research_domains"] = obj({
+        "contract_version": publication_version, "revision": pos,
+        "assignments": mapping(obj({"assignment_id": text, "assignment_hash": h})),
+    })

@@ -38,7 +38,8 @@
         "retrieval-evaluation",
         "research-domain-taxonomy",
         "classification-proposal",
-        "classification-assignment"
+        "classification-assignment",
+        "classification-plan"
       ]
     },
     "hash": {

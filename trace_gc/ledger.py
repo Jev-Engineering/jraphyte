@@ -16,6 +16,8 @@ STAGES={"source":"SOURCE","claim":"CLAIM","evidence":"EVIDENCE","candidate":"CAN
         "observation":"OBSERVATION","evaluation":"EVALUATION","resolution-batch":"RESOLUTION","resolution":"RESOLUTION",
         "plan":"PLAN","qualification":"QUALIFICATION","receipt":"RECEIPT","transaction":"TRANSACTION","schema":"SCHEMA","graph-snapshot":"SNAPSHOT","policy":"POLICY"}
 
+STAGES["classification-plan"] = "CLASSIFICATION_PLAN"
+
 from .retrieval.contracts import KINDS as RETRIEVAL_KINDS
 STAGES.update({kind: "RETRIEVAL" for kind in RETRIEVAL_KINDS})
 STAGES.update({"research-domain-taxonomy": "DOMAIN_TAXONOMY",
@@ -63,6 +65,8 @@ def references(record: dict[str,Any]) -> list[tuple[str,str]]:
     refs.extend(retrieval_references(kind, b))
     from .domains import references as domain_references
     refs.extend(domain_references(kind, b))
+    from .domain_publication import references as publication_references
+    refs.extend(publication_references(kind, b))
     return list(dict.fromkeys(refs))
 
 def causal_references(record: dict[str,Any], catalog: Catalog | None=None) -> set[str]:
@@ -74,7 +78,7 @@ def causal_references(record: dict[str,Any], catalog: Catalog | None=None) -> se
         receipts={digest(r["body"]):r["id"] for r in catalog.all("receipt")}
         if kind=="receipt":
             p=b["payload"]
-            field={"AUTHORIZATION":"plan_hash","PREFLIGHT":"plan_hash","QUALIFICATION":"qualification_hash","OBSERVATION":"observation_hash","CLASSIFICATION_REVIEW":"proposal_hash"}.get(b["purpose"])
+            field={"AUTHORIZATION":"plan_hash","PREFLIGHT":"plan_hash","QUALIFICATION":"qualification_hash","OBSERVATION":"observation_hash","CLASSIFICATION_REVIEW":"proposal_hash","CLASSIFICATION_PREFLIGHT":"plan_hash","CLASSIFICATION_PUBLISH":"plan_hash"}.get(b["purpose"])
             if field:
                 require(field in p and p[field] in hashes,"MISSING_REFERENCE","receipt's bound record is absent")
                 refs.add(hashes[p[field]])

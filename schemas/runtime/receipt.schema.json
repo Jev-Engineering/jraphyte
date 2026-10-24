@@ -12,7 +12,9 @@
         "RUN_CHECKPOINT",
         "SOURCE_STATUS",
         "OBSERVATION",
-        "CLASSIFICATION_REVIEW"
+        "CLASSIFICATION_REVIEW",
+        "CLASSIFICATION_PREFLIGHT",
+        "CLASSIFICATION_PUBLISH"
       ]
     },
     "issuer": {

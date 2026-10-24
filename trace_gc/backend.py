@@ -79,6 +79,10 @@ class SQLiteReferenceBackend:
                 require(schema_row is not None,"REPLAY_CONTENT_UNAVAILABLE","schema record missing")
                 catalog.add({"id":schema_row[0],"hash":schema_row[1],"kind":schema_row[2],"body":loads(schema_row[3])})
                 body={k:state[k] for k in ("graph_version","schema_id","schema_hash","nodes","assertions","source_epochs")}
+                if "research_domains" in state:
+                    from .domain_publication import hydrate_projection
+                    hydrate_projection(catalog, state, self.load_catalog())
+                    body["research_domains"] = deepcopy(state["research_domains"])
                 result=catalog.put("graph-snapshot",body)
                 if own:self.db.execute("COMMIT")
                 return result
@@ -97,12 +101,12 @@ class SQLiteReferenceBackend:
                      fault: Callable[[str],None] | None = None, at: str | None = None,
                      lineage_prefix: list[dict[str,Any]] | None = None) -> dict[str,Any]:
         require(bool(key) and type(expected_version) is int and expected_version>=0,"TRANSACTION_INPUT","explicit version/key required")
-        when=at or now()
         def checkpoint(name: str) -> None:
             if fault is not None:fault(name)
         with self._lock:
             self.db.execute("BEGIN IMMEDIATE")
             try:
+                when=at or now()
                 previous=self.db.execute("SELECT fingerprint,body FROM trace_journal WHERE key=?",(key,)).fetchone()
                 if previous:
                     require(previous[0]==fingerprint,"IDEMPOTENCY_CONFLICT","same key, different immutable action")
