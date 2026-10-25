@@ -69,16 +69,29 @@ def write_once(path: Path, value: object) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def method_hashes(repo: Path = REPO) -> dict:
+def method_hashes(repo: Path = REPO, *, additional_roots: tuple[str, ...] = ()) -> dict:
     """Hash local import closure, including the dynamically loaded frozen replay.
 
     Resolve imports statically so recording code never imports a worker/model or
     adopts its import-time data root. All v4 modules are seeds, including newly
     added metric modules. Function-local local imports are included as well.
+    Callers outside that default family must name their entry modules in
+    ``additional_roots`` so their own transitive imports are included. Explicit
+    roots must exist locally; unresolved ordinary imports may be dependencies
+    supplied by the separately recorded runtime.
     """
     seeds = ["trace_gc.pdf_source_parallel_v4", "trace_gc.pdf_structure_parallel_v4",
              "src.abstract_validation_expanded.extraction"]
     seeds += ["src.parallel_source_v4."+p.stem for p in (repo/"src/parallel_source_v4").glob("*.py")]
+    if not isinstance(additional_roots, (tuple, list)):
+        raise ValueError("expected_local_module_roots")
+    for module in additional_roots:
+        if not isinstance(module, str) or not all(part.isidentifier() for part in module.split(".")):
+            raise ValueError("expected_local_module_root")
+        target = repo.joinpath(*module.split("."))
+        if not target.with_suffix(".py").is_file() and not (target/"__init__.py").is_file():
+            raise ValueError("missing_local_module_root:"+module)
+    seeds += list(additional_roots)
     pending, visited, snapshots = list(seeds), set(), {}
     while pending:
         module = pending.pop()

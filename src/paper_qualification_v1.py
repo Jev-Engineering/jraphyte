@@ -718,7 +718,7 @@ def _image_candidate(store, value, *, source, selected, original, reference, cod
 
 
 def evaluator_identity():
-    code = method_hashes()
+    code = method_hashes(additional_roots=("src.paper_qualification_v1",))
     path = Path(__file__).resolve()
     code[path.relative_to(path.parents[1]).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     statistics = path.parents[1]/"trace_gc/qualification.py"
