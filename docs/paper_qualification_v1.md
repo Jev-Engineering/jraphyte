@@ -40,6 +40,19 @@ cannot override these checks. The two primary bounds have at least 95% joint
 coverage under the preregistered binomial model. The existing exact binomial
 implementation is reused and its file is included in the evaluator identity.
 
+The evaluator identity now expands the evaluator's own static local import
+closure, including the qualification module's transitive helpers. Changing a
+helper therefore changes the exact code map even when the evaluator entry file
+is unchanged. Earlier code maps and receipts remain historical evidence; they
+are not rebound to the new map. Evaluation requires a freshly approved
+preregistration and execution identity matching the current source.
+
+This is a static source identity, not an isolated execution loader. It does not
+establish that dynamic imports, module caches, bytecode or external verifier
+releases execute those exact bytes. The separate external-verifier closure gate
+in issue #97 remains HOLD until those boundaries and its real prerequisites are
+verified. Statistical criteria and the evaluation record schema are unchanged.
+
 Primary selection takes the first 400 eligible recent work IDs by the frozen
 `primary` rank. The next 600 form the recent screen; 600 historical works use
 `historical-screen`. All 1,200 screen outcomes must exist. Source-only tags select
