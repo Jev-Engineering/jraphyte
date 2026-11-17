@@ -55,17 +55,17 @@ class PublicationRegressions:
         self.assertIn(self.f.source, erased)
         self.assertIn(self.f.evidence, erased)
         survivors = [record for record in self.f.catalog.all() if record["id"] not in erased]
-        plans = {record["hash"] for record in survivors if record["kind"] == "plan"}
-        self.f.catalog = Catalog(record for record in survivors if record["kind"] != "receipt"
-                                 or record["body"]["purpose"] not in {"AUTHORIZATION", "PREFLIGHT"}
-                                 or record["body"]["payload"]["plan_hash"] in plans)
+        self.f.catalog = Catalog(survivors)
         return erased
 
     def test_old_erasure_with_unrelated_erased_plan_allows_migration_and_retry(self):
         plan = self.ordinary_plan()
-        self.f.publish(plan, approvals=self.ordinary_approvals(plan))
+        approvals = self.ordinary_approvals(plan)
+        approval_ids = {self.f.catalog.put("receipt", approval) for approval in approvals}
+        self.f.publish(plan, approvals=approvals)
         erased = self.erase_source()
         self.assertIn(plan, erased)
+        self.assertTrue(approval_ids <= set(erased))
         self.assertEqual(self.b.audit(trust=self.f.trust)["classification_replay"], "PASS")
         self.f.migrate()
         approved = self.b.audit(trust=self.f.trust)
@@ -77,6 +77,22 @@ class PublicationRegressions:
         self.assertTrue(again["replayed"])
         self.assertEqual(again["receipt"], first["receipt"])
         self.assertEqual(first["receipt"]["classification_revision"], 1)
+
+    def test_repeat_erasure_cleans_legacy_receipts_linked_by_hash(self):
+        plan = self.ordinary_plan()
+        approvals = self.ordinary_approvals(plan)
+        approval_ids = {self.f.catalog.put("receipt", receipt) for receipt in approvals}
+        self.f.publish(plan, approvals=approvals)
+        with patch("trace_gc.ledger.receipt_bound_hash_field", return_value=None):
+            old_erasure = self.erase_source()
+        self.assertTrue(approval_ids.isdisjoint(old_erasure))
+        self.assertTrue(approval_ids <= {r["id"] for r in self.f.catalog.all("receipt")})
+        result = self.b.erase_cached_content(self.f.source, reason="Synthetic erasure fixture")
+        fixed_erasures = set(result["erased_ids"])
+        self.assertTrue(approval_ids <= fixed_erasures)
+        self.f.catalog = Catalog(record for record in self.f.catalog.all() if record["id"] not in fixed_erasures)
+        self.f.migrate()
+        self.assertTrue(self.b.audit(trust=self.f.trust)["classification_authority_verified"])
 
     def test_erased_classification_proof_leaves_ordinary_writes_and_retry_available(self):
         self.f.migrate()
@@ -133,6 +149,16 @@ class PublicationRegressions:
 
 class ReferencePublicationRegressions(PublicationRegressions, unittest.TestCase):
     backend_factory = None
+
+    def test_genesis_cannot_claim_initialized_classifications(self):
+        meta = loads(self.b.db.execute("SELECT body FROM trace_meta WHERE id=1").fetchone()[0])
+        genesis = meta["genesis_state"]
+        genesis["classifications"] = {"contract_version": 1, "revision": 1, "assignments": {}}
+        meta["genesis_hash"] = digest(genesis)
+        self.b.db.execute("UPDATE trace_meta SET body=? WHERE id=1", (dumps(meta),))
+        with self.assertRaisesRegex(ContractError, "DOMAIN_AUDIT.*genesis"):
+            from trace_gc.domain_publication import audit_history
+            audit_history(self.b, trust=self.f.trust)
 
     def test_journal_key_must_match_signed_plan(self):
         event = deepcopy(self.f.migrate()["event"])

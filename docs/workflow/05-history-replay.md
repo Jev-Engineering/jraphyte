@@ -93,6 +93,8 @@ Withdrawal retains source bytes for historical inspection while blocking fresh u
 
 After erasure, `load_catalog` fails with `REPLAY_CONTENT_UNAVAILABLE` and cleanup reports `EXACT_REPLAY_UNAVAILABLE`; `audit` can still verify the journal using tombstones. This retention boundary covers only cached records in this backend. It does not erase caller-held catalogs, exports, journal state projections or every possible copy, and makes no claim of complete legal erasure.
 
+Cleanup also removes cached signed receipts whose bound record hash was erased. On a database previously cleaned by an older runtime, an authorized operator may repeat cleanup against the committed tombstone and use the returned erasure IDs to remove those receipts from its working catalog. Ordinary graph plans using surviving records remain available. Classification publication requires signed origin proof for the existing projection. An erased classification dependency or revoked historical issuer holds further classification publication. Resumption in that case requires a separately reviewed authority-recovery protocol and verified checkpoint.
+
 ## Code and reviewed tests
 
 - [ledger.py](../../trace_gc/ledger.py): `references`, `causal_references`, `build_ledger`, `make_bundle`, `validate_ledger`.

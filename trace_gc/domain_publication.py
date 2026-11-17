@@ -230,6 +230,8 @@ def audit_history(backend: Any, *, trust: TrustStore | None = None) -> dict[str,
     """
     previous = loads(backend.db.execute("SELECT body FROM trace_meta WHERE id=1").fetchone()[0])["genesis_state"]
     previous_projection = _stored_projection(previous)
+    require(previous_projection is None, "DOMAIN_AUDIT",
+            "classification genesis must be unmigrated; initialization requires a reviewed transaction")
     erased = dict(backend.db.execute("SELECT id,hash FROM trace_erased"))
     if erased:
         from .catalog import Catalog
@@ -237,7 +239,6 @@ def audit_history(backend: Any, *, trust: TrustStore | None = None) -> dict[str,
                           for ref, hash_, kind, body in backend.db.execute("SELECT id,hash,kind,body FROM trace_records"))
     else:
         catalog = backend.load_catalog()
-    verify_projection(catalog, previous)
     statuses: dict[str, Any] = {}
     domain_events = 0
     missing_proof = False
