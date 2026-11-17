@@ -199,8 +199,10 @@ def _permutation_check(arm, base, rotated, queries, recorded):
                         raise ValueError(error)
                     measured_hits[channel] += target in topk
                     union.update(dict.fromkeys(topk))
+                candidate_order = result['stage'] == 'candidate_order_only_not_reranked'
                 if (pool != list(union) or type(order) is not list or
-                        len(order) != len(pool) or set(order) != set(pool)):
+                        len(order) != len(pool) or set(order) != set(pool) or
+                        (candidate_order and order != pool)):
                     raise ValueError(error)
                 rank = order.index(target) + 1 if target in pool else None
                 if detail['rank'] != rank:
@@ -300,6 +302,11 @@ def aggregate(trial_dir: Path) -> dict:
                 arms[arm] = metrics
         elif name == 'queries-permuted.json':
             queries = _permuted_queries(data, query_count)
+    primary = results['primary.json']
+    for arm in arms:
+        result = results[arm + '.json']
+        if any(result[key] != primary[key] for key in ('candidate_depth', 'stage')):
+            raise ValueError('trial_arm_configuration_mismatch')
     checks, permutation = receipt.get('all_arm_target_permutations'), receipt.get('target_permutation')
     if type(checks) is not dict or set(checks) != set(arms) or permutation != checks['primary']:
         raise ValueError('trial_target_permutation_missing')
@@ -308,7 +315,7 @@ def aggregate(trial_dir: Path) -> dict:
         for arm in arms
     }
     return dict(schema_version='retrieval-trial-sanitized-metrics-v1',
-        trial_receipt_sha256=hashlib.sha256(raw).hexdigest(), protocol_sha256=sha(receipt['protocol_sha256']),
+        trial_receipt_sha256=hashlib.sha256(raw).hexdigest(), protocol_sha256=sha(receipt.get('protocol_sha256')),
         **numeric({k: receipt.get(k) for k in ('document_count', 'query_count',
                                              'new_paid_api_calls', 'production_graph_writes')}),
         full_10000_by_60=full,

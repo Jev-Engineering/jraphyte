@@ -197,15 +197,23 @@ class TrialReportTests(unittest.TestCase):
             aggregate(self.root)
 
     def test_candidate_order_only(self):
-        self.result['stage'] = 'candidate_order_only_not_reranked'
-        self.write_arm('primary', self.result)
-        permutation = json.loads((self.root/'target_permutation.json').read_bytes())['result']
-        permutation['stage'] = self.result['stage']
-        self.write_arm('target_permutation', permutation)
+        for name in ('primary', 'target_permutation', 'without_dense', 'without_dense_target_permutation'):
+            result = json.loads((self.root/(name+'.json')).read_bytes())['result']
+            result['stage'] = 'candidate_order_only_not_reranked'
+            self.write_arm(name, result)
         self.write_receipt()
         final = aggregate(self.root)['arms']['primary']['final_stage']
         self.assertFalse(final['reranked'])
         self.assertEqual(final['stage'], 'candidate_order_only_not_reranked')
+
+    def test_measured_arms_share_a_single_stage_and_depth(self):
+        for name in ('without_dense', 'without_dense_target_permutation'):
+            result = json.loads((self.root/(name+'.json')).read_bytes())['result']
+            result['candidate_depth'] += 1
+            self.write_arm(name, result)
+        self.write_receipt()
+        with self.assertRaisesRegex(ValueError, '^trial_arm_configuration_mismatch$'):
+            aggregate(self.root)
 
     def test_cli_exclusive_output(self):
         output = self.root/'report.json'
