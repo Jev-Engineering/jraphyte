@@ -70,6 +70,14 @@ jobs:
           python -m unittest discover -s tests -p "test_windows_fence_diagnostics.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
           grep -Eq '^Ran 18 tests in ' "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
           grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-fence-diagnostics-tests.log"
+      - name: Run all nine native Windows converter parent-process cases
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_paper_converter_worker_parent.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-converter-worker-parent.log"
+          grep -Eq '^Ran 9 tests in ' "$RUNNER_TEMP/windows-converter-worker-parent.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-converter-worker-parent.log"
       - name: Sanitized Windows trustee serialization diagnostics
         if: always()
         continue-on-error: true
