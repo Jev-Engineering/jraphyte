@@ -1,11 +1,17 @@
-"""Recorded review chronology of contract records; claimed reviews, not authentication."""
+"""Review chronology regression tests; application test keys are not Git signers."""
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+import tempfile
 import unittest
+from unittest.mock import patch
 
 from trace_gc.catalog import Catalog
+from trace_gc.domain_publication import restore_assignment
 from trace_gc.domains import create_assignment, verify_assignment, verify_taxonomy, validate_catalog
 from trace_gc.errors import ContractError
+from trace_gc.trust import authorize_plan
 from test_research_domain_contracts import fixture_catalog, REVIEW, STAMP
+from test_research_domain_transactions import DomainFixture
 
 
 def reviewed(at):
@@ -63,6 +69,13 @@ class ReviewOrderTests(unittest.TestCase):
         self.reject_order(lambda: verify_assignment(self.c, forged))
         self.reject_order(lambda: validate_catalog(self.c))
 
+    def test_rollback_is_a_new_review_not_a_backdated_record(self):
+        first = self.assignment()
+        current = self.assignment(previous=first, review=reviewed("2026-09-27T02:00:00Z"))
+        self.reject_order(lambda: restore_assignment(self.c, current_assignment_id=current,
+            restore_assignment_id=first, review=reviewed("2026-09-27T01:00:00Z"),
+            classifier_id="fixture-reviewer", classifier_version="chronology-regression-v1"))
+
     def test_equal_review_instants_with_different_offsets_are_valid(self):
         first = self.assignment(review=reviewed("2026-09-27T01:00:00+01:00"))
         second = self.assignment(previous=first, review=reviewed(STAMP))
@@ -84,6 +97,59 @@ class ReviewOrderTests(unittest.TestCase):
         self.assertEqual(self.c.record(first), frozen)
         self.assertEqual([self.c.record(r["id"]) for r in originals], originals)
         self.assertEqual(verify_assignment(self.c, second)["supersedes_hash"], frozen["hash"])
+
+
+class SignedReviewOrderTests(unittest.TestCase):
+    def test_signed_approval_cannot_attest_a_review_that_occurs_after_its_issuance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            f = DomainFixture(directory)
+            try:
+                f.migrate()
+                instant = datetime.now(timezone.utc)
+                review = reviewed((instant - timedelta(seconds=5)).isoformat())
+                ref = f.assign(review=review)
+                plan = f.assignment_plan(ref)
+                auth, preflight = f.approvals(plan)
+                issued = (instant - timedelta(seconds=10)).isoformat()
+                auth = authorize_plan(f.reviewer, f.catalog.get(plan), f.catalog.hash(plan),
+                                      reviewed_by="fixture-reviewer", issued_at=issued)
+                # Both Ed25519 signatures really verify and are currently valid.
+                f.trust.verify(auth, "AUTHORIZATION")
+                f.trust.verify(preflight, "PREFLIGHT")
+                before = f.backend.state()
+                journal = list(f.backend.db.execute("SELECT * FROM trace_journal"))
+                with self.assertRaises(ContractError) as caught:
+                    f.publish(plan, approvals=(auth, preflight))
+                self.assertEqual(caught.exception.code, "DOMAIN_REVIEW_ORDER")
+                self.assertEqual(f.backend.state(), before)
+                self.assertEqual(list(f.backend.db.execute("SELECT * FROM trace_journal")), journal)
+            finally:
+                f.close()
+
+    def test_authenticated_history_rejects_older_writer_postdated_review_without_rewriting_journal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            f = DomainFixture(directory)
+            try:
+                f.migrate()
+                instant = datetime.now(timezone.utc)
+                ref = f.assign(review=reviewed((instant - timedelta(seconds=5)).isoformat()))
+                pid = f.assignment_plan(ref)
+                auth, preflight = f.approvals(pid)
+                auth = authorize_plan(f.reviewer, f.catalog.get(pid), f.catalog.hash(pid),
+                    reviewed_by="fixture-reviewer", issued_at=(instant - timedelta(seconds=10)).isoformat())
+                # Model only the pre-hardening writer's missing chronology check;
+                # real fixture signatures, CAS and the transaction are unchanged.
+                with patch("trace_gc.backend.verify_review_attribution", return_value=None):
+                    f.publish(pid, approvals=(auth, preflight))
+                journal = list(f.backend.db.execute("SELECT * FROM trace_journal"))
+                state = f.backend.state()
+                with self.assertRaises(ContractError) as caught:
+                    f.backend.audit(trust=f.trust)
+                self.assertEqual(caught.exception.code, "DOMAIN_REVIEW_ORDER")
+                self.assertEqual(list(f.backend.db.execute("SELECT * FROM trace_journal")), journal)
+                self.assertEqual(f.backend.state(), state)
+            finally:
+                f.close()
 
 
 if __name__ == "__main__":
