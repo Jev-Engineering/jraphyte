@@ -260,7 +260,13 @@ class PaperPilot:
                     self.backend.statuses() == capsule["source_statuses"] and
                     self.budget.snapshot() == capsule["budget_snapshot"],
                     "PHASE_IMPORT", "import run/config/request inventory differs")
-            for record in capsule["catalog_records"]:
+            # The raw checkpoint preserves insertion order used by wire_request.
+            # Canonical capsule catalog JSON has the same verified records but
+            # sorts their keys, which can change the reserved adapter bytes.
+            records = [loads(row[1])["value"]["records"]
+                       for row in capsule["checkpoint_events"]
+                       if loads(row[1])["kind"] == "RESULT"][-1]
+            for record in records:
                 self.catalog.add(record)
             self.requests.update(imported)
             self._phase_imported = True
@@ -303,7 +309,8 @@ class PaperPilot:
                             "semantic_profile": self.semantic_profile,
                             "schema_hash": self.backend.state()["schema_hash"], "policy_hash": self.service.policy_hash,
                             "population": self.service.population, "policy_version": self.service.policy_version,
-                            "sandbox": self.backend.sandbox}) == self._application_binding,
+                            "sandbox": self.backend.sandbox,
+                            **({"phase_import": self.phase_import} if self.phase_import is not None else {})}) == self._application_binding,
                     "PILOT_CONFIG_CHANGED", "application capability or configuration changed during run")
             args = loads(dumps(args))
             if id_ not in self.requests:
@@ -334,7 +341,7 @@ class PaperPilot:
 
     def _import_phase_locked(self, *, capsule_path, capsule_sha256, authorization):
         from .phase_transition import _read_once, verify_capsule, verify_import_authorization
-        require(self.phase_import is not None and not self._phase_imported and
+        require(self.phase_import is not None and
                 str(Path(capsule_path).resolve(strict=True)) ==
                     str(Path(self.phase_import["capsule_path"]).resolve(strict=True)) and
                 capsule_sha256 == self.phase_import["capsule_sha256"],
@@ -349,6 +356,25 @@ class PaperPilot:
             capsule_sha256=capsule_sha256,
             target_implementation_sha256=digest(self._identity),
             run_id=self.config["run_id"])
+        if self._phase_imported:
+            # Reconcile a durable import whose caller lost the return value.
+            # Only the untouched, inactive two-event transition can replay.
+            events = [loads(row[0]) for row in self.db.execute(
+                "SELECT body FROM events ORDER BY seq")]
+            require(len(events) == 2 and events[0]["kind"] == "OPEN" and
+                    events[1] == {"kind": "IMPORT_PHASE", "value": {
+                        "capsule_sha256": capsule_sha256,
+                        "authorization_sha256": self.phase_import["authorization_sha256"]},
+                        "previous": digest(events[0])} and
+                    self._head == digest(events[1]) and self.requests == requests and
+                    capsule["config"] == self.config and
+                    capsule["run_id"] == self.config["run_id"] and
+                    self.backend.state() == capsule["graph_state"] and
+                    self.backend.statuses() == capsule["source_statuses"] and
+                    self.budget.snapshot() == capsule["budget_snapshot"],
+                    "PHASE_IMPORT", "import replay differs from durable transition")
+            return {"status": "PHASE_IMPORTED_HELD", "capsule_sha256": capsule_sha256,
+                    "checkpoint_head": self._head, "model_calls": 0}
         require(capsule["config"] == self.config and capsule["run_id"] == self.config["run_id"] and
                 not self.requests and self.backend.state() == capsule["graph_state"] and
                 self.backend.statuses() == capsule["source_statuses"] and
