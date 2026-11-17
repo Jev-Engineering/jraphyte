@@ -215,6 +215,10 @@ class ModeledFence(unittest.TestCase):
 
 
 class ModeledAliasFenceTests(ModeledFence):
+    def test_unsupported_conditional_ace_is_refused_without_truncation(self):
+        with self.assertRaisesRegex(ContractError, "unsupported DACL ACE syntax"):
+            authority.canonical_dacl_aces('D:P(XA;;LC;;;BU;(@User.Title == "Fixture"))')
+
     def test_the_literal_check_cannot_see_the_alias_spelled_deny(self):
         # The issue #110 mechanism: Windows spells the numeric SID as BU in DACL text.
         result = self.fence()
