@@ -87,13 +87,14 @@ class DomainFixture:
     def assignment_plan(self, ref, **kwargs):
         return self.plan([classification_operation(kwargs.get("catalog") or self.catalog, ref, operation_id="assign")], **kwargs)
 
-    def status_change(self, *, active=False, permission="READ", tombstone=False):
-        status = self.backend.statuses()[self.source]
-        action = {"action": "ERASE" if tombstone else "STATUS_CHANGE", "source_id": self.source,
-                  "source_hash": self.catalog.hash(self.source), "active": active, "permission": permission,
+    def status_change(self, *, source=None, active=False, permission="READ", tombstone=False):
+        source = source or self.source
+        status = self.backend.statuses()[source]
+        action = {"action": "ERASE" if tombstone else "STATUS_CHANGE", "source_id": source,
+                  "source_hash": self.catalog.hash(source), "active": active, "permission": permission,
                   "expected_epoch": status["epoch"], "expected_version": self.backend.state()["graph_version"],
                   "security_scope": "test", "reason": "fixture change", "tombstone": tombstone}
-        return self.backend.change_source_status(self.catalog, self.source, active=active, permission=permission,
+        return self.backend.change_source_status(self.catalog, source, active=active, permission=permission,
                      expected_epoch=status["epoch"], expected_version=self.backend.state()["graph_version"],
                      key="status-" + str(status["epoch"]), reason="fixture change", tombstone=tombstone,
                      authorization=self.source_admin.issue("SOURCE_STATUS", action), trust=self.trust)

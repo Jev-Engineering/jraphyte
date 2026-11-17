@@ -23,7 +23,8 @@ from .qualification import QualificationRegistry,context_for,evaluate_policy
 from .trust import TrustStore,Signer,verify_authorization,verify_observation_attestation
 from .domain_publication import (
     OPERATIONS as DOMAIN_OPERATIONS,
-    audit_history, receipt_projection, snapshot_body, verify_preflight_payload, verify_review_attribution,
+    audit_history, classification_only_plan, receipt_projection, snapshot_body, verify_preflight_payload,
+    verify_review_attribution,
     verify_transaction_receipt,
 )
 
@@ -271,6 +272,11 @@ class SQLiteReferenceBackend:
                 records=[{"id":i,"hash":h,"kind":k,"body":loads(b)} for i,h,k,b in self.db.execute("SELECT id,hash,kind,body FROM trace_records")]
                 from .ledger import receipt_bound_hash_field
                 lost={source_id}
+                committed_plans = set()
+                for (text,) in self.db.execute("SELECT body FROM trace_journal"):
+                    event = loads(text)
+                    if event["operation"].get("action") == "PUBLISH_PLAN":
+                        committed_plans.add(event["operation"]["plan_id"])
                 # Previous versions could erase a plan and retain the cached
                 # receipt that referred to its hash. Clean those orphans on
                 # an explicitly authorized repeat of the erasure operation.
@@ -296,7 +302,12 @@ class SQLiteReferenceBackend:
                             field = receipt_bound_hash_field(receipt["purpose"])
                             bound_hash = receipt["payload"].get(field)
                             bound_to_erasure = type(bound_hash) is str and bound_hash in lost_hashes
-                        if bound_to_erasure or set(strings(r["body"])) & lost:
+                        body = r["body"]
+                        if r["kind"] == "plan" and r["id"] in committed_plans and classification_only_plan(body):
+                            # Keep an unrelated signed classification proof whose
+                            # sole link to erased bytes is a journaled snapshot.
+                            body = {key: value for key, value in body.items() if key != "snapshot_id"}
+                        if bound_to_erasure or set(strings(body)) & lost:
                             lost.add(r["id"])
                             lost_hashes.add(r["hash"])
                             changed=True
@@ -472,17 +483,32 @@ class CompilerService:
         from .ledger import build_ledger, references
         missing_snapshot_refs = {ref for record in catalog.all("graph-snapshot")
                                  for ref, _ in references(record) if ref not in catalog}
-        erased_refs = frozenset()
+        retained_plans = {record["id"]: record for record in catalog.all("plan")
+                          if classification_only_plan(record["body"]) and record["body"]["snapshot_id"] not in catalog}
+        missing_snapshot_refs.update(record["body"]["snapshot_id"] for record in retained_plans.values())
+        erased_refs = set()
+        erased_plan_links = set()
         if missing_snapshot_refs:
             with self.backend._lock:
                 tombstones = {ref: hash_ for ref, hash_ in self.backend.db.execute("SELECT id,hash FROM trace_erased")
                               if ref in missing_snapshot_refs}
                 if tombstones:
-                    erased_refs = frozenset(ref for (body,) in self.backend.db.execute("SELECT body FROM trace_journal")
-                                            for ref, hash_ in loads(body)["record_hashes"].items()
-                                            if tombstones.get(ref) == hash_)
+                    for (body,) in self.backend.db.execute("SELECT body FROM trace_journal"):
+                        event = loads(body)
+                        erased_refs.update(ref for ref, hash_ in event["record_hashes"].items()
+                                           if tombstones.get(ref) == hash_)
+                        historical_id = event["operation"].get("plan_id")
+                        record = retained_plans.get(historical_id)
+                        if record is None or event["operation"].get("plan_hash") != record["hash"]:
+                            continue
+                        snapshot_id = record["body"]["snapshot_id"]
+                        if (event["operation"].get("action") == "PUBLISH_PLAN" and
+                                snapshot_id in tombstones and
+                                event["record_hashes"].get(snapshot_id) == tombstones[snapshot_id]):
+                            erased_plan_links.add((historical_id, snapshot_id))
         lineage=build_ledger(catalog,run_id=plan["run_id"],execution_mode=plan["execution_mode"],
-                             created_at=plan["created_at"],erased_snapshot_refs=erased_refs)
+                             created_at=plan["created_at"],erased_snapshot_refs=frozenset(erased_refs),
+                             erased_plan_links=frozenset(erased_plan_links))
         computed_head=lineage[-1]["hash"] if lineage else None
         require(upstream_head is None or upstream_head==computed_head,"LEDGER_BINDING","supplied head differs from verified lineage")
         def verify_authority_under_lock() -> str:

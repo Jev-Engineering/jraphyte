@@ -102,7 +102,8 @@ def causal_references(record: dict[str,Any], catalog: Catalog | None=None) -> se
 
 def build_ledger(catalog: Catalog, *, run_id: str, execution_mode: str, created_at: str | None = None,
                  prefix: list[dict[str,Any]] | None = None,
-                 erased_snapshot_refs: frozenset[str] = frozenset()) -> list[dict[str,Any]]:
+                 erased_snapshot_refs: frozenset[str] = frozenset(),
+                 erased_plan_links: frozenset[tuple[str, str]] = frozenset()) -> list[dict[str,Any]]:
     from .references import topological_order
     records={r["id"]:r for r in catalog.all()}
     dependencies={ref:causal_references(record,catalog) for ref,record in records.items()}
@@ -112,6 +113,8 @@ def build_ledger(catalog: Catalog, *, run_id: str, execution_mode: str, created_
     for ref, record in records.items():
         if record["kind"] == "graph-snapshot":
             dependencies[ref] -= omitted
+    for plan_id, snapshot_id in erased_plan_links:
+        dependencies[plan_id].discard(snapshot_id)
     events=deepcopy(prefix or []);record_events={};previous=None;seen=set()
     for i,e in enumerate(events,1):
         require(e["sequence"]==i and e["previous_hash"]==previous and e["id"] not in seen,"LEDGER_CHAIN","invalid append prefix")

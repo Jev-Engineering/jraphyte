@@ -22,6 +22,10 @@ OPERATIONS = frozenset({"INITIALIZE_RESEARCH_DOMAINS", "SET_SOURCE_CLASSIFICATIO
 SNAPSHOT_FIELDS = ("graph_version", "schema_id", "schema_hash", "nodes", "assertions", "source_epochs")
 
 
+def classification_only_plan(plan: dict[str, Any]) -> bool:
+    return bool(plan["operations"]) and all(op["operation"] in OPERATIONS for op in plan["operations"])
+
+
 def snapshot_body(state: dict[str, Any]) -> dict[str, Any]:
     body = {key: deepcopy(state[key]) for key in SNAPSHOT_FIELDS}
     if "classifications" in state:
@@ -267,6 +271,15 @@ def audit_history(backend: Any, *, trust: TrustStore | None = None) -> dict[str,
                         "DOMAIN_AUDIT", "publication event and receipt key differ from the signed plan")
                 if any(op["operation"] in OPERATIONS for op in plan["operations"]):
                     domain_events += 1
+                    snapshot_id = plan["snapshot_id"]
+                    if snapshot_id not in catalog and snapshot_id in erased and classification_only_plan(plan):
+                        # The signed plan retains the snapshot reference. The
+                        # journal already retains exactly these metadata bytes.
+                        snapshot = snapshot_body(previous)
+                        snapshot_hash = digest({"kind": "graph-snapshot", "body": snapshot})
+                        require(erased[snapshot_id] == event["record_hashes"].get(snapshot_id) == snapshot_hash,
+                                "DOMAIN_AUDIT", "erased snapshot metadata does not match the signed plan")
+                        catalog.put("graph-snapshot", snapshot, id_=snapshot_id)
                     try:
                         expected = _verify_classification_event(catalog, event, plan, previous, previous_projection,
                             statuses, receipts, trust=trust, sandbox=backend.sandbox)
