@@ -21,6 +21,14 @@ The guarded admission handoff requires an independently established sole owner b
 
 ## Recovery and evidence
 
+Run the portable end-to-end and rejection suites with
+`python -m unittest tests.test_paper_pilot_phase_transition_e2e tests.test_paper_pilot_phase_transition_rejections`
+from the source checkout. An operator validating an actual migration must also
+read back the original attempt inventory. An unresolved historical attempt can
+retain its reservation during an authorized transition, but the transition
+does not authorize another attempt.
+
+
 - Export and restore use deterministic `.pending` SQLite backups. Completed pending backups can be promoted after logical readback; incomplete pending bytes are preserved as `.failed.*` before another backup is taken. Unknown destination files or changed old state cause a hold.
 - Restore readback of a quiescent WAL-mode graph or budget store opens the main database with SQLite `mode=ro&immutable=1`. It rejects any preexisting `-wal` or `-shm` file and checks again after the connection closes. Ordinary `mode=ro` can create those sidecars on Windows; an interruption after that readback would otherwise make an identical restore request reject its own target inventory. A real nonempty WAL or unexpected SHM is a hold, including a zero-byte WAL left by an older reader. The restore does not delete sidecars or infer that a live writer is absent from file size alone.
 - A target previously restored by a runtime with the sidecar defect needs separate, reviewed recovery. Preserve its main databases, receipt, WAL/SHM files and hashes; establish ownership and classify the sidecars before any approved reconciliation. This code change alters the PaperPilot implementation identity, so old phase authorizations and activation bindings cannot be reused with a new runtime. Never hotpatch the active phase or remove historical sidecars as part of this fix.
