@@ -269,7 +269,13 @@ class SQLiteReferenceBackend:
                 status=self.statuses().get(source_id)
                 require(status is not None and status["tombstone"],"ERASURE_AUTHORITY","committed authorized tombstone required")
                 records=[{"id":i,"hash":h,"kind":k,"body":loads(b)} for i,h,k,b in self.db.execute("SELECT id,hash,kind,body FROM trace_records")]
+                from .ledger import receipt_bound_hash_field
                 lost={source_id}
+                # Previous versions could erase a plan and retain the cached
+                # receipt that referred to its hash. Clean those orphans on
+                # an explicitly authorized repeat of the erasure operation.
+                lost_hashes = {hash_ for (hash_,) in self.db.execute("SELECT hash FROM trace_erased")}
+                lost_hashes.update(record["hash"] for record in records if record["id"] == source_id)
                 # Conservative reference closure: discard cached derived content.
                 # This is content-reference matching, not an assertion of legal erasure completeness.
                 def strings(value):
@@ -282,8 +288,18 @@ class SQLiteReferenceBackend:
                 while changed:
                     changed=False
                     for r in records:
-                        if r["id"] not in lost and set(strings(r["body"]))&lost:
-                            lost.add(r["id"]);changed=True
+                        if r["id"] in lost:
+                            continue
+                        bound_to_erasure = False
+                        if r["kind"] == "receipt":
+                            receipt = r["body"]
+                            field = receipt_bound_hash_field(receipt["purpose"])
+                            bound_hash = receipt["payload"].get(field)
+                            bound_to_erasure = type(bound_hash) is str and bound_hash in lost_hashes
+                        if bound_to_erasure or set(strings(r["body"])) & lost:
+                            lost.add(r["id"])
+                            lost_hashes.add(r["hash"])
+                            changed=True
                 for r in records:
                     if r["id"] in lost:
                         self.db.execute("INSERT OR IGNORE INTO trace_erased VALUES(?,?,?,?,?)",(r["id"],r["hash"],r["kind"],reason,now()))

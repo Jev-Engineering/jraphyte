@@ -67,6 +67,11 @@ def references(record: dict[str,Any]) -> list[tuple[str,str]]:
     refs.extend(domain_references(kind, b))
     return list(dict.fromkeys(refs))
 
+def receipt_bound_hash_field(purpose: str) -> str | None:
+    return {"AUTHORIZATION": "plan_hash", "PREFLIGHT": "plan_hash",
+            "QUALIFICATION": "qualification_hash", "OBSERVATION": "observation_hash"}.get(purpose)
+
+
 def causal_references(record: dict[str,Any], catalog: Catalog | None=None) -> set[str]:
     refs={ref for ref,_ in references(record)}
     kind,b=record["kind"],record["body"]
@@ -76,10 +81,12 @@ def causal_references(record: dict[str,Any], catalog: Catalog | None=None) -> se
         receipts={digest(r["body"]):r["id"] for r in catalog.all("receipt")}
         if kind=="receipt":
             p=b["payload"]
-            field={"AUTHORIZATION":"plan_hash","PREFLIGHT":"plan_hash","QUALIFICATION":"qualification_hash","OBSERVATION":"observation_hash"}.get(b["purpose"])
-            if field:
-                require(field in p and p[field] in hashes,"MISSING_REFERENCE","receipt's bound record is absent")
-                refs.add(hashes[p[field]])
+            field = receipt_bound_hash_field(b["purpose"])
+            if field is not None:
+                bound_hash = p.get(field)
+                require(type(bound_hash) is str and bound_hash in hashes,
+                        "MISSING_REFERENCE", "receipt's bound record is absent")
+                refs.add(hashes[bound_hash])
             if b["purpose"]=="SOURCE_STATUS":
                 refs.update(p.get("source_hashes",{}))
                 if "source_id" in p:refs.add(p["source_id"])
