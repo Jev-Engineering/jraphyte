@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from src import paper_pilot_phase_cutover_guarded_v4 as guarded
 from src.paper_pilot_phase_cutover import _current_sid
+from tools import windows_fixture_acl
 from trace_gc.budget import RunBudget
 from trace_gc.canonical import bytes_digest, dumps
 from trace_gc.trust import IssuerPolicy, Signer, TrustStore
@@ -56,6 +57,11 @@ class ContinuousFenceTests(unittest.TestCase):
             (self.parent / name).write_bytes(b"0")
         self.files = {name: bytes_digest((self.old / name).read_bytes())
                       for name in guarded.NAMES}
+        # Explicit, protected and verified before the first pin (see tools/windows_fixture_acl.py).
+        windows_fixture_acl.stabilize_owned_fixture(
+            self.base, [("parent", self.parent), ("state", self.old)]
+            + [("file:" + name, self.old / name) for name in sorted(guarded.NAMES)],
+            read=guarded.directory_dacl_sddl)
         self.parent_acl = bytes_digest(guarded.directory_dacl_sddl(self.parent).encode())
         self.file_acl = {name: bytes_digest(
             guarded.directory_dacl_sddl(self.old / name).encode())
