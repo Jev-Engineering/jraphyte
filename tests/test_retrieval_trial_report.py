@@ -19,8 +19,7 @@ class TrialReportTests(unittest.TestCase):
         self.result = dict(queries=4, fields_count=15, top1=1, top10=2, mrr=0.3958333333333333,
             candidate_coverage=0.75, candidate_depth=50, stage='local_cross_encoder',
             details=[dict(id='SECRETQUERY'+str(i), target_id='SECRETDOC'+str(i),
-                query='secret query alpha', rank=r, candidate_present=r is not None,
-                top10=['SECRETDOC'+str(j) for j in range(6)])
+                query='secret query alpha', rank=r, candidate_present=r is not None)
                 for i, r in enumerate((1, 2, 12, None))],
             candidate_stage_metrics={c: dict(status='MEASURED', hits=3, queries=4, recall=.75)
                                      for c in CHANNELS}, index_seconds=1, candidate_seconds=2,
@@ -47,6 +46,7 @@ class TrialReportTests(unittest.TestCase):
             target_permutation=checks,
             all_arm_target_permutations={arm: checks for arm in ('primary', 'without_dense')},
             result_file_sha256={})
+        self.result['dense_cache_sha256'] = self.write_dense_cache(self.result)
         queries = [{k: d[k] for k in ('id', 'query', 'target_id')} for d in self.result['details']]
         targets = [q['target_id'] for q in queries]
         for query, target in zip(queries, targets[1:] + targets[:1]):
@@ -74,7 +74,40 @@ class TrialReportTests(unittest.TestCase):
     def write_receipt(self):
         (self.root/'receipt.json').write_text(json.dumps(self.receipt), encoding='utf-8')
 
+    def write_dense_cache(self, result):
+        queries = [{'id': detail['id'], 'query': detail['query']} for detail in result['details']]
+        rankings = {qid: candidate['specter2_topk'] for qid, candidate in result['candidates'].items()}
+        cache = dict(binding_version='ranking-inputs-v2', channel='specter2', target_ids_used_for_ranking=False,
+                     rankings=rankings, ranking_sha256=_canonical_hash(rankings), fields_sha256=result['fields_sha256'],
+                     ranking_inputs_sha256=_canonical_hash(queries), query_ids_sha256=_canonical_hash([q['id'] for q in queries]),
+                     document_ids_sha256='f'*64, top_k=result['candidate_depth'])
+        raw = json.dumps(cache).encode()
+        path = self.root/'specter2'/'dense_cache.json'
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(raw)
+        sha = hashlib.sha256(raw).hexdigest()
+        files = {path.name: sha}
+        self.receipt.update(dense_cache_file_sha256=sha, dense_artifact_sha256=files,
+                            dense_conditions={'current': {'cache_sha256': sha, 'artifact_sha256': files}})
+        return _canonical_hash(cache)
+
     def write_arm(self, name, result):
+        result = json.loads(json.dumps(result))
+        rank_calls = []
+        for detail in result['details']:
+            qid, rank = detail['id'], detail['rank']
+            order = result['rankings'][qid]
+            detail.setdefault('reciprocal_rank', 1 / rank if rank else 0.0)
+            detail.setdefault('top10', order[:10])
+            candidate = result['candidates'][qid]
+            pool = candidate['pool']
+            candidate.setdefault('pool_sha256', _canonical_hash(pool))
+            if result['stage'] == 'local_cross_encoder' and pool:
+                score_by_doc = {doc: len(order)-i for i, doc in enumerate(order)}
+                scores = [score_by_doc[doc] for doc in pool]
+                rank_calls.append({'query_id': qid, 'pair_count': len(pool), 'pairs_sha256': 'e'*64,
+                                   'scores': scores, 'scores_sha256': _canonical_hash(scores)})
+        result.setdefault('scored_calls', rank_calls)
         result = {'field_condition': 'historical' if name.startswith('historical_fields') else 'current', **result,
                   'ranking_outputs_sha256': _canonical_hash(result['rankings']),
                   'ranking_inputs_sha256': _canonical_hash([{k: d[k] for k in ('id', 'query')} for d in result['details']]),
@@ -158,12 +191,18 @@ class TrialReportTests(unittest.TestCase):
             aggregate(self.root)
 
     def test_report_accepts_producer_normalized_empty_query_id(self):
+        cache_sha = None
         for name in ('primary', 'without_dense', 'target_permutation', 'without_dense_target_permutation'):
             result = json.loads((self.root/(name+'.json')).read_bytes())['result']
             first = result['details'][0]
             previous_id, first['id'] = first['id'], ''
             for collection in ('rankings', 'candidates'):
                 result[collection][''] = result[collection].pop(previous_id)
+            result['scored_calls'][0]['query_id'] = ''
+            if name == 'primary':
+                cache_sha = self.write_dense_cache(result)
+            if result['dense_stage'] == 'supplied_bound_cache':
+                result['dense_cache_sha256'] = cache_sha
             self.write_arm(name, result)
         path = self.root/'queries-permuted.json'
         queries = json.loads(path.read_bytes())
@@ -177,6 +216,7 @@ class TrialReportTests(unittest.TestCase):
     def test_rank_pool_and_candidate_stage_contradictions(self):
         for mutate in (
             lambda result: result['details'][0].update(candidate_present=False),
+            lambda result: result['details'][0].update(reciprocal_rank=0.0),
             lambda result: result['details'][-1].update(candidate_present=True),
             lambda result: result['candidate_stage_metrics']['union'].update(status='NOT_RUN'),
             lambda result: result['candidate_stage_metrics']['bm25_page'].update(hits=2.5, recall=.625),
@@ -282,6 +322,7 @@ class TrialReportTests(unittest.TestCase):
         for name in ('primary', 'target_permutation', 'without_dense', 'without_dense_target_permutation'):
             result = json.loads((self.root/(name+'.json')).read_bytes())['result']
             result['stage'] = 'candidate_order_only_not_reranked'
+            del result['scored_calls']
             self.write_arm(name, result)
         self.write_receipt()
         final = aggregate(self.root)['arms']['primary']['final_stage']
@@ -295,6 +336,34 @@ class TrialReportTests(unittest.TestCase):
             self.write_arm(name, result)
         self.write_receipt()
         with self.assertRaisesRegex(ValueError, '^trial_arm_configuration_mismatch$'):
+            aggregate(self.root)
+
+    def test_specter2_candidates_must_match_the_producer_cache(self):
+        base = json.loads((self.root/'primary.json').read_bytes())['result']
+        next(iter(base['candidates'].values()))['specter2_topk'].reverse()
+        cache_sha = self.write_dense_cache(base)
+        for name in ('primary', 'target_permutation'):
+            result = json.loads((self.root/(name+'.json')).read_bytes())['result']
+            result['dense_cache_sha256'] = cache_sha
+            self.write_arm(name, result)
+        self.write_receipt()
+        with self.assertRaisesRegex(ValueError, '^trial_dense_cache_readback_mismatch$'):
+            aggregate(self.root)
+
+    def test_rejects_ranking_that_disagrees_with_bound_scores_or_pool(self):
+        original = json.loads((self.root/'primary.json').read_bytes())['result']
+        altered = json.loads(json.dumps(original))
+        call = altered['scored_calls'][0]
+        call['scores'].reverse()
+        call['scores_sha256'] = _canonical_hash(call['scores'])
+        self.write_arm('primary', altered)
+        self.write_receipt()
+        with self.assertRaisesRegex(ValueError, '^trial_target_permutation_mismatch:primary$'):
+            aggregate(self.root)
+        next(iter(original['candidates'].values()))['pool_sha256'] = '0'*64
+        self.write_arm('primary', original)
+        self.write_receipt()
+        with self.assertRaisesRegex(ValueError, '^trial_target_permutation_mismatch:primary$'):
             aggregate(self.root)
 
     def test_arms_bind_the_producer_field_dense_and_reranker_conditions(self):

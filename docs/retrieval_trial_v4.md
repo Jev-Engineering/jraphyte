@@ -263,5 +263,7 @@ rankings, candidate pools and dense-cache binding against the receipt's
 reported check. It checks every listed file's hash and verifies the measured
 channels against each declared page or dense ablation. Receipt and result files must be regular files. Input errors
 use fixed codes and may identify an arm by its predefined name. The report
-certifies arithmetic consistency and always sets `issue_acceptance_complete`
-to false. It is ready to run once the real corpus trial exists.
+checks arithmetic and replays the stored score order and SPECTER2 cache
+against their reported candidates. Source rights and the frozen protocol's
+external inputs require separate verification. The report always sets
+`issue_acceptance_complete` to false.

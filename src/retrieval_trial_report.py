@@ -57,6 +57,9 @@ def arm_report(name, result, query_count):
             if (type(present) is not bool or present != (rank is not None) or
                     (present and (type(rank) is not int or rank < 1))):
                 raise ValueError(error)
+            reciprocal_rank = d['reciprocal_rank']
+            if not number(reciprocal_rank) or reciprocal_rank != (1 / rank if present else 0.0):
+                raise ValueError(error)
         top1 = sum(d['rank'] == 1 for d in details)
         top10 = sum(d['rank'] is not None and d['rank'] <= 10 for d in details)
         present = sum(d['candidate_present'] for d in details)
@@ -180,11 +183,21 @@ def _permuted_queries(data, query_count):
     return queries
 
 
+def _scored_order(call, qid, pool, error):
+    scores = call['scores']
+    if (call['query_id'] != qid or type(call['pair_count']) is not int or call['pair_count'] != len(pool) or
+            type(scores) is not list or len(scores) != len(pool) or not all(number(score) for score in scores) or
+            call['scores_sha256'] != _canonical_hash(scores)):
+        raise ValueError(error)
+    sha(call['pairs_sha256'])
+    return [pool[i] for i in sorted(range(len(pool)), key=lambda i: (-scores[i], i))]
+
+
 def _permutation_check(arm, base, rotated, queries, recorded):
     error = 'trial_target_permutation_mismatch:' + arm
     try:
         input_hash = _canonical_hash([{'id': row['id'], 'query': row['query']} for row in queries])
-        labels = []
+        labels, score_inputs = [], []
         for result in (base, rotated):
             sha(result.get('fields_sha256'))
             if result['dense_cache_sha256'] is not None:
@@ -200,6 +213,12 @@ def _permutation_check(arm, base, rotated, queries, recorded):
                     result['ranking_inputs_sha256'] != input_hash):
                 raise ValueError(error)
             measured_hits = dict.fromkeys(CHANNELS[:-1], 0)
+            use_scores = result['stage'] == 'local_cross_encoder'
+            calls = result.get('scored_calls', [])
+            if type(calls) is not list or (not use_scores and calls):
+                raise ValueError(error)
+            consumed = 0
+            input_hashes = []
             for detail in result['details']:
                 qid, target = detail['id'], detail['target_id']
                 order, candidate = rankings[qid], candidates[qid]
@@ -215,13 +234,21 @@ def _permutation_check(arm, base, rotated, queries, recorded):
                     measured_hits[channel] += target in topk
                     union.update(dict.fromkeys(topk))
                 candidate_order = result['stage'] == 'candidate_order_only_not_reranked'
-                if (pool != list(union) or type(order) is not list or
-                        len(order) != len(pool) or set(order) != set(pool) or
+                if (pool != list(union) or candidate['pool_sha256'] != _canonical_hash(pool) or
+                        type(order) is not list or len(order) != len(pool) or set(order) != set(pool) or
                         (candidate_order and order != pool)):
                     raise ValueError(error)
+                if use_scores and pool:
+                    if consumed >= len(calls) or _scored_order(calls[consumed], qid, pool, error) != order:
+                        raise ValueError(error)
+                    input_hashes.append(calls[consumed]['pairs_sha256'])
+                    consumed += 1
                 rank = order.index(target) + 1 if target in pool else None
-                if detail['rank'] != rank:
+                if detail['rank'] != rank or detail['top10'] != order[:10]:
                     raise ValueError(error)
+            if consumed != len(calls):
+                raise ValueError(error)
+            score_inputs.append(input_hashes)
             for channel, hits in measured_hits.items():
                 if result['candidate_stage_metrics'][channel].get('hits', 0) != hits:
                     raise ValueError(error)
@@ -233,7 +260,8 @@ def _permutation_check(arm, base, rotated, queries, recorded):
                   ('ranking_inputs_sha256', 'ranking_outputs_sha256', 'candidates', 'dense_cache_sha256')}
         checks['labels_changed'] = True
         same_configuration = all(base[key] == rotated[key] for key in ('candidate_depth', 'stage', 'fields_sha256'))
-        if (not same_configuration or not all(checks.values()) or type(recorded) is not dict or
+        if (not same_configuration or score_inputs[0] != score_inputs[1] or
+                not all(checks.values()) or type(recorded) is not dict or
                 recorded != {'status': 'PASS', 'checks': checks} or
                 any(value is not True for value in recorded['checks'].values())):
             raise ValueError(error)
@@ -253,6 +281,51 @@ def _check_ablation(base, variant, removed):
     if (set(original) != set(ablated) or any(
             original[qid][key] != ablated[qid][key] for qid in original for key in retained)):
         raise ValueError(error)
+
+
+def _check_dense_caches(trial_dir, receipt, results, queries):
+    error = 'trial_dense_cache_readback_mismatch'
+    measured = [result for result in results.values() if result['dense_stage'] == 'supplied_bound_cache']
+    conditions = receipt.get('dense_conditions')
+    if type(conditions) is not dict or set(conditions) != {result['field_condition'] for result in measured}:
+        raise ValueError(error)
+    query_ids = [row['id'] for row in queries]
+    try:
+        for condition, binding in conditions.items():
+            directory = trial_dir / ('specter2' if condition == 'current' else 'specter2-historical')
+            if directory.is_symlink() or not directory.is_dir():
+                raise ValueError(error)
+            raw = _read_regular(directory / 'dense_cache.json', error)
+            file_sha = hashlib.sha256(raw).hexdigest()
+            if (file_sha != binding['cache_sha256'] or
+                    file_sha != binding['artifact_sha256']['dense_cache.json'] or
+                    (condition == 'current' and (receipt['dense_cache_file_sha256'] != file_sha or
+                     receipt['dense_artifact_sha256'] != binding['artifact_sha256']))):
+                raise ValueError(error)
+            cache = _json_object(raw, error)
+            rankings = cache['rankings']
+            if (cache['binding_version'] != 'ranking-inputs-v2' or cache['channel'] != 'specter2' or
+                    cache['target_ids_used_for_ranking'] is not False or
+                    cache['query_ids_sha256'] != _canonical_hash(query_ids) or
+                    type(rankings) is not dict or set(rankings) != set(query_ids) or
+                    cache['ranking_sha256'] != _canonical_hash(rankings) or
+                    type(cache['top_k']) is not int):
+                raise ValueError(error)
+            sha(cache['document_ids_sha256'])
+            cache_sha = _canonical_hash(cache)
+            for result in measured:
+                if result['field_condition'] != condition:
+                    continue
+                depth = result['candidate_depth']
+                if (result['dense_cache_sha256'] != cache_sha or depth > cache['top_k'] or
+                        result['fields_sha256'] != cache['fields_sha256'] or
+                        result['ranking_inputs_sha256'] != cache['ranking_inputs_sha256']):
+                    raise ValueError(error)
+                for qid, ranking in rankings.items():
+                    if type(ranking) is not list or result['candidates'][qid]['specter2_topk'] != ranking[:depth]:
+                        raise ValueError(error)
+    except (KeyError, TypeError, UnicodeError, ValueError, RecursionError):
+        raise ValueError(error) from None
 
 
 def _manifest(receipt):
@@ -382,6 +455,7 @@ def aggregate(trial_dir: Path) -> dict:
     ):
         if variant in arms:
             _check_ablation(results[base + '.json'], results[variant + '.json'], removed)
+    _check_dense_caches(trial_dir, receipt, results, queries)
     return dict(schema_version='retrieval-trial-sanitized-metrics-v1',
         trial_receipt_sha256=hashlib.sha256(raw).hexdigest(), protocol_sha256=sha(receipt.get('protocol_sha256')),
         **numeric({k: receipt.get(k) for k in ('document_count', 'query_count',
