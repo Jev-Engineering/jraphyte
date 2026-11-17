@@ -52,6 +52,11 @@ REFERENCE_REVIEW = {"candidate_review_separate_from_reference_context": True,
     "external_independent_human_claim": False, "fixed_reference_audit_fraction": .1,
     "kind": "internal_assistant", "reviewer_identities": None,
     "source_before_prediction": True, "unresolved_and_disagreements_preserved": True}
+FRAME_SIZE = 2000
+POPULATION_SCOPE = "Bounded returned recent OAI frame; historical hep-th challenge is descriptive and separate."
+CONFIDENCE_SCOPE = "Two one-sided 97.5% exact bounds; at least 95% joint coverage under the preregistered binomial model."
+EXTRACTION_SCOPE = "first_page_abstract_extraction_only"
+EXPOSURE_REGISTRY = "metadata-inventory/exposure-registry.jsonl"
 PHASES = ("configuration_frozen", "cohort_frozen", "references_frozen", "predictions_frozen")
 CLARIFICATION = {"version": "paper-evaluator-preselection-clarification-v1",
     "normalized_rank_identity": "lowercase_versionless_arxiv_colon_work_id",
@@ -189,8 +194,7 @@ def statistical_gates(primary, challenges, strata):
         reports[name] = values
     return {"status": "BLOCKED" if missing else "FAIL" if not all(checks.values()) else "PASS",
         "primary": p, "challenge": reports, "checks": checks, "missing_representation": missing,
-        "primary_confidence_claim": "Two one-sided 97.5% exact bounds; at least 95% joint coverage under the preregistered binomial model.",
-        "population_scope": "Bounded returned recent OAI frame; historical hep-th challenge is descriptive and separate."}
+        "primary_confidence_claim": CONFIDENCE_SCOPE, "population_scope": POPULATION_SCOPE}
 
 
 class Artifacts:
@@ -286,7 +290,7 @@ def validate_selection(value):
     exact(value, {"recent_frame", "historical_frame", "exposed_work_ids", "identity_exclusions",
         "primary", "recent_screen", "historical_screen", "screen", "challenge", "reconciled_at", "exposure_snapshot"}, "selection_contract_required")
     recent, historical = value["recent_frame"], value["historical_frame"]
-    require(len(recent) == 2000 and len(historical) == 2000, "both_frozen_2000_work_frames_required")
+    require(len(recent) == FRAME_SIZE and len(historical) == FRAME_SIZE, "both_frozen_2000_work_frames_required")
     rank(recent, "primary"); rank(historical, "historical-screen")
     require(not set(recent) & set(historical), "frame_work_overlap")
     exposed = value["exposed_work_ids"]
@@ -325,6 +329,22 @@ def validate_selection(value):
     for name in QUOTAS:
         memberships[name] = sorted(sid for sid in selected if name in value["screen"][sid]["strata"])
     return set(value["primary"]) | selected, screened, memberships
+
+
+def read_exposure_registry(store, raw):
+    entries = []
+    for line in raw.splitlines():
+        if not line:
+            continue
+        entry = store.parse(line)
+        require(type(entry) is dict and "work_id" in entry, "invalid_pinned_exposure_registry")
+        normalize_work_id(entry["work_id"])
+        for key in ("source_sha256", "page_sha256"):
+            values = entry.get(key)
+            require(type(values) is list and all(type(value) is str and SHA.fullmatch(value) for value in values),
+                    "invalid_pinned_exposure_registry")
+        entries.append(entry)
+    return entries
 
 
 def reconcile_exposure(snapshot, prior, selection):
@@ -913,7 +933,7 @@ def _evaluate(root, bundle_descriptor, *, expected_preregistration_sha256, trust
             frame_versions[sid] = item["version_id"]
             if item.get("doi"):
                 frame_dois[sid] = item["doi"].strip().lower()
-    exposure = [store.parse(line) for line in documents["metadata-inventory/exposure-registry.jsonl"].splitlines() if line]
+    exposure = read_exposure_registry(store, documents[EXPOSURE_REGISTRY])
     known = reconcile_exposure(store.json(selection["exposure_snapshot"]), exposure, selection)
     verify_identity_exclusions(store, selection["identity_exclusions"], known=known,
         frame_dois=frame_dois, frame_versions=frame_versions, cohort_frozen=times["cohort_frozen"])
@@ -1077,7 +1097,7 @@ def _evaluate(root, bundle_descriptor, *, expected_preregistration_sha256, trust
     require(evaluator_identity() == code and code_identity() == image_code and runtime_receipt(runtime_lock) == runtime,
             "code_or_runtime_changed_during_evaluation")
     authored = bundle["execution_mode"] == "AUTHORED_CONTRACT_TEST"
-    return {**report, "version": VERSION, "study_id": bundle["study_id"],
+    return {**report, "version": VERSION, "study_id": bundle["study_id"], "execution_mode": bundle["execution_mode"],
         "qualification_pass": report["status"] == "PASS" and not authored,
         "status": "AUTHORED_CONTRACT_PASS_NOT_QUALIFICATION" if report["status"] == "PASS" and authored else report["status"],
         "review_policy": REVIEW_POLICY, "independent_human_qualification": False, "graph_qualification_registered": False,
@@ -1160,14 +1180,17 @@ def _public_summary(result, private_hash):
 
     public = redact(result)
     public["private_evaluation_sha256"] = private_hash
+    public["execution_mode"] = result.get("execution_mode", "UNVERIFIED")
+    public["scope"] = EXTRACTION_SCOPE
     return public
 
 
 def validate_early_block(result):
     exact(result, {"version", "status", "reason", "qualification_pass", "independent_human_qualification",
         "graph_qualification_registered", "graph_writes", "paid_calls"}, "unverified_publication_result_rejected")
-    require(result["status"] == "BLOCKED" and result["qualification_pass"] is False
-        and result["independent_human_qualification"] is False and result["graph_writes"] == 0 and result["paid_calls"] == 0
+    require(result["version"] == VERSION and result["status"] == "BLOCKED" and result["qualification_pass"] is False
+        and result["independent_human_qualification"] is False and result["graph_qualification_registered"] is False
+        and all(type(result[key]) is int and result[key] == 0 for key in ("graph_writes", "paid_calls"))
         and isinstance(result["reason"], str) and re.fullmatch(r"[a-z0-9_]+", result["reason"]),
         "unverified_publication_result_rejected")
 

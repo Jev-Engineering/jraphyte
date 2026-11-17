@@ -323,7 +323,9 @@ STUDY=validation_v3_private/qualification-UNIQUE
    outside the repository, the bundle hash and descriptor shape, the bound
    preregistration pointer, its externally supplied hash and the required protocol
    and frame descriptors, numeric protocol and evaluator clarification, and
-   the frame projections' identity structure. It also checks that the output path is fresh and has
+   the frame projections' 2,000 identities each and the pinned exposure
+   inventory. It reads required preregistration metadata and rejects paths
+   designated for selected study artifacts. It also checks that the output path is fresh and has
    directory ancestors, the optional PDF/image dependencies are discoverable, and the evaluator
    identity and runtime receipt compute under the runtime lock.
 
@@ -369,7 +371,7 @@ from an allowlist and contains:
 - status;
 - overall primary and per-stratum challenge counts, exact bounds and 95%
   intervals;
-- per-arm summaries;
+- per-arm summaries with counts of error and truncated assessments;
 - reference-status and route counts;
 - image counts;
 - the execution receipt's recorded per-stage calls, failures, retries, review

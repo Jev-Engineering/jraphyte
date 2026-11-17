@@ -9,10 +9,11 @@ import math
 from pathlib import Path
 import re
 
-from src.paper_qualification_v1 import (Artifacts, CLARIFICATION, EvidenceError, METHODS, PHASES,
+from src.paper_qualification_v1 import (Artifacts, CLARIFICATION, CONFIDENCE_SCOPE, EXPOSURE_REGISTRY,
+    EXTRACTION_SCOPE, EvidenceError, FRAME_SIZE, METHODS, PHASES, POPULATION_SCOPE,
     PUBLIC_REASONS as REASONS, QUOTAS, REQUIRED_PREREGISTRATION_DOCUMENTS, REVIEW_POLICY,
-    VERSION as EVALUATION_VERSION, _trust_identity, evaluator_identity, exact, normalize_work_id,
-    public_reason_code as reason_code, read_preregistration, read_study_bundle, require, summarize,
+    VERSION as EVALUATION_VERSION, _trust_identity, evaluator_identity, exact, instant, normalize_work_id,
+    public_reason_code as reason_code, read_exposure_registry, read_preregistration, read_study_bundle, require, summarize,
     validate_protocol, verify_published)
 from src.parallel_source_v4.common import REPO, child, data_root, write_once
 from src.parallel_source_v4.runtime import DEFAULT_RUNTIME_LOCK, runtime_receipt
@@ -24,7 +25,7 @@ STAGES = ("converters", "ocr", "source_review", "adjudication", "candidate_revie
 CLAIM = ("Redacted aggregate only; internally attributed source-first review, no independent human validation; "
     "first-page abstract scope only, not validation of later-page ingestion, graph publication or generated answers; "
     "synthetic or authored inputs are not empirical evidence.")
-SCOPE = "first_page_abstract_extraction_only"
+SCOPE = EXTRACTION_SCOPE
 RESERVED_PUBLICATION_PATHS = {"evaluation.json", "public-summary.json",
     "publication-complete.json", "publication-invalidated.json"}
 SHA = re.compile(r"[0-9a-f]{64}")
@@ -46,12 +47,12 @@ claim scope review_policy overall strata checks missing_representation measured_
 challenge image_counts sample_counts screened_exposure_count all_sampled_case_count primary_n
 challenge_case_count reference_status_counts route_counts costs paid_calls paid_spend_usd graph_writes
 stages stage failure_totals execution_bound rejected_partial_or_absent_accepts_count source_evaluation_sha256
-execution_mode conversion_error_count truncated_case_count reviewer_kind assistant
+execution_mode assessment_error_count assessment_truncation_count reviewer_kind assistant population_scope primary_confidence_claim
 """.split())
 CHECKS = {"minimum_accepted", "minimum_resolved_complete", "zero_false_accepts", "strict_precision",
     "strict_complete_recall", "reference_resolution"} | {f"challenge_{name}_{kind}" for name in QUOTAS
     for kind in ("safety", "utility", "actual_image_route")}
-VOCABULARY = CHECKS | FIELDS | set(STAGES) | set(QUOTAS) | {k+":complete" for k in QUOTAS} | set(METHODS) | STATUSES | STUDY_MODES | {"UNVERIFIED"} | SELECTIONS | REFERENCES | ROUTES | {REVIEW_POLICY, VERSION, EVALUATION_VERSION, CLAIM, SCOPE, "unrecognized_reason_redacted"}
+VOCABULARY = CHECKS | FIELDS | set(STAGES) | set(QUOTAS) | {k+":complete" for k in QUOTAS} | set(METHODS) | STATUSES | STUDY_MODES | {"UNVERIFIED"} | SELECTIONS | REFERENCES | ROUTES | {REVIEW_POLICY, VERSION, EVALUATION_VERSION, CLAIM, SCOPE, CONFIDENCE_SCOPE, POPULATION_SCOPE, "unrecognized_reason_redacted"}
 
 
 def integer(value):
@@ -110,7 +111,8 @@ def build_report(evaluation, *, execution=None):
         and e.get("qualification_pass") is (status == "PASS"), "evaluation_contract_required")
     result = {"version": VERSION, "source_evaluation_version": EVALUATION_VERSION,
         "status": status, "qualification_pass": False,
-        "independent_human_qualification": False, "claim": CLAIM, "scope": SCOPE}
+        "independent_human_qualification": False, "claim": CLAIM, "scope": SCOPE,
+        "population_scope": POPULATION_SCOPE, "primary_confidence_claim": CONFIDENCE_SCOPE}
     if status == "BLOCKED" and "primary" not in e:
         result["execution_mode"] = "UNVERIFIED"
         result["reason_code"] = reason_code(e.get("reason"))
@@ -136,8 +138,8 @@ def build_report(evaluation, *, execution=None):
             "arm_case_status_required")
         result["measured_arms"][method] = {"selection": arm["selection"],
             "primary": _redacted_summary(arm["primary"]), "challenge": summaries(arm["challenge"]),
-            "conversion_error_count": sum(row["status"] == "error" for row in cases.values()),
-            "truncated_case_count": sum(row["status"] == "truncated" for row in cases.values())}
+            "assessment_error_count": sum(row["status"] == "error" for row in cases.values()),
+            "assessment_truncation_count": sum(row["status"] == "truncated" for row in cases.values())}
     exact(e["image_counts"], IMAGES, "image_counts_required")
     result["image_counts"] = {k: integer(e["image_counts"][k]) for k in IMAGES}
     total = integer(e["all_sampled_case_count"])
@@ -258,14 +260,15 @@ def write_report(data_root, output_relative, evaluation_descriptor, *, execution
     return {"relative": output_relative, "sha256": write_once(output, report)}
 
 
-def _validate_preregistration_descriptors(store, pointer_relative, pointer):
+def _validate_preregistration_descriptors(store, pointer_relative, pointer, excluded):
     directory = child(store.root, Path(pointer_relative).parent.as_posix())
 
     def validate(relative, sha256):
         require(isinstance(relative, str) and relative and isinstance(sha256, str) and SHA.fullmatch(sha256),
                 "artifact_descriptor_required")
         path = child(directory, relative)
-        require(path.suffix.lower() in {".json", ".jsonl", ".md", ".txt"}, "artifact_descriptor_required")
+        require(path not in excluded and path.suffix.lower() in {".json", ".jsonl", ".md", ".txt"},
+                "artifact_descriptor_required")
         descriptor = {"relative": path.relative_to(store.root).as_posix(), "sha256": sha256}
         store.verify(descriptor)
         return descriptor
@@ -273,17 +276,23 @@ def _validate_preregistration_descriptors(store, pointer_relative, pointer):
     documents = pointer.get("base_protocol_and_additive_amendments")
     require(isinstance(documents, dict) and REQUIRED_PREREGISTRATION_DOCUMENTS <= documents.keys(),
             "base_protocol_and_both_frame_amendments_required")
-    descriptors = {relative: validate(relative, sha256) for relative, sha256 in documents.items()}
-    validate_protocol(store.json(descriptors["protocol.json"]))
+    # The externally pinned pointer may include other artifacts for the full evaluator.
+    # Preflight reads only the required preregistration metadata roles.
+    descriptors = {relative: validate(relative, documents[relative])
+                   for relative in sorted(REQUIRED_PREREGISTRATION_DOCUMENTS)}
+    protocol = store.json(descriptors["protocol.json"])
+    validate_protocol(protocol)
+    instant(protocol["registered_utc"])
     require(store.json(descriptors["amendment-04/evaluator-clarification.json"]) == CLARIFICATION,
             "approved_preselection_identity_and_audit_rules_required")
+    read_exposure_registry(store, store.bytes(descriptors[EXPOSURE_REGISTRY]))
     frames = pointer.get("frames")
     exact(frames, {"recent", "historical"}, "frozen_preregistration_pointer_required")
     frame_ids = set()
     for frame in frames.values():
         require(isinstance(frame, dict), "artifact_descriptor_required")
         rows = store.json(validate(frame.get("identity_projection_relative"), frame.get("sha256")))
-        require(type(rows) is list and bool(rows), "frozen_frame_projection_required")
+        require(type(rows) is list and len(rows) == FRAME_SIZE, "frozen_frame_projection_required")
         for row in rows:
             require(type(row) is dict and type(row.get("version_id")) is str and
                     row["version_id"] and (row.get("doi") is None or type(row["doi"]) is str),
@@ -320,6 +329,7 @@ def preflight(args):
             checks[name] = False
     check("data_root", lambda: authorized_root(args.data_root))
     store, bundle = None, None
+    excluded = set()
     def json_path(relative):
         return child(store.root, relative).suffix.lower() == ".json"
     def load_bundle():
@@ -330,13 +340,15 @@ def preflight(args):
         require(set(candidate["roles"]) == {"custodian", "source_reviewer", "adjudicator",
             "candidate_reviewer", "operator"} and len(candidate["phases"]) == len(PHASES),
             "study_bundle_contract_required")
+        excluded.update(child(store.root, item["relative"]) for role, item in candidate.items()
+                        if role != "preregistration" and type(item) is dict and set(item) == {"relative", "sha256"})
         bundle = candidate
     def load_preregistration():
         if bundle is None:
             return False
         require(json_path(bundle["preregistration"]["relative"]), "frozen_preregistration_pointer_required")
         pointer = read_preregistration(store, bundle, args.preregistration_sha256)
-        _validate_preregistration_descriptors(store, bundle["preregistration"]["relative"], pointer)
+        _validate_preregistration_descriptors(store, bundle["preregistration"]["relative"], pointer, excluded)
         store.recheck()
     check("bundle", load_bundle)
     check("preregistration", load_preregistration)
@@ -347,7 +359,11 @@ def preflight(args):
         nonlocal identity
         identity = digest_value(evaluator_identity())
     check("evaluator_identity", identify)
-    check("runtime_receipt", lambda: runtime_receipt(Path(args.runtime_lock) if args.runtime_lock else DEFAULT_RUNTIME_LOCK))
+    def check_runtime():
+        lock = args.runtime_lock or DEFAULT_RUNTIME_LOCK
+        require(Path(lock).resolve() not in excluded, "artifact_descriptor_required")
+        return runtime_receipt(lock)
+    check("runtime_receipt", check_runtime)
     return {"status": "READY" if all(checks.values()) else "NOT_READY", "checks": checks,
         "evaluator_code_sha256": identity}
 

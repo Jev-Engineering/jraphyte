@@ -261,8 +261,8 @@ class AggregateTests(unittest.TestCase):
                     self.assertEqual(report["execution_mode"], "AUTHORED_CONTRACT_TEST")
                     self.assertEqual(report["reviewer_kind"], "assistant")
                     for arm in report["measured_arms"].values():
-                        self.assertEqual(arm["conversion_error_count"], 1)
-                        self.assertEqual(arm["truncated_case_count"], 1)
+                        self.assertEqual(arm["assessment_error_count"], 1)
+                        self.assertEqual(arm["assessment_truncation_count"], 1)
                     self.assertTrue(report["execution_bound"])
                     self.assertEqual(report["failure_totals"], {"failures": 6, "retries": 12})
                     self.assertNotIn("CANARY", json.dumps(report))
@@ -295,7 +295,7 @@ class AggregateTests(unittest.TestCase):
     def test_public_summary_withholds_nested_case_identifiers_and_unapproved_reasons(self):
         value = evaluation()
         selected = {"rejected_partial_or_absent_accepts": ["authored_private_case_id"]}
-        value.update(primary=selected, challenge={"image_only": selected},
+        value.update(primary=selected, challenge={"image_only": selected}, execution_mode="AUTHORED_CONTRACT_TEST",
                      measured_arms={"test_method": {"primary": selected, "challenge": {"image_only": selected}}},
                      reason="authored_private_reason_token")
         summary = _public_summary(value, "a"*64)
@@ -305,6 +305,8 @@ class AggregateTests(unittest.TestCase):
                     summary["measured_arms"]["test_method"]["challenge"]["image_only"]):
             self.assertEqual(row, {"rejected_partial_or_absent_accepts_count": 1})
         self.assertEqual(summary["reason"], "unrecognized_reason_redacted")
+        self.assertEqual(summary["execution_mode"], "AUTHORED_CONTRACT_TEST")
+        self.assertEqual(summary["scope"], "first_page_abstract_extraction_only")
 
     def test_report_rejects_data_root_containing_checkout(self):
         with self.assertRaisesRegex(EvidenceError, "private_test_data_must_be_outside_repository"):
@@ -365,7 +367,7 @@ class AggregateTests(unittest.TestCase):
             def guarded(path):
                 self.assertIn(path.name, ("bundle.json", "current.json", "unrelated.json", "protocol.json",
                                           "evaluator-clarification.json", "historical.json", "recent.json",
-                                          "malformed-frame.json"))
+                                          "malformed-frame.json", "exposure-registry.jsonl"))
                 return original(path)
             with patch("src.paper_qualification_report_v1.runtime_receipt", return_value={}), \
                     patch("src.paper_qualification_report_v1.evaluator_identity", return_value={}), \
@@ -395,7 +397,8 @@ class AggregateTests(unittest.TestCase):
                 invalid_protocol = save(root, "prereg/protocol.json", malformed_protocol)
                 malformed_protocol_bytes = frozen_protocol_file.read_bytes()
                 frozen_protocol_file.write_bytes(frozen_protocol)
-                malformed_frame = save(root, "prereg/malformed-frame.json", {})
+                malformed_frame = save(root, "prereg/malformed-frame.json",
+                    [{"work_id": "arxiv:1801.00001", "version_id": "arxiv:1801.00001v1"}])
                 for alter in (
                     lambda value: value["base_protocol_and_additive_amendments"].update(
                         {"protocol.json": invalid_protocol["sha256"]}),
@@ -421,6 +424,40 @@ class AggregateTests(unittest.TestCase):
                     self.assertTrue(result["checks"]["bundle"])
                     self.assertFalse(result["checks"]["preregistration"])
                     self.assertEqual(result["status"], "NOT_READY")
+                exposure_path = root/"prereg/metadata-inventory/exposure-registry.jsonl"
+                valid_exposure = exposure_path.read_bytes()
+                exposure_path.write_bytes(b"invalid authored exposure JSONL")
+                bad_exposure = deepcopy(pointer)
+                bad_exposure["base_protocol_and_additive_amendments"]["metadata-inventory/exposure-registry.jsonl"] = \
+                    hashlib.sha256(exposure_path.read_bytes()).hexdigest()
+                updated = save(root, prereg["relative"], bad_exposure)
+                args.preregistration_sha256 = updated["sha256"]
+                args.bundle_sha256 = save(root, descriptor["relative"], {**body, "preregistration": updated})["sha256"]
+                self.assertFalse(preflight(args)["checks"]["preregistration"])
+                exposure_path.write_bytes(valid_exposure)
+
+                selected = save(root, "prereg/selected-source-canary.json", {"subject": "private authored text"})
+                with_extra = deepcopy(pointer)
+                with_extra["base_protocol_and_additive_amendments"]["selected-source-canary.json"] = selected["sha256"]
+                open_path = Path.open
+                def guarded_open(path, mode="r", *args, **kwargs):
+                    if path.name == "selected-source-canary.json" and "r" in mode:
+                        self.fail("opened selected source instead of approved preregistration metadata")
+                    return open_path(path, mode, *args, **kwargs)
+                with patch.object(Path, "open", guarded_open):
+                    updated = save(root, prereg["relative"], with_extra)
+                    args.preregistration_sha256 = updated["sha256"]
+                    args.bundle_sha256 = save(root, descriptor["relative"],
+                        {**body, "preregistration": updated, "sources": selected})["sha256"]
+                    self.assertEqual(preflight(args)["status"], "READY")
+                    with_extra["frames"]["recent"] = {"identity_projection_relative": "selected-source-canary.json",
+                                                       "sha256": selected["sha256"]}
+                    updated = save(root, prereg["relative"], with_extra)
+                    args.preregistration_sha256 = updated["sha256"]
+                    args.bundle_sha256 = save(root, descriptor["relative"],
+                        {**body, "preregistration": updated, "sources": selected})["sha256"]
+                    self.assertFalse(preflight(args)["checks"]["preregistration"])
+
                 (root/"unseen-must-not-open.pdf").write_bytes(b"%PDF synthetic canary")
                 args.bundle, args.bundle_sha256 = "unseen-must-not-open.pdf", "0"*64
                 self.assertFalse(preflight(args)["checks"]["bundle"])
