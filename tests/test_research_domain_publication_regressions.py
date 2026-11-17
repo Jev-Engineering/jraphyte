@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from trace_gc.canonical import digest, dumps, loads
 from trace_gc.catalog import Catalog
+from trace_gc.compiler import now
 from trace_gc.conformance import legacy_test_policy
 from trace_gc.domain_publication import migration_operation
 from trace_gc.errors import ContractError
@@ -94,16 +95,24 @@ class PublicationRegressions:
         self.f.migrate()
         self.assertTrue(self.b.audit(trust=self.f.trust)["classification_authority_verified"])
 
+    def test_first_admission_preserves_configured_nodes_after_initialization(self):
+        workspace = TemporaryDirectory()
+        self.addCleanup(workspace.cleanup)
+        fresh = DomainFixture(workspace.name, backend_factory=self.backend_factory, admit_initial=False)
+        self.addCleanup(fresh.close)
+        fresh.migrate()
+        published = fresh.admit(version=1, at=now())
+        self.assertEqual(fresh.backend.state()["nodes"], {"a": "Entity", "b": "Entity"})
+        replay = fresh.admit(version=1, at=published["receipt"]["committed_at"])
+        self.assertTrue(replay["replayed"])
+        self.assertEqual(replay["receipt"], published["receipt"])
+        self.assertTrue(fresh.backend.audit(trust=fresh.trust)["classification_authority_verified"])
+
     def test_erasure_of_unclassified_source_preserves_unrelated_classification_authority(self):
         catalog = self.f.catalog
         other = catalog.source("authored-unclassified", "1", "Authored erasure fixture.", scope="test")
         evidence = catalog.evidence(other)
-        version = self.b.state()["graph_version"]
-        action = {"action": "ADMIT", "source_hashes": {other: catalog.hash(other)}, "security_scope": "test",
-                  "execution_mode": "SYNTHETIC", "expected_version": version}
-        self.b.admit_sources(catalog, [other], trust=self.f.trust, security_scope="test", execution_mode="SYNTHETIC",
-                             expected_version=version, key="admit-other",
-                             authorization=self.f.source_admin.issue("SOURCE_STATUS", action))
+        self.f.admit(other, key="admit-other")
         migration = self.f.migrate()
         assignment = self.f.assign()
         classified_plan = self.f.assignment_plan(assignment)
