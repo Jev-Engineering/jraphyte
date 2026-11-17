@@ -38,8 +38,9 @@ classification projection at their recorded graph version.
 source epochs, prospective graph state, review attribution and receipt bindings.
 Supply the trust registry to authenticate the approval and validator signatures.
 Erasure leaves the record hashes and journal chain intact. If erasure removes a
-signed plan or a record required to verify a classification change, the audit
-reports `UNAVAILABLE_ERASED_CONTENT`. Classification writes and retries require
+signed classification plan or another record required to authenticate a
+classification change, such as a shared source admission receipt, the trusted
+audit reports `UNAVAILABLE_ERASED_CONTENT`. Classification writes and retries require
 complete authenticated history. A revoked historical signer also prevents
 historical authentication under the current trust registry. Ordinary writes and
 retries still verify current approval and journal integrity and preserve the
