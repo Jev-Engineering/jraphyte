@@ -94,6 +94,9 @@ class EmpiricalTrialTests(unittest.TestCase):
         rankings = {q["id"]: [f["id"] for f in fields] for q in queries}
         result = {"binding_version": "ranking-inputs-v2", "channel": "specter2", "rankings": rankings,
                   "ranking_sha256": digest_value(rankings), "model_revision": "a" * 40,
+                  "model_revisions": {role: "a" * 40 for role in ("base", "paper", "query")},
+                  "model_manifest_sha256": digest(model_manifest), "document_count": len(fields),
+                  "query_count": len(queries), "dense_input_absent_count": 0, "dense_input_absent_ids": [],
                   "document_ids_sha256": digest_value([f["id"] for f in fields]),
                   "query_ids_sha256": digest_value([q["id"] for q in queries]),
                   "fields_sha256": digest_value(fields), "top_k": 50, "target_ids_used_for_ranking": False,

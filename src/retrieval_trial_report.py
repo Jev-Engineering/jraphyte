@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import stat
 import tempfile
 from pathlib import Path
@@ -100,8 +101,7 @@ def arm_report(name, result, query_count):
         candidate['candidate_depth'] = result['candidate_depth']
     except (KeyError, TypeError, OverflowError):
         raise ValueError(error) from None
-    stage = status(result.get('stage'), ('local_cross_encoder', 'supplied_scorer',
-                                         'candidate_order_only_not_reranked'))
+    stage = status(result.get('stage'), ('local_cross_encoder', 'candidate_order_only_not_reranked'))
     if stage == 'UNKNOWN':
         raise ValueError(error)
     return {'candidate_stage': candidate,
@@ -126,7 +126,7 @@ def memory_report(memory) -> dict:
     return report
 
 
-def _read_regular(path, error):
+def _read_regular(path, error, *, hash_only=False):
     try:
         before = path.lstat()
         if not stat.S_ISREG(before.st_mode):
@@ -137,7 +137,7 @@ def _read_regular(path, error):
             opened = os.fstat(handle.fileno())
             if not stat.S_ISREG(opened.st_mode) or not os.path.samestat(before, opened):
                 raise ValueError(error)
-            return handle.read()
+            return hashlib.file_digest(handle, "sha256").hexdigest() if hash_only else handle.read()
     except (OSError, UnicodeError):
         raise ValueError(error) from None
 
@@ -193,11 +193,12 @@ def _scored_order(call, qid, pool, error):
     return [pool[i] for i in sorted(range(len(pool)), key=lambda i: (-scores[i], i))]
 
 
-def _permutation_check(arm, base, rotated, queries, recorded):
+def _permutation_check(arm, base, rotated, queries, recorded, *, historical_fields=None):
     error = 'trial_target_permutation_mismatch:' + arm
     try:
         input_hash = _canonical_hash([{'id': row['id'], 'query': row['query']} for row in queries])
         labels, score_inputs = [], []
+        query_text = {row['id']: row['query'] for row in queries}
         for result in (base, rotated):
             sha(result.get('fields_sha256'))
             if result['dense_cache_sha256'] is not None:
@@ -241,7 +242,13 @@ def _permutation_check(arm, base, rotated, queries, recorded):
                 if use_scores and pool:
                     if consumed >= len(calls) or _scored_order(calls[consumed], qid, pool, error) != order:
                         raise ValueError(error)
-                    input_hashes.append(calls[consumed]['pairs_sha256'])
+                    pair_hash = calls[consumed]['pairs_sha256']
+                    if historical_fields is not None:
+                        pairs = [(query_text[qid], "\n".join(historical_fields[ref].get(field, "")
+                                  for field in ("title", "abstract", "body"))) for ref in pool]
+                        if pair_hash != _canonical_hash(pairs):
+                            raise ValueError(error)
+                    input_hashes.append(pair_hash)
                     consumed += 1
                 rank = order.index(target) + 1 if target in pool else None
                 if detail['rank'] != rank or detail['top10'] != order[:10]:
@@ -283,14 +290,17 @@ def _check_ablation(base, variant, removed):
         raise ValueError(error)
 
 
-def _check_dense_caches(trial_dir, receipt, results, queries):
+def _check_dense_caches(trial_dir, receipt, results, queries, historical_ids):
     error = 'trial_dense_cache_readback_mismatch'
     measured = [result for result in results.values() if result['dense_stage'] == 'supplied_bound_cache']
     conditions = receipt.get('dense_conditions')
     if type(conditions) is not dict or set(conditions) != {result['field_condition'] for result in measured}:
         raise ValueError(error)
     query_ids = [row['id'] for row in queries]
+    historical_id_set = set(historical_ids) if historical_ids is not None else None
     try:
+        model_identity = None
+        corpus_hash = _canonical_hash(historical_ids) if historical_ids is not None else None
         for condition, binding in conditions.items():
             directory = trial_dir / ('specter2' if condition == 'current' else 'specter2-historical')
             if directory.is_symlink() or not directory.is_dir():
@@ -302,29 +312,65 @@ def _check_dense_caches(trial_dir, receipt, results, queries):
                     (condition == 'current' and (receipt['dense_cache_file_sha256'] != file_sha or
                      receipt['dense_artifact_sha256'] != binding['artifact_sha256']))):
                 raise ValueError(error)
+            for name, expected in binding['artifact_sha256'].items():
+                relative = Path(name)
+                if (not name or relative.is_absolute() or '..' in relative.parts or
+                        any(char in name for char in ('\\', ':', '\0'))):
+                    raise ValueError(error)
+                asset = directory / relative
+                if not asset.resolve().is_relative_to(directory.resolve()):
+                    raise ValueError(error)
+                if name != 'dense_cache.json' and _read_regular(asset, error, hash_only=True) != sha(expected):
+                    raise ValueError(error)
             cache = _json_object(raw, error)
             rankings = cache['rankings']
+            document_count, query_count = receipt['document_count'], len(query_ids)
+            versions = cache['model_revisions']
+            model_sha = sha(cache['model_manifest_sha256'])
+            if (type(versions) is not dict or set(versions) != {'base', 'paper', 'query'} or
+                    any(type(value) is not str or re.fullmatch('[a-f0-9]{40}', value) is None
+                        for value in versions.values()) or cache['model_revision'] != versions['base']):
+                raise ValueError(error)
+            current_model = (model_sha, versions)
+            if model_identity is not None and model_identity != current_model:
+                raise ValueError(error)
+            model_identity = current_model
+            current_corpus = sha(cache['document_ids_sha256'])
+            if corpus_hash is not None and corpus_hash != current_corpus:
+                raise ValueError(error)
+            corpus_hash = current_corpus
+            masked, masked_count = cache['dense_input_absent_ids'], cache['dense_input_absent_count']
+            if type(masked) is not list or any(type(value) is not str for value in masked):
+                raise ValueError(error)
+            masked_ids = set(masked)
+            if (type(masked_count) is not int or masked_count != len(masked_ids) or
+                    masked_count != len(masked) or not 0 <= masked_count < document_count or
+                    (historical_id_set is not None and not masked_ids <= historical_id_set)):
+                raise ValueError(error)
             if (cache['binding_version'] != 'ranking-inputs-v2' or cache['channel'] != 'specter2' or
                     cache['target_ids_used_for_ranking'] is not False or
                     cache['query_ids_sha256'] != _canonical_hash(query_ids) or
+                    type(cache['document_count']) is not int or cache['document_count'] != document_count or
+                    type(cache['query_count']) is not int or cache['query_count'] != query_count or
                     type(rankings) is not dict or set(rankings) != set(query_ids) or
                     cache['ranking_sha256'] != _canonical_hash(rankings) or
                     type(cache['top_k']) is not int):
                 raise ValueError(error)
-            sha(cache['document_ids_sha256'])
             cache_sha = _canonical_hash(cache)
             for result in measured:
                 if result['field_condition'] != condition:
                     continue
                 depth = result['candidate_depth']
-                if (result['dense_cache_sha256'] != cache_sha or depth > cache['top_k'] or
+                if (result['dense_cache_sha256'] != cache_sha or depth != cache['top_k'] or
                         result['fields_sha256'] != cache['fields_sha256'] or
                         result['ranking_inputs_sha256'] != cache['ranking_inputs_sha256']):
                     raise ValueError(error)
                 for qid, ranking in rankings.items():
-                    if type(ranking) is not list or result['candidates'][qid]['specter2_topk'] != ranking[:depth]:
+                    if (type(ranking) is not list or len(ranking) != min(depth, document_count - masked_count) or
+                            set(ranking) & masked_ids or (historical_id_set is not None and not set(ranking) <= historical_id_set) or
+                            result['candidates'][qid]['specter2_topk'] != ranking):
                         raise ValueError(error)
-    except (KeyError, TypeError, UnicodeError, ValueError, RecursionError):
+    except (KeyError, OSError, RuntimeError, TypeError, UnicodeError, ValueError):
         raise ValueError(error) from None
 
 
@@ -428,19 +474,8 @@ def aggregate(trial_dir: Path) -> dict:
     checks, permutation = receipt.get('all_arm_target_permutations'), receipt.get('target_permutation')
     if type(checks) is not dict or set(checks) != set(arms) or permutation != checks['primary']:
         raise ValueError('trial_target_permutation_missing')
-    verified_checks = {
-        arm: _permutation_check(arm, results[arm + '.json'], results[_permutation_file(arm)], queries, checks[arm])
-        for arm in arms
-    }
-    observed_ids = {row['target_id'] for result in results.values() for row in result['details']}
-    observed_ids.update(doc for result in results.values()
-                        for candidate in result['candidates'].values() for doc in candidate['pool'])
-    if len(observed_ids) > document_count:
-        raise ValueError('trial_document_count_mismatch')
+    historical_by_id = None
     if historical is not None:
-        historical_ids = {row['id'] for row in historical}
-        if len(historical_ids) != document_count or not observed_ids.issubset(historical_ids):
-            raise ValueError('trial_historical_fields_mismatch')
         try:
             expected_fields = _canonical_hash(historical)
         except (TypeError, ValueError, OverflowError, RecursionError):
@@ -448,6 +483,20 @@ def aggregate(trial_dir: Path) -> dict:
         if any(result.get('fields_sha256') != expected_fields for name, result in results.items()
                if name.startswith('historical_fields')):
             raise ValueError('trial_historical_fields_mismatch')
+        historical_by_id = {row['id']: row for row in historical}
+    verified_checks = {
+        arm: _permutation_check(arm, results[arm + '.json'], results[_permutation_file(arm)], queries, checks[arm],
+                                historical_fields=historical_by_id if arm.startswith('historical_fields') else None)
+        for arm in arms
+    }
+    observed_ids = {row['target_id'] for result in results.values() for row in result['details']}
+    observed_ids.update(doc for result in results.values()
+                        for candidate in result['candidates'].values() for doc in candidate['pool'])
+    if len(observed_ids) > document_count:
+        raise ValueError('trial_document_count_mismatch')
+    if historical_by_id is not None and (
+            len(historical_by_id) != document_count or not observed_ids.issubset(historical_by_id)):
+        raise ValueError('trial_historical_fields_mismatch')
     for base, variant, removed in (
         ('primary', 'without_page', 'bm25_page'),
         ('primary', 'without_dense', 'specter2'),
@@ -455,7 +504,7 @@ def aggregate(trial_dir: Path) -> dict:
     ):
         if variant in arms:
             _check_ablation(results[base + '.json'], results[variant + '.json'], removed)
-    _check_dense_caches(trial_dir, receipt, results, queries)
+    _check_dense_caches(trial_dir, receipt, results, queries, list(historical_by_id) if historical_by_id is not None else None)
     return dict(schema_version='retrieval-trial-sanitized-metrics-v1',
         trial_receipt_sha256=hashlib.sha256(raw).hexdigest(), protocol_sha256=sha(receipt.get('protocol_sha256')),
         **numeric({k: receipt.get(k) for k in ('document_count', 'query_count',
