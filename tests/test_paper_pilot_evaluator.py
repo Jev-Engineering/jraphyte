@@ -126,6 +126,12 @@ class AggregateEvaluatorTests(unittest.TestCase):
         question = rows(evaluate(protocol(), value, []), "questions")[QUESTION]
         self.assertEqual(question["reason"], "GRAPH_CHANGED_AFTER_ANSWER_REFRESH_REQUIRED")
 
+    def test_supported_answer_without_context_readback_is_held(self):
+        value = receipts()
+        del value["answers"][0]["retrieval_context_current"]
+        question = rows(evaluate(protocol(), value, []), "questions")[QUESTION]
+        self.assertEqual(question["status"], "HOLD")
+
     def test_abstention_requires_current_context_and_completed_stage(self):
         for changes, status, reason in (
             ({"answer_graph_version": 1, "graph_version_current": False}, "HOLD", "ABSTENTION_CONTEXT_REFRESH_REQUIRED"),
@@ -170,6 +176,8 @@ class AggregateEvaluatorTests(unittest.TestCase):
             lambda r: r["evidence"].append(copy.deepcopy(r["evidence"][0])),
             lambda r: r["evidence"][0].update(representation="unknown-representation"),
             lambda r: r["answers"].append(copy.deepcopy(r["answers"][0])),
+            lambda r: r["graph"].update(journal_head=None),
+            lambda r: r.update(source_reviews={}),
             lambda r: r.update(execution_mode="PRODUCTION"),
             lambda r: r["answers"][0].update(state="synthetic-private-state"),
             lambda r: r["answers"][1].update(abstention_reason="synthetic-private-reason"),

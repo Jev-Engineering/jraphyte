@@ -238,9 +238,14 @@ def _validate_receipts(receipts):
     _ident(receipts["run_id"], "receipts.run_id")
     _sha(receipts["checkpoint_head"], "receipts.checkpoint_head")
     _keys(receipts["graph"], {"graph_version", "journal_head", "state_sha256"}, "receipts.graph")
-    require(type(receipts["graph"]["graph_version"]) is int, "EVALUATOR_INPUT", "graph version", path="receipts.graph")
-    _opt(receipts["graph"]["journal_head"], _sha, "receipts.graph.journal_head")
+    version, journal_head = receipts["graph"]["graph_version"], receipts["graph"]["journal_head"]
+    require(type(version) is int and version >= 0 and (version == 0) == (journal_head is None),
+            "EVALUATOR_INPUT", "graph version and journal head", path="receipts.graph")
+    _opt(journal_head, _sha, "receipts.graph.journal_head")
     _sha(receipts["graph"]["state_sha256"], "receipts.graph.state_sha256")
+    for name in ("source_reviews", "assertions", "evidence", "answers"):
+        require(type(receipts[name]) is list, "EVALUATOR_INPUT", "receipt rows must be an array",
+                path="receipts." + name)
     for i, r in enumerate(receipts["source_reviews"]):
         path = f"receipts.source_reviews[{i}]"
         _keys(r, {"request_id", "source_snapshot_id", "source_id", "representation", "reviewer_kind",
@@ -390,7 +395,7 @@ def _question(q, attempt, evidence):
     missing = sorted(set(q["required_source_ids"]) - cited)
     if missing:
         return {**row, "status": "FAIL", "reason": "REQUIRED_SOURCE_NOT_CITED", "missing_source_id_sha256": sorted(text_digest(ref) for ref in missing)}
-    if not attempt["graph_version_current"] or attempt.get("retrieval_context_current") is False:
+    if not attempt["graph_version_current"] or attempt.get("retrieval_context_current") is not True:
         return {**row, "status": "HOLD", "reason": "GRAPH_CHANGED_AFTER_ANSWER_REFRESH_REQUIRED"}
     return {**row, "status": "PASS", "reason": "SUPPORTED_WITH_COMPLETE_CURRENT_CHAINS"}
 
