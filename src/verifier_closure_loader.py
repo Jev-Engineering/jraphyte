@@ -12,7 +12,7 @@ Execution uses only the verified in-memory bytes. Local modules are compiled
 from those bytes into private module objects that are never placed in
 ``sys.modules``; ``__pycache__`` is never read or written. Local imports resolve
 only against the verified map through a private ``__import__``. Stdlib imports
-must be declared in the contract. Import machinery, ``exec``/``eval``/
+use fixed host-provided exports declared in the contract. Import machinery, ``exec``/``eval``/
 ``compile`` and undeclared ``__import__`` calls are rejected before execution.
 After the verifier returns, the closure and the inputs are checked again before
 its result is accepted.
@@ -31,9 +31,8 @@ import copy
 import hashlib
 import importlib.machinery
 import importlib.util
-import os
+import json
 import sys
-import sysconfig
 import types
 from pathlib import Path
 
@@ -44,11 +43,10 @@ CONTRACT = "verifier_closure_release_v1"
 CONTRACT_KEYS = {"contract", "verifier_id", "entry", "callable", "runtime",
                  "approved_external", "approved_dynamic", "closure"}
 RESULTS = ("PASS", "HOLD")
-# Modules that can redirect imports, reach sys.modules/sys.path, start other
-# processes or load other executable representations. They cannot be approved
-# as external imports. This is a denylist, not an allowlist: any other stdlib
-# module a contract approves must itself be reviewed as part of the trusted
-# base for whether it can load or run code outside the pinned closure.
+# The host supplies these already-loaded functions. Giving the verifier a
+# limited namespace avoids doing a normal import or package from-list lookup.
+EXTERNAL_EXPORTS = {"json": {"loads": json.loads, "dumps": json.dumps}}
+# Preserve the explicit rejection code for names associated with code loading.
 DENIED_EXTERNAL = frozenset({"builtins", "importlib", "imp", "marshal", "pkgutil",
                              "runpy", "site", "sys", "zipimport", "ctypes", "code", "codeop",
                              "os", "posix", "nt", "subprocess", "multiprocessing", "concurrent",
@@ -82,12 +80,15 @@ def contract_sha256(contract: dict) -> str:
 
 
 def _approved_root(root, approved_roots) -> Path:
-    raw = Path(root)
-    if raw.is_symlink():
-        _fail("symlinked_verifier_root")
+    def checked_path(item):
+        raw = Path(item).absolute()
+        if any(path.is_symlink() for path in (*raw.parents, raw)):
+            _fail("symlinked_verifier_root")
+        return raw.resolve()
+
     try:
-        resolved = raw.resolve()
-        approved = {Path(item).resolve() for item in approved_roots}
+        resolved = checked_path(root)
+        approved = {checked_path(item) for item in approved_roots}
     except (OSError, RuntimeError, TypeError) as exc:
         _fail("unapproved_verifier_root", type(exc).__name__)
     if resolved not in approved or not resolved.is_dir():
@@ -131,75 +132,22 @@ def _top_level_bindings(tree) -> set:
     return names
 
 
-def _stdlib_roots() -> tuple:
-    """Directories of the base runtime's stdlib, without any site-packages."""
-    base = {"base": sys.base_prefix, "platbase": sys.base_exec_prefix,
-            "installed_base": sys.base_prefix, "installed_platbase": sys.base_exec_prefix}
-    allowed, excluded = [], []
-    for key in ("stdlib", "platstdlib"):
-        allowed.append(sysconfig.get_path(key, vars=base))
-    if os.name == "nt":  # stdlib extension modules live in <base>/DLLs on Windows
-        allowed.append(os.path.join(sys.base_exec_prefix, "DLLs"))
-    for key in ("purelib", "platlib"):
-        excluded.extend((sysconfig.get_path(key), sysconfig.get_path(key, vars=base)))
-    resolve = lambda items: tuple({Path(item).resolve() for item in items if item})
-    return resolve(allowed), resolve(excluded)
-
-
-def _stdlib_origin(origin) -> bool:
-    if origin in ("built-in", "frozen"):
-        return True
-    if not isinstance(origin, str) or not origin:
-        return False
-    try:
-        path = Path(origin).resolve()
-    except (OSError, RuntimeError):
-        return False
-    allowed, excluded = _stdlib_roots()
-    if any(path.is_relative_to(item) for item in excluded):
-        return False
-    return any(path.is_relative_to(item) for item in allowed)
-
-
-def _require_stdlib_module(name: str) -> None:
-    """An approved external must come from this runtime's stdlib, not sys.path.
-
-    An existing ``sys.modules`` entry is checked by its spec and ``__file__``;
-    otherwise the spec the normal import system would use is located without
-    executing the module. Builtin and frozen modules are accepted; anything else
-    must originate under the base runtime's stdlib directories.
-    """
-    if name in sys.modules:
-        module = sys.modules[name]
-        spec = getattr(module, "__spec__", None)
-        origins = [getattr(spec, "origin", None)]
-        if getattr(module, "__file__", None) is not None:
-            origins.append(module.__file__)
-        if spec is None or not all(_stdlib_origin(item) for item in origins):
-            _fail("external_module_not_from_stdlib", name)
-        return
-    try:
-        spec = importlib.util.find_spec(name)
-    except (ImportError, ValueError):
-        spec = None
-    if spec is None or not _stdlib_origin(spec.origin):
-        _fail("external_module_not_from_stdlib", name)
-
-
-def _check_external_origins(approved_external) -> None:
+def _check_external_names(approved_external) -> None:
     for name in approved_external:
-        _require_stdlib_module(name)
-    for name in list(sys.modules):  # submodules already imported under an approved name
-        if name.split(".")[0] in approved_external and "." in name:
-            _require_stdlib_module(name)
+        if name in DENIED_EXTERNAL:
+            _fail("import_machinery_denied", name)
+        if name not in EXTERNAL_EXPORTS:
+            _fail("external_dependency_unsupported", name)
 
 
-def _external(name: str, approved_external) -> None:
+def _external(name: str, approved_external, fromlist=()) -> None:
     top = name.split(".")[0]
     if top in DENIED_EXTERNAL:
         _fail("import_machinery_denied", name)
     if top not in approved_external:
         _fail("unpinned_import", name)
+    if name != top or any(item not in EXTERNAL_EXPORTS[top] for item in fromlist):
+        _fail("external_import_unsupported", name)
 
 
 def scan_closure(root: Path, entry: str, *, approved_external=(), approved_dynamic=()) -> dict:
@@ -208,8 +156,8 @@ def scan_closure(root: Path, entry: str, *, approved_external=(), approved_dynam
         return _scan_closure(root, entry, approved_external=approved_external, approved_dynamic=approved_dynamic)
     except VerifierClosureError:
         raise
-    except UnicodeDecodeError as exc:
-        _fail("closure_not_utf8", str(exc))
+    except UnicodeDecodeError:
+        _fail("closure_not_utf8")
     except SyntaxError as exc:
         _fail("closure_syntax_error", "%s:%s" % (exc.filename, exc.lineno))
     except OSError as exc:
@@ -223,8 +171,8 @@ def _scan_closure(root: Path, entry: str, *, approved_external=(), approved_dyna
 
     Returns ({module: relative_path}, {relative_path: bytes}); the bytes are
     the exact buffers that were parsed, so later hashing and execution use the
-    same representation that was scanned. Every import must resolve to exactly
-    one local file or to a declared stdlib module; anything else is rejected.
+    same representation that was scanned. Imports resolve to a local file
+    or to declared host-provided exports.
     """
     local_tops = set()
     for module in (entry, *approved_dynamic):
@@ -234,12 +182,10 @@ def _scan_closure(root: Path, entry: str, *, approved_external=(), approved_dyna
     if local_tops != {entry.split(".")[0]}:
         _fail("dynamic_dependency_outside_verifier_package")
     approved_external = set(approved_external)
-    for name in approved_external:
-        if name in DENIED_EXTERNAL:
-            _fail("import_machinery_denied", name)
-        if name not in sys.stdlib_module_names:
-            _fail("external_dependency_not_stdlib", name)
-    modules, payloads, pending = {}, {}, [entry, *approved_dynamic]
+    _check_external_names(approved_external)
+    modules, payloads, bindings = {}, {}, {}
+    pending = [entry, *approved_dynamic]
+    required_bindings = []
     while pending:
         module = pending.pop()
         if module in modules:
@@ -254,6 +200,7 @@ def _scan_closure(root: Path, entry: str, *, approved_external=(), approved_dyna
         pending.extend(".".join(parts[:i]) for i in range(1, len(parts)))
         payloads[relative] = (root / relative).read_bytes()
         tree = ast.parse(payloads[relative].decode("utf-8"), filename=relative)
+        bindings[module] = _top_level_bindings(tree)
         package = module if is_package else module.rpartition(".")[0]
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -267,14 +214,19 @@ def _scan_closure(root: Path, entry: str, *, approved_external=(), approved_dyna
                     name = importlib.util.resolve_name("." * node.level + (node.module or ""), package)
                 else:
                     name = node.module or ""
+                names = [alias.name for alias in node.names]
+                if "*" in names:
+                    _fail("star_import_unsupported", name)
                 if name.split(".")[0] not in local_tops:
-                    _external(name, approved_external)
+                    _external(name, approved_external, names)
                     continue
                 pending.append(name)
-                for alias in node.names:
-                    if alias.name == "*":
-                        _fail("star_import_unsupported", name)
-                    pending.append(name + "." + alias.name + "?")
+                for attribute in names:
+                    candidate = name + "." + attribute
+                    if _module_file(root, candidate) is not None:
+                        pending.append(candidate)
+                    else:
+                        required_bindings.append((name, attribute))
             elif isinstance(node, ast.Name) and node.id in DENIED_NAMES:
                 _fail("unapproved_dynamic_execution", node.id)
             elif isinstance(node, ast.Attribute) and node.attr in DENIED_ATTRIBUTES:
@@ -283,30 +235,15 @@ def _scan_closure(root: Path, entry: str, *, approved_external=(), approved_dyna
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "__import__":
                 if (len(node.args) != 1 or node.keywords or not isinstance(node.args[0], ast.Constant)
                         or node.args[0].value not in approved_dynamic):
-                    _fail("unapproved_dynamic_import", ast.unparse(node))
+                    _fail("unapproved_dynamic_import")
         names = [n for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id == "__import__"]
         calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
                  and n.func.id == "__import__"]
         if len(names) != len(calls):
             _fail("unapproved_dynamic_import", "__import__ reference")
-        # Resolve deferred `from X import name` candidates: submodule or binding.
-        resolved = []
-        for item in pending:
-            if not item.endswith("?"):
-                resolved.append(item)
-                continue
-            candidate = item[:-1]
-            parent, _, attribute = candidate.rpartition(".")
-            if _module_file(root, candidate) is not None:
-                resolved.append(candidate)
-                continue
-            parent_file = _module_file(root, parent)
-            if parent_file is None:
-                _fail("missing_dependency", parent)
-            parent_tree = ast.parse((root / parent_file[0]).read_bytes().decode("utf-8"))
-            if attribute not in _top_level_bindings(parent_tree):
-                _fail("missing_dependency", candidate)
-        pending = resolved
+    for parent, attribute in required_bindings:
+        if attribute not in bindings[parent]:
+            _fail("missing_dependency", parent + "." + attribute)
     return modules, payloads
 
 
@@ -332,7 +269,6 @@ def _check_unambiguous(root: Path, modules: dict) -> None:
 def _read_closure(root: Path, contract: dict, *, check_ambiguity: bool) -> tuple[dict, dict]:
     modules, payloads = scan_closure(root, contract["entry"], approved_external=contract["approved_external"],
                                      approved_dynamic=contract["approved_dynamic"])
-    _check_external_origins(set(contract["approved_external"]))
     if check_ambiguity:
         try:
             _check_unambiguous(root, modules)
@@ -354,30 +290,55 @@ def build_release_contract(root, entry: str, *, verifier_id: str, approved_roots
                            callable_name: str = "evaluate", approved_external=(), approved_dynamic=()) -> dict:
     """Author a contract from a reviewed root. Review must happen out of band."""
     root = _approved_root(root, approved_roots)
+    approved_external = _author_names(approved_external, "approved_external")
+    approved_dynamic = _author_names(approved_dynamic, "approved_dynamic")
     contract = {"contract": CONTRACT, "verifier_id": verifier_id, "entry": entry,
                 "callable": callable_name, "runtime": runtime_identity(),
-                "approved_external": sorted(approved_external),
-                "approved_dynamic": sorted(approved_dynamic), "closure": {}}
+                "approved_external": approved_external,
+                "approved_dynamic": approved_dynamic, "closure": {}}
+    _validate_contract_fields(contract)
     _, payloads = _read_closure(root, contract, check_ambiguity=True)
     contract["closure"] = {relative: hashlib.sha256(raw).hexdigest() for relative, raw in payloads.items()}
     return contract
 
 
+def _author_names(names, key) -> list:
+    try:
+        names = list(names)
+    except TypeError:
+        _fail("expected_sorted_name_list", key)
+    if not all(type(name) is str for name in names):
+        _fail("expected_sorted_name_list", key)
+    return sorted(names)
+
+
+def _validate_contract_fields(contract) -> None:
+    for key in ("approved_external", "approved_dynamic"):
+        value = contract[key]
+        if (not isinstance(value, list) or not all(type(name) is str for name in value)
+                or value != sorted(set(value))):
+            _fail("expected_sorted_name_list", key)
+    if type(contract["verifier_id"]) is not str or not contract["verifier_id"]:
+        _fail("expected_verifier_id")
+    if type(contract["entry"]) is not str:
+        _fail("expected_local_module_root")
+    if type(contract["callable"]) is not str or not contract["callable"].isidentifier():
+        _fail("expected_callable_name")
+    runtime = contract["runtime"]
+    if (type(runtime) is not dict or not all(type(v) is str for v in runtime.values())
+            or runtime != runtime_identity()):
+        _fail("unsupported_runtime")
+
+
 def _validate_contract(contract) -> None:
     if not isinstance(contract, dict) or set(contract) != CONTRACT_KEYS or contract["contract"] != CONTRACT:
         _fail("unsupported_release_contract")
-    for key in ("approved_external", "approved_dynamic"):
-        value = contract[key]
-        if not isinstance(value, list) or value != sorted(set(value)) or not all(isinstance(v, str) for v in value):
-            _fail("expected_sorted_name_list", key)
-    if not isinstance(contract["callable"], str) or not contract["callable"].isidentifier():
-        _fail("expected_callable_name")
+    _validate_contract_fields(contract)
     closure = contract["closure"]
     if (not isinstance(closure, dict) or not closure or not all(
-            isinstance(v, str) and len(v) == 64 and set(v) <= set("0123456789abcdef") for v in closure.values())):
+            type(k) is str and type(v) is str and len(v) == 64 and set(v) <= set("0123456789abcdef")
+            for k, v in closure.items())):
         _fail("expected_closure_hashes")
-    if contract["runtime"] != runtime_identity():
-        _fail("unsupported_runtime", json_bytes(contract["runtime"]).decode())
 
 
 class _PrivateImporter:
@@ -386,7 +347,8 @@ class _PrivateImporter:
     def __init__(self, root: Path, modules: dict, payloads: dict, contract: dict):
         self.root, self.modules, self.payloads = root, modules, payloads
         self.local_top = contract["entry"].split(".")[0]
-        self.external = set(contract["approved_external"])
+        self.external = {name: types.SimpleNamespace(**EXTERNAL_EXPORTS[name])
+                         for name in contract["approved_external"]}
         self.loaded = {}
         self.violation = None  # kept even if the verifier swallows the ImportError
         self.builtins = dict(builtins.__dict__)
@@ -400,6 +362,8 @@ class _PrivateImporter:
         parent = name.rpartition(".")[0]
         if parent:
             self.module(parent)
+            if name in self.loaded:
+                return self.loaded[name]
         relative = self.modules[name]
         module = types.ModuleType(name)
         is_package = relative.endswith("/__init__.py")
@@ -410,7 +374,7 @@ class _PrivateImporter:
             module.__path__ = []  # no finder may search the directory
         self.loaded[name] = module
         try:
-            code = compile(self.payloads[relative], module.__file__, "exec", dont_inherit=True)
+            code = compile(self.payloads[relative].decode("utf-8"), module.__file__, "exec", dont_inherit=True)
             exec(code, module.__dict__)
         except BaseException:
             self.loaded.pop(name, None)
@@ -423,29 +387,33 @@ class _PrivateImporter:
         if level:
             package = (globals or {}).get("__package__") or ""
             name = importlib.util.resolve_name("." * level + name, package)
-        if name.split(".")[0] != self.local_top:
-            if name.split(".")[0] not in self.external:
-                raise ImportError("unpinned_import_at_runtime:" + name)
-            parts = name.split(".")
-            prefixes = [".".join(parts[:i]) for i in range(1, len(parts) + 1)]
-            try:
-                for prefix in prefixes:  # before anything outside the closure can execute
-                    _require_stdlib_module(prefix)
-                result = builtins.__import__(name, None, None, fromlist, 0)
-                for prefix in prefixes:
-                    _require_stdlib_module(prefix)
-                for item in fromlist or ():
-                    if isinstance(getattr(result, item, None), types.ModuleType):
-                        _require_stdlib_module(name + "." + item)
-            except VerifierClosureError as exc:
-                self.violation = self.violation or exc
-                raise ImportError(str(exc)) from None
-            return result
+        fromlist = fromlist or ()
+        try:
+            if "*" in fromlist:
+                _fail("star_import_unsupported")
+            if name.split(".")[0] != self.local_top:
+                _external(name, self.external, fromlist)
+                return self.external[name]
+        except VerifierClosureError as exc:
+            self.violation = self.violation or exc
+            raise ImportError(exc.code) from None
         module = self.module(name)
-        for item in fromlist or ():
+        for item in fromlist:
             if name + "." + item in self.modules:
                 self.module(name + "." + item)
         return module if fromlist else self.loaded[self.local_top]
+
+
+def _input_digest(value, rejection) -> str:
+    try:
+        return hashlib.sha256(json_bytes(value)).hexdigest()
+    except (TypeError, ValueError, RecursionError):
+        _fail(rejection)
+
+
+def _exception_name(exc) -> str:
+    kind = type(exc)
+    return kind.__name__ if getattr(builtins, kind.__name__, None) is kind else "verifier_error"
 
 
 def run_verifier(root, contract: dict, inputs, *, approved_roots) -> dict:
@@ -458,21 +426,27 @@ def run_verifier(root, contract: dict, inputs, *, approved_roots) -> dict:
         changed = sorted(k for k in set(actual) | set(contract["closure"])
                          if actual.get(k) != contract["closure"].get(k))
         _fail("closure_mismatch", ",".join(changed))
-    input_sha = hashlib.sha256(json_bytes(inputs)).hexdigest()
+    try:
+        snapshot = copy.deepcopy(inputs)
+    except (TypeError, ValueError, RecursionError):
+        _fail("invalid_verifier_inputs")
+    input_sha = _input_digest(snapshot, "invalid_verifier_inputs")
+    if _input_digest(inputs, "invalid_verifier_inputs") != input_sha:
+        _fail("inputs_changed_during_snapshot")
     importer = _PrivateImporter(root, modules, payloads, contract)
     outcome, error = "HOLD", None
     try:
         entry = importer.module(contract["entry"])
     except Exception as exc:  # import-time failure is a HOLD, never a PASS
-        entry, error = None, "import_" + type(exc).__name__
+        entry, error = None, "import_" + _exception_name(exc)
     function = getattr(entry, contract["callable"], None) if entry is not None else None
     if entry is not None and not isinstance(function, types.FunctionType):
         _fail("verifier_callable_missing", contract["callable"])
     if function is not None:
         try:
-            outcome = function(copy.deepcopy(inputs))
+            outcome = function(snapshot)
         except Exception as exc:  # a verifier failure is a HOLD, never a PASS
-            outcome, error = "HOLD", type(exc).__name__
+            outcome, error = "HOLD", _exception_name(exc)
     if type(outcome) is str and outcome in RESULTS:
         outcome = RESULTS[RESULTS.index(outcome)]  # canonical literal, never a subclass
     else:
@@ -482,7 +456,7 @@ def run_verifier(root, contract: dict, inputs, *, approved_roots) -> dict:
     _, after = _read_closure(root, contract, check_ambiguity=False)
     if after != payloads:
         _fail("closure_changed_during_execution")
-    if hashlib.sha256(json_bytes(inputs)).hexdigest() != input_sha:
+    if any(_input_digest(value, "inputs_changed_during_execution") != input_sha for value in (snapshot, inputs)):
         _fail("inputs_changed_during_execution")
     record = {"contract": CONTRACT, "verifier_id": contract["verifier_id"],
               "release_contract_sha256": contract_sha256(contract), "input_sha256": input_sha,
@@ -499,5 +473,5 @@ def evaluate_closure_gate(root, contract: dict, inputs, *, approved_roots) -> di
     try:
         return run_verifier(root, contract, inputs, approved_roots=approved_roots)
     except VerifierClosureError as exc:
-        return {"contract": CONTRACT, "status": "HOLD", "rejected": exc.code, "detail": str(exc),
+        return {"contract": CONTRACT, "status": "HOLD", "rejected": exc.code, "detail": exc.code,
                 "evidence": "mechanical_closure_check_not_qualification"}

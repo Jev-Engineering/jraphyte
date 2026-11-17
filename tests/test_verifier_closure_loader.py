@@ -251,6 +251,46 @@ class RejectionTests(unittest.TestCase):
         extra = dict(contract, accepted=True)
         self.assert_rejected("unsupported_release_contract", lambda: release.run(extra))
 
+    def test_root_rejects_symlinked_ancestor(self):
+        release = Release(self)
+        contract = release.contract()
+        alias = release.root.parent / "alias"
+        try:
+            alias.symlink_to(release.root.parent, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest("symlink creation unavailable: " + type(exc).__name__)
+        self.assert_rejected("symlinked_verifier_root", lambda: loader.run_verifier(
+            alias / release.root.name, contract, BELOW, approved_roots=[release.root]))
+
+    def test_gate_sanitizes_invalid_contract_names_and_rejected_source(self):
+        release = Release(self)
+        contract = release.contract()
+        for values in ([{"fixture": "value"}], ["json", 12]):
+            for key in ("approved_dynamic", "approved_external"):
+                changed = dict(contract, **{key: values})
+                gate = loader.evaluate_closure_gate(release.root, changed, BELOW, approved_roots=[release.root])
+                self.assertEqual((gate["status"], gate["rejected"]), ("HOLD", "expected_sorted_name_list"))
+        release.write("entry.py", "__import__('authored_verifier.unreviewed_fixture')\n")
+        gate = loader.evaluate_closure_gate(release.root, contract, BELOW, approved_roots=[release.root])
+        self.assertEqual(gate["rejected"], "unapproved_dynamic_import")
+        self.assertNotIn("unreviewed_fixture", json.dumps(gate))
+
+    def test_copy_digest_covers_the_snapshot_supplied_to_the_verifier(self):
+        release = Release(self)
+        contract = release.contract()
+        digest = hashlib.sha256(loader.json_bytes(ABOVE)).hexdigest()
+        self.assertEqual(release.run(contract, ABOVE)["input_sha256"], digest)
+        with mock.patch.object(loader.copy, "deepcopy", return_value=ABOVE):
+            self.assert_rejected("inputs_changed_during_snapshot", lambda: release.run(contract, BELOW))
+
+    def test_mutated_snapshot_is_rejected_and_caller_inputs_are_isolated(self):
+        release = Release(self)
+        release.write("entry.py", "def evaluate(inputs):\n    inputs['value'] = 2\n    return 'PASS'\n")
+        contract = release.contract()
+        inputs = {"value": 1}
+        self.assert_rejected("inputs_changed_during_execution", lambda: release.run(contract, inputs))
+        self.assertEqual(inputs, {"value": 1})
+
     def test_import_time_side_effects_never_run_on_rejection(self):
         release = Release(self)
         marker = Path(release.temporary.name) / "side_effect"
@@ -267,11 +307,12 @@ class RejectionTests(unittest.TestCase):
         self.assertTrue(marker.exists())
 
     def test_change_during_execution_is_rejected(self):
-        release = Release(self, approved_external=("json", "pathlib"))
+        release = Release(self)
         helper = release.path("criteria.py")
-        release.write("entry.py", "from pathlib import Path\n\nfrom . import helper\n\n"
+        release.write("entry.py", "from . import helper\n\n"
                                   "def evaluate(inputs):\n"
-                                  f"    Path({str(helper)!r}).write_text('THRESHOLD = 0\\n')\n"
+                                  f"    with open({str(helper)!r}, 'w') as output:\n"
+                                  "        output.write('THRESHOLD = 0\\n')\n"
                                   "    return 'PASS'\n")
         contract = release.contract()
         self.assert_rejected("closure_changed_during_execution", lambda: release.run(contract))
@@ -300,88 +341,51 @@ class StaleBytecodeTests(unittest.TestCase):
         self.assertEqual(release.run(contract)["status"], "HOLD")  # executes the verified source bytes
 
 
-STATS_HELPER = """import statistics
+class ExternalPolicyTests(unittest.TestCase):
+    assert_rejected = RejectionTests.assert_rejected
 
-from .criteria import THRESHOLD
-
-
-def decide(inputs):
-    return "PASS" if statistics.mean([inputs["observed"]]) >= THRESHOLD else "HOLD"
-"""
-
-
-class ExternalOriginTests(unittest.TestCase):
-    """An approved stdlib name must resolve to the runtime's stdlib (review of #116)."""
-
-    def setUp(self):
-        self.saved = {name: module for name, module in sys.modules.items()
-                      if name == "statistics" or name.startswith("statistics.")}
-        for name in self.saved:
-            del sys.modules[name]
-        self.addCleanup(self.restore)
-
-    def restore(self):
-        for name in [n for n in sys.modules if n == "statistics" or n.startswith("statistics.")]:
-            del sys.modules[name]
-        sys.modules.update(self.saved)
-
-    def release_with_shadow(self):
-        release = Release(self, approved_external=("json", "statistics"))
-        release.write("helper.py", STATS_HELPER)
+    def test_named_json_exports_and_unicode_source(self):
+        release = Release(self)
+        release.write("entry.py", "# coding: latin-1\nfrom json import loads, dumps\n"
+                                  "def evaluate(inputs):\n"
+                                  "    return 'PASS' if loads(dumps(inputs))['value'] == 'café' else 'HOLD'\n")
         contract = release.contract()
-        self.assertEqual(release.run(contract, BELOW)["status"], "HOLD")
-        sys.modules.pop("statistics", None)
-        shadow = Path(release.temporary.name) / "shadow"
-        shadow.mkdir()
-        self.marker = Path(release.temporary.name) / "shadow_ran"
-        (shadow / "statistics.py").write_text(
-            f"open({str(self.marker)!r}, 'w').close()\n\ndef mean(values):\n    return 1.0\n", encoding="utf-8")
-        return release, contract, shadow
+        self.assertEqual(release.run(contract, {"value": "café"})["status"], "PASS")
 
-    def assert_rejected(self, action):
-        with self.assertRaises(VerifierClosureError) as caught:
-            action()
-        self.assertEqual(caught.exception.code, "external_module_not_from_stdlib")
-        self.assertIn("statistics", str(caught.exception))
+    def test_unsupported_external_imports_are_rejected_when_authoring(self):
+        cases = {
+            "from json import decoder": "external_import_unsupported",
+            "import json.decoder": "external_import_unsupported",
+            "from json import *": "star_import_unsupported",
+            "from .criteria import *": "star_import_unsupported",
+        }
+        for statement, code in cases.items():
+            with self.subTest(statement):
+                release = Release(self)
+                release.write("entry.py", statement + "\ndef evaluate(inputs):\n    return 'PASS'\n")
+                self.assert_rejected(code, release.contract)
+        self.assert_rejected("external_dependency_unsupported",
+                             Release(self, approved_external=("statistics",)).contract)
 
-    def test_stdlib_named_shadow_on_sys_path_outside_root_is_rejected(self):
-        release, contract, shadow = self.release_with_shadow()
-        sys.path.insert(0, str(shadow))
-        try:
-            self.assert_rejected(lambda: release.run(contract, BELOW))
-            self.assert_rejected(release.contract)
-            gate = loader.evaluate_closure_gate(release.root, contract, BELOW, approved_roots=[release.root])
-            self.assertEqual((gate["status"], gate["rejected"]), ("HOLD", "external_module_not_from_stdlib"))
-        finally:
-            sys.path.remove(str(shadow))
-        self.assertFalse(self.marker.exists())
-        self.assertEqual(release.run(contract, BELOW)["status"], "HOLD")
-
-    def test_stdlib_named_shadow_in_sys_modules_is_rejected(self):
-        release, contract, shadow = self.release_with_shadow()
-        fake = type(sys)("statistics")
-        fake.__file__ = str(shadow / "statistics.py")
-        fake.mean = lambda values: 1.0
-        sys.modules["statistics"] = fake
-        self.assert_rejected(lambda: release.run(contract, BELOW))
-        fake.__spec__ = None
-        del fake.__file__
-        self.assert_rejected(lambda: release.run(contract, BELOW))
-        del sys.modules["statistics"]
-        self.assertEqual(release.run(contract, BELOW)["status"], "HOLD")
-
-    def test_runtime_import_rechecks_origin_even_if_verifier_swallows_error(self):
-        release, _, shadow = self.release_with_shadow()
-        release.write("helper.py", "def decide(inputs):\n    try:\n        import statistics\n"
-                                   "    except ImportError:\n        pass\n    return 'PASS'\n")
+    def test_external_export_resolution_uses_no_normal_import(self):
+        release = Release(self)
         contract = release.contract()
-        sys.path.insert(0, str(shadow))
-        try:  # model a shadow that appears after the pre-execution check
-            with mock.patch.object(loader, "_check_external_origins"):
-                self.assert_rejected(lambda: release.run(contract, BELOW))
-        finally:
-            sys.path.remove(str(shadow))
-        self.assertFalse(self.marker.exists())
+        importer = loader._PrivateImporter(release.root, {}, {}, contract)
+        with mock.patch("builtins.__import__", side_effect=AssertionError("normal import called")):
+            exports = importer.import_("json", fromlist=("loads", "dumps"))
+            self.assertEqual(exports.loads(exports.dumps({"observed": 0.5})), {"observed": 0.5})
+            with self.assertRaises(ImportError):
+                importer.import_("json", fromlist=("decoder",))
+        self.assertEqual(importer.violation.code, "external_import_unsupported")
+
+    def test_entry_reached_during_parent_initialization_executes_once(self):
+        release = Release(self)
+        release.write("__init__.py", "from . import entry\nREFERENCED = entry\n")
+        release.write("entry.py", "def evaluate(inputs):\n"
+                                  "    package = __import__('authored_verifier')\n"
+                                  "    return 'PASS' if package.REFERENCED.evaluate is evaluate else 'HOLD'\n")
+        release.options["approved_dynamic"] = ("authored_verifier",)
+        self.assertEqual(release.run(release.contract())["status"], "PASS")
 
 
 class OutcomeAndDenialTests(unittest.TestCase):

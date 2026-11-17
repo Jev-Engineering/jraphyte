@@ -27,7 +27,7 @@ of a top-level-only pin. It is not V6.
 | `verifier_id` | Reviewed verifier name |
 | `entry`, `callable` | Entry module (dotted, inside the release root) and the function called with the inputs |
 | `runtime` | `{"implementation", "version"}` (major.minor); any other runtime is rejected |
-| `approved_external` | Sorted stdlib modules the closure may import. Import machinery and code-loading modules (`DENIED_EXTERNAL`: `importlib`, `sys`, `builtins`, `runpy`, `pkgutil`, `zipimport`, `marshal`, `site`, `imp`, `ctypes`, `code`, `codeop`, `os`, `posix`, `nt`, `subprocess`, `multiprocessing`, `concurrent`, `pickle`, `shelve`, `copyreg`, `types`, `inspect`, `gc`, `pdb`, `bdb`, `trace`, `profile`, `cProfile`, `zipapp`) cannot be approved, and neither can a module outside the stdlib. This is a denylist, not an allowlist: every other approved module must be reviewed, as part of the trusted base, for whether it can load or run code outside the closure |
+| `approved_external` | Sorted host-provided module names. The current policy permits `json`, exposing `loads` and `dumps` for ordinary JSON data |
 | `approved_dynamic` | Sorted modules inside the verifier package that the code loads with a literal `__import__("...")`. They are pinned like static imports |
 | `closure` | `{relative path: sha256}` for every local file: entry, transitive helpers, package `__init__` files and approved dynamic modules |
 
@@ -38,15 +38,15 @@ itself, signing and delivery happen out of band and are not performed here.
 ## What `run_verifier` checks
 
 1. The contract shape and the current runtime.
-2. The root is one of the caller's approved roots, after resolution, and is not
-   a symlink.
+2. The root matches an approved root, and every path component of the supplied
+   root and approved roots is checked for symlinks before resolution.
 3. A strict static scan of the entry and approved dynamic modules. It covers
    function-local imports too, and it rejects the following:
    - missing modules and unresolved `from X import name`
    - `x.py` next to `x/__init__.py`
    - namespace packages and star imports
    - symlinked path components
-   - undeclared or non-stdlib external imports and import machinery
+   - undeclared external imports, unsupported external exports and import machinery
    - `exec`, `eval`, `compile`, `globals`, `vars`, `__builtins__` and
      `__loader__`/`__spec__`, plus non-literal or undeclared `__import__`
 4. The file set and hashes must equal
@@ -56,29 +56,23 @@ itself, signing and delivery happen out of band and are not performed here.
    when the root carries files that `method_hashes` seeds by default.
 5. No closure module may already be in `sys.modules`. No closure top-level name
    may be a stdlib name or resolve anywhere else on `sys.path`.
-6. Each approved external, and each of its submodules already in
-   `sys.modules`, must be builtin or frozen or have its spec origin (and
-   `__file__`) under the base runtime's `stdlib`/`platstdlib` directories (plus
-   `DLLs` on Windows), outside any `site-packages`. A stdlib-named module found
-   elsewhere on `sys.path`, or a cached `sys.modules` entry from elsewhere,
-   fails closed with `external_module_not_from_stdlib`.
-7. The hashes of the scanned bytes must equal `closure` exactly.
+6. The hashes of the scanned bytes must equal `closure` exactly.
 
 Only after all of these checks pass does any verifier code run. The scanned
-bytes are compiled in memory with `dont_inherit=True` into private module
-objects. Those objects are never inserted into `sys.modules`, and their packages
-get an empty `__path__`. No `__pycache__` file is read or written. A private
+bytes are decoded as UTF-8 for both scanning and in-memory compilation.
+Compilation uses `dont_inherit=True` and execution uses private module objects. The loader keeps them outside `sys.modules` and gives packages an empty `__path__`. No `__pycache__` file is read or written. A private
 `__import__` resolves local names only from the verified map and passes only
-declared stdlib names to the normal import system. It re-checks the stdlib
-origin of each imported name before and after that import. A failed runtime
-check rejects the run even if the verifier catches the `ImportError`. Afterwards the closure is
-re-read and must be byte-identical, and the inputs must have the same digest
-before the result is accepted. A verifier exception, an import-time exception or
-any result other than the exact `str` `PASS`/`HOLD` (a `str` subclass or an
+declared host-provided exports to the verifier. It rejects dotted external
+imports and checks named external exports without calling the ambient importer.
+A failed runtime check rejects the run even if the verifier catches the
+`ImportError`. The input digest covers the isolated copy passed to the
+verifier. Before accepting the result, the loader checks that the source bytes,
+the input copy and the caller's inputs still match their recorded state.
+A verifier exception, an import-time exception or any result other than the exact `str` `PASS`/`HOLD` (a `str` subclass or an
 object with its own `__eq__` is not accepted) becomes HOLD. The record stores
 the canonical literal. `evaluate_closure_gate` turns every closure rejection
-into a HOLD record that carries the rejection code. Read and parse failures in
-the scan map to `closure_unreadable`, `closure_not_utf8`,
+into a HOLD record that carries the rejection code without source literals.
+Read and parse failures in the scan map to `closure_unreadable`, `closure_not_utf8`,
 `closure_syntax_error` and `invalid_module_reference`.
 
 ## Boundaries
@@ -86,10 +80,12 @@ the scan map to `closure_unreadable`, `closure_not_utf8`,
 The loader is an integrity boundary for reviewed code, not a sandbox. As
 `SECURITY.md` states, reviewed verifier code is part of the trusted base. Code
 that reaches the interpreter internals through reflection is outside the scope
-of the static scan. Approved stdlib modules are trusted as part of the recorded
-runtime; their bytes are not pinned here. Private module objects do not support
-code that looks itself up in `sys.modules`, such as pickling verifier-defined
-classes.
+of the static scan. The JSON functions are part of the trusted host runtime.
+Restricting the exposed exports avoids ambient package and transitive imports
+during verifier loading. The authored fixture uses these exports. Compatibility
+with the private releases still requires checking their actual dependencies.
+Verifier code that needs its module in `sys.modules`, such as code that pickles
+verifier-defined classes, is outside the supported contract.
 
 Every result is labelled `mechanical_closure_check_not_qualification`. The
 following remain open for #97:
