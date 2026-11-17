@@ -215,7 +215,7 @@ class V1FenceAndReceiptTests(_FenceTree):
         _icacls(str(self.parent), "/remove:d", "*" + USERS_SID)
         _icacls(str(self.parent), "/deny", "*" + USERS_SID + ":(WD,AD)")
         raw = authority.directory_dacl_sddl(self.parent)
-        self.assertIn("(D;;DCLC;;;BU)")
+        self.assertTrue("(D;;DCLC;;;BU)" in raw, "expected wrong-mask BU deny missing")
         self.assert_rejected(self.variant(old_parent_dacl_sha256=bytes_digest(raw.encode("utf-8"))))
 
 
