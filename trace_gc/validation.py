@@ -96,6 +96,8 @@ def validate_bundle(bundle: dict[str,Any], *, trust: TrustStore | None=None,at: 
         require(len(plans)==1,"TRANSACTION_PLAN_BINDING","transaction does not bind an included plan")
         receipts={digest(r["body"]):r["body"] for r in catalog.all("receipt")}
         require(tx["authorization_hash"] in receipts and tx["preflight_hash"] in receipts,"TRANSACTION_RECEIPT_MISSING","authorization/preflight lineage missing")
+        require(tx["idempotency_key"] == plans[0]["body"]["idempotency_key"], "TRANSACTION_PLAN_BINDING",
+                "transaction idempotency key differs from the signed plan")
         require(tx["version"]==plans[0]["body"]["graph_version"]+1,"TRANSACTION_VERSION","transaction version differs")
         require(m["graph_version"]==tx["version"],"TRANSACTION_VERSION","published manifest is not the committed version")
         require(trust is not None,"CHECKPOINT_UNTRUSTED","published verification requires application trust")
@@ -115,11 +117,12 @@ def validate_bundle(bundle: dict[str,Any], *, trust: TrustStore | None=None,at: 
                                      population=policy["population"], reviewed=reviewed)
             verify_review_attribution(catalog, plan, authorization["payload"]["reviewed_by"], at=tx["committed_at"],
                                       approval_issued_at=authorization["issued_at"])
+        projection = {}
         if domain_plan or "classifications" in snapshot:
             prospective = validate_plan(catalog, plan, source_status=m["source_status"])
             projection = receipt_projection(prospective)
-            require(all(tx.get(key) == value for key, value in projection.items()),
-                    "TRANSACTION_PLAN_BINDING", "transaction classification differs from the exact plan")
+        require({key: tx[key] for key in ("classification_revision", "classification_hash") if key in tx} == projection,
+                "TRANSACTION_PLAN_BINDING", "transaction classification differs from the exact plan")
         require(tx["upstream_head"] is not None and tx["upstream_head"] in {e["hash"] for e in bundle["ledger"]},"LEDGER_BINDING","atomic journal's provenance anchor is absent")
         anchor_index=next(i for i,e in enumerate(bundle["ledger"]) if e["hash"]==tx["upstream_head"])
         transaction_index=next((i for i,e in enumerate(bundle["ledger"]) if m["transaction_id"] in e["record_ids"]),-1)

@@ -185,9 +185,12 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
         require(bool(key) and type(expected_version) is int and expected_version>=0,"TRANSACTION_INPUT","explicit key/version required")
         plan,sources,facts,aliases=self._lower(operation,catalog)
         when=None;result={};prospective={};before=None
+        def accept():
+            nonlocal when
+            when=authority_check()
         def guard():
             nonlocal before,prospective,when
-            when=at or now()
+            when=when or at or now()
             current=self.state()
             require(current["graph_version"]==expected_version,"STALE_GRAPH_VERSION","upstream CAS mismatch")
             require(self.db.execute("SELECT COUNT(*) FROM trace_journal").fetchone()[0]==expected_version,"UPSTREAM_UNMEDIATED_WRITE","upstream contains an unbound write")
@@ -227,7 +230,7 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
             result.update(event=event,record=record)
         with self._lock:
             self.db.guard,self.db.finish,self.db.guarded=guard,finish,False
-            self.db.authority_check=authority_check
+            self.db.authority_check=accept if authority_check is not None else None
             try:
                 if plan and plan["operations"][0]["operation"]=="RETRACT_ASSERTION":
                     self._store.retract(fact_ids=[o["assertion_id"] for o in plan["operations"]],expected_version=expected_version,key=key,reason="; ".join(o["reason"] for o in plan["operations"]))
