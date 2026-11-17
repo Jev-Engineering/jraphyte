@@ -20,7 +20,7 @@ from test_research_domain_contracts import fixture_catalog, REVIEW
 
 
 class DomainFixture:
-    def __init__(self, root, *, backend_factory=None):
+    def __init__(self, root, *, backend_factory=None, admit_initial=True):
         self.root = Path(root)
         self.catalog, self.taxonomy, self.source, self.evidence = fixture_catalog()
         self.policy = create_policy(self.catalog, version="reviewed-domain-fixture-v1", scope="test", population="synthetic",
@@ -39,11 +39,17 @@ class DomainFixture:
                           frozenset({"SOURCE_ADMIT", "SOURCE_WITHDRAW", "SOURCE_PERMISSION", "SOURCE_ERASE"}),
                           frozenset({"test"}), frozenset({"SYNTHETIC", "RECORDED"})))
         self.service = self.service_for(self.backend)
-        action = {"action": "ADMIT", "source_hashes": {self.source: self.catalog.hash(self.source)}, "security_scope": "test",
-                  "execution_mode": "SYNTHETIC", "expected_version": 0}
-        self.backend.admit_sources(self.catalog, [self.source], trust=self.trust,
-                                    authorization=self.source_admin.issue("SOURCE_STATUS", action), security_scope="test",
-                                    execution_mode="SYNTHETIC", expected_version=0, key="admit")
+        if admit_initial:
+            self.admit()
+
+    def admit(self, source=None, *, key="admit", version=None, at=None):
+        source = source or self.source
+        version = self.backend.state()["graph_version"] if version is None else version
+        action = {"action": "ADMIT", "source_hashes": {source: self.catalog.hash(source)}, "security_scope": "test",
+                  "execution_mode": "SYNTHETIC", "expected_version": version}
+        return self.backend.admit_sources(self.catalog, [source], trust=self.trust,
+            authorization=self.source_admin.issue("SOURCE_STATUS", action, issued_at=at), security_scope="test",
+            execution_mode="SYNTHETIC", expected_version=version, key=key, at=at)
 
     def close(self):
         self.backend.close()

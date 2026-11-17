@@ -89,7 +89,7 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
     def __init__(self,path: str | Path, *, core_path: str | Path,catalog: Catalog,schema_id: str,
                  nodes: dict[str,str],legacy_policy: dict[str,Any],sandbox: bool=False):
         self.core=load_pinned_core(core_path)
-        self.path,self.sandbox=str(path),sandbox;self._lock=threading.RLock();self._nodes=deepcopy(nodes)
+        self.path,self.sandbox=str(path),sandbox;self._lock=threading.RLock()
         require(set(legacy_policy)=={"version","thresholds","contracts","allowed_modes"},"UPSTREAM_POLICY","explicit upstream policy contract required")
         schema=catalog.get(schema_id,"schema")
         policy=self.core.Policy(**deepcopy(legacy_policy))
@@ -185,6 +185,7 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
         require(bool(key) and type(expected_version) is int and expected_version>=0,"TRANSACTION_INPUT","explicit key/version required")
         plan,sources,facts,aliases=self._lower(operation,catalog)
         when=None;result={};prospective={};before=None
+        bootstrap_nodes = {}
         def accept():
             nonlocal when
             when=authority_check()
@@ -195,7 +196,7 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
             require(current["graph_version"]==expected_version,"STALE_GRAPH_VERSION","upstream CAS mismatch")
             require(self.db.execute("SELECT COUNT(*) FROM trace_journal").fetchone()[0]==expected_version,"UPSTREAM_UNMEDIATED_WRITE","upstream contains an unbound write")
             before=digest(current);prospective=apply(deepcopy(current),deepcopy(self.statuses()))
-            if expected_version==0 and operation.get("action")=="ADMIT":prospective["nodes"].update(self._nodes)
+            prospective["nodes"].update(bootstrap_nodes)
             self._persist(catalog.all())
             for trace,upstream,source in aliases:
                 old=self.db.execute("SELECT upstream_id,source_id FROM trace_evidence_alias WHERE trace_id=?",(trace,)).fetchone()
@@ -229,6 +230,14 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
             if fault:fault("after_journal_write");fault("before_commit")
             result.update(event=event,record=record)
         with self._lock:
+            if operation.get("action") == "ADMIT":
+                # Compute from the version in the immutable request so an exact
+                # first-admission retry sends the same input to the pinned core.
+                prior = self.db.execute("SELECT body FROM trace_journal WHERE version=?", (expected_version,)).fetchone()
+                state = loads(prior[0]) if prior is not None else None
+                if expected_version == 0 or (state is not None and not state["source_status"]
+                                             and not state["state_after"]["nodes"]):
+                    bootstrap_nodes = self._meta()["initial_nodes"]
             self.db.guard,self.db.finish,self.db.guarded=guard,finish,False
             self.db.authority_check=accept if authority_check is not None else None
             try:
@@ -245,7 +254,7 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
                     evidence=[r[0] for r in self.db.execute("SELECT upstream_id FROM trace_evidence_alias WHERE source_id=?",(operation["source_id"],))]
                     self._store.retract(evidence_ids=evidence,expected_version=expected_version,key=key,reason=operation["reason"])
                 else:
-                    self._store.commit(nodes=self._nodes if expected_version==0 and operation.get("action")=="ADMIT" else {},sources=sources,
+                    self._store.commit(nodes=bootstrap_nodes,sources=sources,
                                        facts=facts,expected_version=expected_version,key=key)
                 if not result:
                     row=self.db.execute("SELECT fingerprint,body FROM trace_journal WHERE key=?",(key,)).fetchone()
