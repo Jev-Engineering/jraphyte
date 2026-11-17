@@ -24,7 +24,7 @@ class TrialReportTests(unittest.TestCase):
             candidate_stage_metrics={c: dict(status='MEASURED', hits=3, queries=4, recall=.75)
                                      for c in CHANNELS}, index_seconds=1, candidate_seconds=2,
             rerank_seconds=3, wall_seconds=6, process_cpu_seconds=5,
-            rankings={}, candidates={},
+            rankings={}, candidates={}, fields_sha256='c'*64,
             page_channel_enabled=True, dense_stage='supplied_bound_cache', dense_cache_sha256='b'*64,
             private_path='secret/model/path')
         for detail in self.result['details']:
@@ -200,6 +200,22 @@ class TrialReportTests(unittest.TestCase):
         self.receipt['status'] = 'BLOCKED'
         self.write_receipt()
         with self.assertRaisesRegex(ValueError, 'trial_receipt_not_complete'):
+            aggregate(self.root)
+
+    def test_permutation_and_ablation_require_bound_fields(self):
+        name = 'target_permutation'
+        path = self.root/(name+'.json')
+        original = json.loads(path.read_bytes())['result']
+        self.write_arm(name, {**original, 'fields_sha256': 'e'*64})
+        self.write_receipt()
+        with self.assertRaisesRegex(ValueError, '^trial_target_permutation_mismatch:primary$'):
+            aggregate(self.root)
+        self.write_arm(name, original)
+        for name in ('without_dense', 'without_dense_target_permutation'):
+            result = json.loads((self.root/(name+'.json')).read_bytes())['result']
+            self.write_arm(name, {**result, 'fields_sha256': 'e'*64})
+        self.write_receipt()
+        with self.assertRaisesRegex(ValueError, '^trial_ablation_channel_mismatch$'):
             aggregate(self.root)
 
     def test_candidate_order_only(self):

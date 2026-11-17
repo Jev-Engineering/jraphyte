@@ -180,6 +180,7 @@ def _permutation_check(arm, base, rotated, queries, recorded):
         input_hash = _canonical_hash([{'id': row['id'], 'query': row['query']} for row in queries])
         labels = []
         for result in (base, rotated):
+            sha(result.get('fields_sha256'))
             if result['dense_cache_sha256'] is not None:
                 sha(result['dense_cache_sha256'])
             rows = [{'id': row['id'], 'target_id': row['target_id']} for row in result['details']]
@@ -225,7 +226,7 @@ def _permutation_check(arm, base, rotated, queries, recorded):
         checks = {key: base[key] == rotated[key] for key in
                   ('ranking_inputs_sha256', 'ranking_outputs_sha256', 'candidates', 'dense_cache_sha256')}
         checks['labels_changed'] = True
-        same_configuration = all(base[key] == rotated[key] for key in ('candidate_depth', 'stage'))
+        same_configuration = all(base[key] == rotated[key] for key in ('candidate_depth', 'stage', 'fields_sha256'))
         if (not same_configuration or not all(checks.values()) or type(recorded) is not dict or
                 recorded != {'status': 'PASS', 'checks': checks} or
                 any(value is not True for value in recorded['checks'].values())):
@@ -238,6 +239,7 @@ def _permutation_check(arm, base, rotated, queries, recorded):
 def _check_ablation(base, variant, removed):
     error = 'trial_ablation_channel_mismatch'
     if (base['ranking_inputs_sha256'] != variant['ranking_inputs_sha256'] or
+            base['fields_sha256'] != variant['fields_sha256'] or
             (removed != 'specter2' and base['dense_cache_sha256'] != variant['dense_cache_sha256'])):
         raise ValueError(error)
     retained = [channel + '_topk' for channel in CHANNELS[:-1] if channel != removed]
