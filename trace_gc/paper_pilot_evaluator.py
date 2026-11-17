@@ -20,6 +20,7 @@ from .canonical import bytes_digest, digest, text_digest
 from .errors import boundary, require
 from .paper_ingestion import REPRESENTATION as NATIVE
 from .pdf_image_evidence import REPRESENTATION as IMAGE
+from .retrieval.security import AccessFilter
 
 VERSION = "paper-pilot-aggregate-evaluator-v1"
 RECEIPTS_VERSION = "paper-pilot-receipts-v1"
@@ -81,11 +82,7 @@ def _completed(pilot, kind):
     return [r for r in pilot.requests.values() if r["kind"] == kind and "result" in r]
 
 
-def _readable(status):
-    return status is not None and status["active"] and status["permission"] == "READ" and not status["tombstone"]
-
-
-def _evidence_row(pilot, evidence_id, statuses):
+def _evidence_row(pilot, evidence_id, acl):
     evidence = pilot.catalog.get(evidence_id, "evidence")
     source = pilot.catalog.get(evidence["source_snapshot_id"], "source")
     page = page_png = crop_png = None
@@ -95,13 +92,12 @@ def _evidence_row(pilot, evidence_id, statuses):
     elif "page_lineage" in source:
         lineage = source["page_lineage"]
         page, page_png = lineage["physical_page"], lineage["page_png_sha256"]
-    status = statuses.get(evidence["source_snapshot_id"])
     return {"evidence_id": evidence_id, "evidence_sha256": pilot.catalog.hash(evidence_id),
             "source_snapshot_id": evidence["source_snapshot_id"], "source_id": source["source_id"],
             "source_hash": evidence["source_hash"], "representation": source["representation"],
             "raw_document_sha256": source["raw_document_hash"], "physical_page": page,
             "page_png_sha256": page_png, "crop_png_sha256": crop_png,
-            "currently_readable": _readable(status)}
+            "currently_readable": acl.evidence(evidence_id)}
 
 
 def _assertion_row(pilot, assertion_id, state, journal):
@@ -181,6 +177,8 @@ def export_receipts(pilot) -> dict:
     audit = pilot.backend.audit()
     state, statuses = pilot.backend.state(), pilot.backend.statuses()
     current_stamp = pilot._stamp()
+    access = pilot._access()
+    acl = AccessFilter(access, pilot.catalog, statuses)
     journal = {r["body"]["event_hash"]: r["body"] for r in pilot.backend.load_catalog().all("transaction")}
     reviews = []
     for request in _completed(pilot, "REVIEW_SOURCE") + _completed(pilot, "REVIEW_SOURCE_IMAGE"):
@@ -195,9 +193,10 @@ def export_receipts(pilot) -> dict:
     cited = sorted({e for a in answers for c in a["claims"] for e in c["evidence_ids"]} |
                    {e for row in state["assertions"].values() for e in row["evidence_ids"]})
     assertions = [_assertion_row(pilot, ref, state, journal) for ref in sorted(state["assertions"])]
-    evidence = [_evidence_row(pilot, ref, statuses) for ref in cited]
+    evidence = [_evidence_row(pilot, ref, acl) for ref in cited]
     require(state["graph_version"] == audit["events"] and digest(state) == audit["state_hash"] and
-            digest(statuses) == current_stamp["statuses_sha256"] and pilot._stamp() == current_stamp and
+            digest(statuses) == current_stamp["statuses_sha256"] and
+            digest(access) == current_stamp["access_sha256"] and pilot._stamp() == current_stamp and
             pilot.backend.audit() == audit and pilot._head == checkpoint_head,
             "EVALUATOR_INPUT", "pilot checkpoint or graph changed during export")
     return {"version": RECEIPTS_VERSION, "run_id": pilot.config["run_id"],

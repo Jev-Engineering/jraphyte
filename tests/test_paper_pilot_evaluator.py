@@ -219,6 +219,7 @@ class AggregateEvaluatorTests(unittest.TestCase):
             summary = json.loads(out.getvalue())
             self.assertEqual(summary["verdict"], "PASS")
             self.assertFalse(summary["qualifies_issue_23"])
+            self.assertNotIn("output", summary)
             self.assertEqual(json.loads((root / "report.json").read_text())["verdict"], "PASS")
             bad = receipts(); bad["evidence"][0]["quote"] = "smuggled"
             (root / "receipts.json").write_text(json.dumps(bad))
@@ -228,6 +229,15 @@ class AggregateEvaluatorTests(unittest.TestCase):
                              str(root / "protocol.json"), "--output", str(root / "report2.json")])
             self.assertEqual(code, 1)
             self.assertEqual(json.loads(err.getvalue())["code"], "EVALUATOR_INPUT")
+
+            (root / "receipts.json").write_text('{"fixture-private-key": 1, "fixture-private-key": 2}')
+            err = io.StringIO()
+            with redirect_stderr(err):
+                code = main(["paper-pilot", "evaluate", str(root / "receipts.json"), "--protocol",
+                             str(root / "protocol.json"), "--output", str(root / "report2.json")])
+            self.assertEqual(code, 1)
+            self.assertEqual(json.loads(err.getvalue())["code"], "EVALUATOR_INPUT")
+            self.assertNotIn("fixture-private-key", err.getvalue())
 
             (root / "receipts.json").write_text(json.dumps(receipts()))
             for field, malformed in (("required_source_ids", [[]]), ("expectation", [])):
@@ -290,6 +300,12 @@ class PilotExportTests(unittest.TestCase):
         self.assertNotIn(self.f.native.strip(), json.dumps(report))
         self.f.reopen()
         self.assertEqual(export_receipts(self.f.pilot), exported)
+        source_ref = exported["evidence"][0]["source_snapshot_id"]
+        self.f.grants.pop("source:" + source_ref)
+        self.assertEqual(self.f.pilot.backend.statuses()[source_ref]["permission"], "READ")
+        denied = evaluate(self.frozen(), export_receipts(self.f.pilot), [])
+        self.assertEqual(denied["metrics"]["questions"]["invalidated"], 1)
+        self.assertEqual(denied["metrics"]["citation_chains"]["invalidated"], 1)
 
     def test_export_abstention_binds_retrieval_graph_and_access(self):
         f = self.f

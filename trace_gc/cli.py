@@ -102,12 +102,17 @@ def main(argv: list[str] | None=None) -> int:
             if args.output:write(args.output,result)
         elif args.command=="paper-pilot":
             from .paper_pilot_evaluator import evaluate
-            report=evaluate(load(args.protocol),load(args.receipts),load(args.recovery) if args.recovery else [])
+            try:
+                protocol=load(args.protocol)
+                receipts=load(args.receipts)
+                recovery=load(args.recovery) if args.recovery else []
+            except (ContractError,OSError,ValueError,RecursionError):
+                raise ContractError("EVALUATOR_INPUT","invalid protocol, receipt or recovery JSON") from None
+            report=evaluate(protocol,receipts,recovery)
             write(args.output,report)
             result={k:report[k] for k in ("version","verdict","evidence_class","protocol_sha256","receipts_sha256",
                     "qualifies_issue_23","authorization_granted","provider_calls")}
             result["metrics"]=report["metrics"]
-            result["output"]=str(args.output)
         else:
             from .replay import replay_analysis_policy
             bundle=replay_analysis_policy(load(args.bundle),load(args.policy),trust=read_trust(args.trust) if args.trust else None,at=args.at);write(args.output,bundle)
