@@ -9,8 +9,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from src.paper_qualification_v1 import (EvidenceError, METHODS, QUOTAS, REVIEW_POLICY,
-    VERSION, _public_summary, lower_bound, publish, statistical_gates, summarize)
+from src.paper_qualification_v1 import (CLARIFICATION, REFERENCE_REVIEW, SAMPLING, SEED, TARGETS,
+    EvidenceError, METHODS, QUOTAS, REVIEW_POLICY, VERSION, _public_summary, lower_bound, publish,
+    statistical_gates, summarize)
 from src.paper_qualification_report_v1 import (STAGES, aggregate_metrics, assert_redacted,
     build_report, preflight, write_report)
 
@@ -68,10 +69,30 @@ def published(root, value, folder="pub"):
 
 
 def bundle(root, *, selected=None):
-    prereg = save(root, "prereg.json", {"schema_version": "qualification-preregistration-current-v1",
+    protocol = {"schema_version": "source-first-qualification-preregistration-v1",
+        "seed": SEED, "targets": TARGETS, "sampling": SAMPLING, "reference_review": REFERENCE_REVIEW,
+        "registered_utc": "2026-01-01T00:00:00Z", "configuration": {
+            "measured_arms": list(METHODS), "image_evidence_required": True,
+            "native_only_receipt_sufficient": False}}
+    documents = {"protocol.json": save(root, "prereg/protocol.json", protocol)["sha256"],
+        "amendment-04/evaluator-clarification.json": save(root,
+            "prereg/amendment-04/evaluator-clarification.json", CLARIFICATION)["sha256"]}
+    for name in ("protocol.md", "amendment-02/protocol-amendment.md", "amendment-03/protocol-amendment.md",
+            "metadata-inventory/exposure-registry.jsonl"):
+        raw = b"" if name.endswith(".jsonl") else b"Authored fixture for preflight."
+        path = root/"prereg"/name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+        documents[name] = hashlib.sha256(raw).hexdigest()
+    frames = {}
+    for role, month in (("recent", "2501"), ("historical", "1801")):
+        ids = [f"arxiv:{month}.{index:05}" for index in range(1, 2001)]
+        projection = save(root, "prereg/"+role+".json", [
+            {"work_id": work_id, "version_id": work_id+"v1", "doi": None} for work_id in ids])
+        frames[role] = {"identity_projection_relative": role+".json", "sha256": projection["sha256"]}
+    prereg = save(root, "prereg/current.json", {"schema_version": "qualification-preregistration-current-v1",
         "numeric_targets_unchanged": True, "reference_review_occurred": False,
-        "base_protocol_and_additive_amendments": {"protocol.json": "a"*64},
-        "frames": {"recent": {}, "historical": {}}})
+        "base_protocol_and_additive_amendments": documents, "frames": frames})
     missing = {"relative": "unseen-must-not-open.pdf", "sha256": "f"*64}
     data = {"version": VERSION, "study_id": "authored", "execution_mode": "AUTHORED_CONTRACT_TEST",
         "roles": {role: {} for role in ("custodian", "source_reviewer", "adjudicator",
@@ -271,20 +292,45 @@ class AggregateTests(unittest.TestCase):
             args = Namespace(data_root=directory, bundle=descriptor["relative"],
                 bundle_sha256=descriptor["sha256"], preregistration_sha256=prereg["sha256"], output="new.json",
                 runtime_lock=None)
+            pointer = json.loads((root/prereg["relative"]).read_bytes())
+            body = json.loads((root/descriptor["relative"]).read_bytes())
             original = Path.read_bytes
             def guarded(path):
-                self.assertIn(path.name, ("bundle.json", "prereg.json", "unrelated.json"))
+                self.assertIn(path.name, ("bundle.json", "current.json", "unrelated.json"))
                 return original(path)
             with patch("src.paper_qualification_report_v1.runtime_receipt", return_value={}), \
                     patch("src.paper_qualification_report_v1.evaluator_identity", return_value={}), \
                     patch("src.paper_qualification_report_v1.importlib.util.find_spec", return_value=object()), \
                     patch.object(Path, "read_bytes", guarded):
                 self.assertEqual(preflight(args)["status"], "READY")
+                args.output = "missing/directory/new.json"
+                self.assertEqual(preflight(args)["status"], "READY")
+                (root/"ancestor").write_bytes(b"not a directory")
+                args.output = "ancestor/nested/new.json"
+                self.assertFalse(preflight(args)["checks"]["output_available"])
+                args.output = "new.json"
                 args.preregistration_sha256 = "0"*64
                 self.assertFalse(preflight(args)["checks"]["preregistration"])
                 args.preregistration_sha256 = prereg["sha256"]
-                (root/"prereg.json").write_text("{}")
+                (root/prereg["relative"]).write_text("{}")
                 self.assertFalse(preflight(args)["checks"]["preregistration"])
+                for alter in (
+                    lambda value: value.update(base_protocol_and_additive_amendments={}),
+                    lambda value: value["base_protocol_and_additive_amendments"].update({"protocol.json": "bad"}),
+                    lambda value: value["frames"].update(recent={}),
+                    lambda value: value["frames"]["historical"].update(sha256=None),
+                    lambda value: value["frames"]["historical"].update(identity_projection_relative="../escape.json"),
+                ):
+                    invalid = deepcopy(pointer)
+                    alter(invalid)
+                    updated = save(root, prereg["relative"], invalid)
+                    updated_bundle = save(root, descriptor["relative"], {**body, "preregistration": updated})
+                    args.preregistration_sha256 = updated["sha256"]
+                    args.bundle_sha256 = updated_bundle["sha256"]
+                    result = preflight(args)
+                    self.assertTrue(result["checks"]["bundle"])
+                    self.assertFalse(result["checks"]["preregistration"])
+                    self.assertEqual(result["status"], "NOT_READY")
                 (root/"unseen-must-not-open.pdf").write_bytes(b"%PDF synthetic canary")
                 args.bundle, args.bundle_sha256 = "unseen-must-not-open.pdf", "0"*64
                 self.assertFalse(preflight(args)["checks"]["bundle"])

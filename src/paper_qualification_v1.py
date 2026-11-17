@@ -783,6 +783,11 @@ def read_study_bundle(store, descriptor):
     return bundle
 
 
+REQUIRED_PREREGISTRATION_DOCUMENTS = {"protocol.json", "protocol.md", "amendment-02/protocol-amendment.md",
+    "amendment-03/protocol-amendment.md", "amendment-04/evaluator-clarification.json",
+    "metadata-inventory/exposure-registry.jsonl"}
+
+
 def read_preregistration(store, bundle, expected_sha256):
     require(bundle["preregistration"]["sha256"] == expected_sha256, "externally_pinned_preregistration_required")
     pointer = store.json(bundle["preregistration"])
@@ -803,9 +808,7 @@ def _evaluate(root, bundle_descriptor, *, expected_preregistration_sha256, trust
     for relative, sha in pointer["base_protocol_and_additive_amendments"].items():
         descriptor = {"relative": base+"/"+relative, "sha256": sha}
         documents[relative] = store.bytes(descriptor)
-    required = {"protocol.json", "protocol.md", "amendment-02/protocol-amendment.md",
-        "amendment-03/protocol-amendment.md", "amendment-04/evaluator-clarification.json", "metadata-inventory/exposure-registry.jsonl"}
-    require(required <= set(documents), "base_protocol_and_both_frame_amendments_required")
+    require(REQUIRED_PREREGISTRATION_DOCUMENTS <= set(documents), "base_protocol_and_both_frame_amendments_required")
     protocol = store.json({"relative": base+"/protocol.json", "sha256": pointer["base_protocol_and_additive_amendments"]["protocol.json"]})
     validate_protocol(protocol)
     require(store.json({"relative": base+"/amendment-04/evaluator-clarification.json",

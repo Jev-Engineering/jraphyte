@@ -321,8 +321,9 @@ STUDY=validation_v3_private/qualification-UNIQUE
 
 1. **Read-only preflight.** Opens no selected source. It checks the data root is
    outside the repository, the bundle hash and descriptor shape, the bound
-   preregistration pointer and externally supplied hash, that the output path is fresh, that
-   the optional PDF/image dependencies are importable, and that the evaluator
+   preregistration pointer, its externally supplied hash and the required protocol
+   and frame descriptors. It also checks that the output path is fresh and has
+   directory ancestors, the optional PDF/image dependencies are importable, and the evaluator
    identity and runtime receipt compute under the runtime lock.
 
    ```sh

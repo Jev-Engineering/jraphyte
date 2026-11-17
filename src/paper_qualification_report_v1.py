@@ -9,7 +9,8 @@ from pathlib import Path
 import re
 
 from src.paper_qualification_v1 import (Artifacts, EvidenceError, METHODS, PHASES, QUOTAS,
-    REVIEW_POLICY, VERSION as EVALUATION_VERSION, evaluator_identity, exact, read_preregistration,
+    REQUIRED_PREREGISTRATION_DOCUMENTS, REVIEW_POLICY, VERSION as EVALUATION_VERSION,
+    evaluator_identity, exact, read_preregistration,
     read_study_bundle, require, summarize, verify_published)
 from src.parallel_source_v4.common import child, data_root as authorized_root, write_once
 from src.parallel_source_v4.runtime import DEFAULT_RUNTIME_LOCK, runtime_receipt
@@ -221,6 +222,36 @@ def write_report(data_root, output_relative, evaluation_descriptor, *, execution
     return {"relative": output_relative, "sha256": write_once(output, report)}
 
 
+def _validate_preregistration_descriptors(root, pointer_relative, pointer):
+    directory = child(root, Path(pointer_relative).parent.as_posix())
+
+    def validate(relative, sha256):
+        require(isinstance(relative, str) and relative and isinstance(sha256, str) and SHA.fullmatch(sha256),
+                "artifact_descriptor_required")
+        require(child(directory, relative) != directory, "artifact_descriptor_required")
+
+    documents = pointer.get("base_protocol_and_additive_amendments")
+    require(isinstance(documents, dict) and REQUIRED_PREREGISTRATION_DOCUMENTS <= documents.keys(),
+            "base_protocol_and_both_frame_amendments_required")
+    for relative, sha256 in documents.items():
+        validate(relative, sha256)
+    frames = pointer.get("frames")
+    exact(frames, {"recent", "historical"}, "frozen_preregistration_pointer_required")
+    for frame in frames.values():
+        require(isinstance(frame, dict), "artifact_descriptor_required")
+        validate(frame.get("identity_projection_relative"), frame.get("sha256"))
+
+
+def _fresh_output_path(root, relative):
+    output = child(root, relative)
+    if output == root or output.exists():
+        return False
+    for parent in output.parents:
+        if parent.exists():
+            return parent.is_dir()
+    return False
+
+
 def preflight(args):
     checks, identity = {}, None
     def check(name, action):
@@ -246,13 +277,11 @@ def preflight(args):
             return False
         require(json_path(bundle["preregistration"]["relative"]), "frozen_preregistration_pointer_required")
         pointer = read_preregistration(store, bundle, args.preregistration_sha256)
-        require(isinstance(pointer.get("base_protocol_and_additive_amendments"), dict)
-            and isinstance(pointer.get("frames"), dict)
-            and set(pointer["frames"]) == {"recent", "historical"}, "frozen_preregistration_pointer_required")
+        _validate_preregistration_descriptors(store.root, bundle["preregistration"]["relative"], pointer)
         store.recheck()
     check("bundle", load_bundle)
     check("preregistration", load_preregistration)
-    check("output_available", lambda: not child(authorized_root(args.data_root), args.output).exists())
+    check("output_available", lambda: _fresh_output_path(authorized_root(args.data_root), args.output))
     for name in ("fitz", "PIL"):
         check(name, lambda name=name: importlib.util.find_spec(name) is not None)
     def identify():
