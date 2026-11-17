@@ -207,7 +207,9 @@ class AggregateTests(unittest.TestCase):
     def test_execution(self):
         e = execution()
         report = build_report(evaluation(), execution=e)
-        self.assertTrue(report["execution_bound"])
+        self.assertFalse(report["execution_bound"])
+        self.assertFalse(report["qualification_pass"])
+        self.assertEqual(report["execution_mode"], "UNVERIFIED")
         self.assertEqual([r["stage"] for r in report["stages"]], sorted(STAGES))
         self.assertEqual(report["failure_totals"], {"failures": 6, "retries": 12})
         self.assertIsNone(report["stages"][0]["elapsed_seconds"])
@@ -235,7 +237,11 @@ class AggregateTests(unittest.TestCase):
             with self.assertRaisesRegex(EvidenceError, "qualification_evidence_changed"):
                 write_report(root, "report.json", ev, **anchors)
             self.assertFalse((root/"report.json").exists())
-            for status in ("PASS", "FAIL", "BLOCKED", "AUTHORED_CONTRACT_PASS_NOT_QUALIFICATION"):
+            with patch("src.paper_qualification_v1.evaluate", return_value=value):
+                with self.assertRaisesRegex(EvidenceError, "evaluation_status_mode_mismatch"):
+                    write_report(root, "authored-pass.json", ev, **anchors)
+            self.assertFalse((root / "authored-pass.json").exists())
+            for status in ("FAIL", "BLOCKED", "AUTHORED_CONTRACT_PASS_NOT_QUALIFICATION"):
                 current = {**value, "status": status, "qualification_pass": status == "PASS"}
                 ev = published(root, current, status)
                 output = status+".json"

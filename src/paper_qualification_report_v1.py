@@ -106,7 +106,7 @@ def reason_code(value):
     return value if type(value) is str and value in REASONS else REDACTED_REASON
 
 
-def build_report(evaluation, *, execution=None, execution_mode=None):
+def build_report(evaluation, *, execution=None):
     require(isinstance(evaluation, dict), "evaluation_required")
     e = evaluation
     status = e.get("status")
@@ -115,9 +115,8 @@ def build_report(evaluation, *, execution=None, execution_mode=None):
         and type(e.get("graph_writes")) is int and e["graph_writes"] == 0
         and type(e.get("paid_calls")) is int and e["paid_calls"] == 0
         and e.get("qualification_pass") is (status == "PASS"), "evaluation_contract_required")
-    require(execution_mode is None or execution_mode in STUDY_MODES, "invalid_study_mode")
     result = {"version": VERSION, "source_evaluation_version": EVALUATION_VERSION,
-        "status": status, "qualification_pass": status == "PASS",
+        "status": status, "qualification_pass": False,
         "independent_human_qualification": False, "claim": CLAIM, "scope": SCOPE}
     if status == "BLOCKED" and "primary" not in e:
         result["execution_mode"] = "NOT_RUN"
@@ -125,7 +124,7 @@ def build_report(evaluation, *, execution=None, execution_mode=None):
         assert_redacted(result)
         return result
     require(e.get("review_policy") == REVIEW_POLICY, "review_policy_required")
-    result.update(execution_mode=execution_mode or "UNVERIFIED", reviewer_kind="assistant", review_policy=REVIEW_POLICY, overall=_redacted_summary(e["primary"]),
+    result.update(execution_mode="UNVERIFIED", reviewer_kind="assistant", review_policy=REVIEW_POLICY, overall=_redacted_summary(e["primary"]),
         strata=summaries(e["challenge"]))
     require(isinstance(e["checks"], dict) and all(k in CHECKS and type(v) is bool for k, v in e["checks"].items()), "invalid_report_checks")
     result["checks"] = {k: v for k, v in e["checks"].items()}
@@ -160,7 +159,7 @@ def build_report(evaluation, *, execution=None, execution_mode=None):
             require(row.get(field) in allowed, "invalid_case_category")
             counts[row[field]] += 1
         result[output] = counts
-    result.update(costs=None, stages=None, failure_totals=None, execution_bound=execution is not None)
+    result.update(costs=None, stages=None, failure_totals=None, execution_bound=False)
     if execution is not None:
         require(execution.get("version") == "paper-four-arm-execution-v1", "execution_version_required")
         costs = execution["costs"]
@@ -239,7 +238,13 @@ def write_report(data_root, output_relative, evaluation_descriptor, *, execution
             store.verify({"relative": relative, "sha256": sha256})
     else:
         require(execution_descriptor is None, "execution_not_bound_to_evaluation")
-    report = build_report(evaluation, execution=execution, execution_mode=execution_mode)
+    report = build_report(evaluation, execution=execution)
+    if execution is not None:
+        status = evaluation["status"]
+        require((status != "PASS" or execution_mode == "REAL_LOCAL") and
+                (status != "AUTHORED_CONTRACT_PASS_NOT_QUALIFICATION" or execution_mode == "AUTHORED_CONTRACT_TEST"),
+                "evaluation_status_mode_mismatch")
+        report.update(execution_mode=execution_mode, execution_bound=True, qualification_pass=status == "PASS")
     report["source_evaluation_sha256"] = evaluation_descriptor["sha256"]
     assert_redacted(report)
     store.recheck()
