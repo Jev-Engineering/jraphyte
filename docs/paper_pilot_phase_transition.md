@@ -19,6 +19,12 @@ The guarded admission handoff requires an independently established sole owner b
 
 `src/paper_pilot_phase_cutover_guarded_v4.py` adds an optional application observer to the continuous-lock transaction. After the source-stage, phase-stage, and controller locks and pinned old file/ACL checks, but before the quiescence receipt or first ACL update, the helper calls `observer(old_root=..., archived_root=..., source_handle=..., phase_handle=..., controller_handle=..., writable_database_names=...)`. The sorted database-name tuple identifies the four stores still lacking the durable per-file deny; a replay observer can retain read handles for just those stores. The observer returns a context manager holding any approved read leases. Its lease remains open through readback of the five per-file write denies and the old-parent deny, then closes before the same-volume rename while the two stage locks stay held. Rejection creates no quiescence or barrier receipt and changes no ACL. A barrier-only or partial-deny replay requires a fresh observer under the stage locks; `controller_handle` is `None` if the controller file already has the durable deny. The application must independently bind the observer code, current process census, and signed stage approvals. The generic helper does not determine sole ownership from a caller-supplied receipt.
 
+## Inactive restore interruption
+
+Restore creates the phase-binding table and its row in one transaction in a private in-memory database. It backs up the result to the pending file with a memory journal, then reads back and synchronizes the pending file before publication. A retry promotes a verified, exactly bound pending database and preserves incomplete or legacy unbound pending bytes as `.failed.*`. A conflicting binding causes a hold.
+
+Restore stages the receipt under a name that includes the exact phase binding digest, synchronizes the completed bytes, and publishes the immutable final name with an exclusive hard link. A retry can discard a staged prefix of the expected receipt or remove the extra link after verifying a completed publication. Conflicting receipt bytes and unrelated file aliases cause a hold.
+
 ## Recovery and evidence
 
 Run the portable end-to-end and rejection suites with

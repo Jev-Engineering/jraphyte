@@ -7,6 +7,7 @@ This module contains no provider, PDF reader, or graph publication client.
 from __future__ import annotations
 
 import base64
+from contextlib import closing
 import os
 from pathlib import Path
 import sqlite3
@@ -223,6 +224,84 @@ def restore_target(*, capsule_path: str | Path, capsule_sha256: str,
             phase_authority=phase_authority)
 
 
+_BINDING_TABLE = "trace_phase_binding"
+_BINDING_SQL = ("CREATE TABLE trace_phase_binding "
+                "(id INTEGER PRIMARY KEY CHECK(id=1), binding_sha256 TEXT NOT NULL)")
+
+
+def _require_restore_store_quiescent(path: Path) -> None:
+    sidecars = [path.with_name(path.name + suffix) for suffix in ("-wal", "-shm", "-journal")]
+    require(not any(item.exists() or item.is_symlink() for item in sidecars),
+            "PHASE_SQLITE", "uncheckpointed or foreign SQLite sidecar")
+
+
+def _restore_store_state(path: Path, expected: str, binding: str, *, pending=False) -> bool:
+    """Return whether a verified store already has the exact phase binding."""
+    _require_restore_store_quiescent(path)
+    with closing(sqlite3.connect(path.as_uri() + "?mode=ro&immutable=1", uri=True)) as db:
+        db.execute("PRAGMA query_only=ON")
+        state = _tables(db)
+        intact = not pending or db.execute("PRAGMA quick_check").fetchall() == [("ok",)]
+    _require_restore_store_quiescent(path)
+    marker = state["tables"].pop(_BINDING_TABLE, None)
+    objects = [row for row in state["objects"] if row[1] == _BINDING_TABLE]
+    if marker is not None or objects:
+        require(objects == [["table", _BINDING_TABLE, _BINDING_TABLE, _BINDING_SQL]] and
+                marker == {"rows_sha256": digest([[1, binding]]), "row_count": 1},
+                "PHASE_BACKUP", "partial binding changed")
+    state["objects"] = [row for row in state["objects"] if row[1] != _BINDING_TABLE]
+    exact = digest(state) == expected
+    if not pending:
+        require(exact, "PHASE_BACKUP", "partial restored store changed")
+    return intact and exact and marker is not None
+
+
+def _stage_restored_store(source: Path, pending: Path, expected: str, binding: str) -> None:
+    # The archive can use WAL. Perform all binding writes in a private database
+    # so an interruption cannot leave a journal or incomplete marker beside a
+    # published target. The on-disk backup writes only to the pending name.
+    with closing(sqlite3.connect(":memory:")) as staged:
+        with closing(sqlite3.connect(source.as_uri() + "?mode=ro&immutable=1", uri=True)) as backup:
+            backup.backup(staged)
+        require(logical_state(staged) == expected, "PHASE_BACKUP", "backup logical state changed")
+        with staged:
+            staged.execute("BEGIN IMMEDIATE")
+            staged.execute(_BINDING_SQL)
+            staged.execute("INSERT INTO trace_phase_binding VALUES (1,?)", (binding,))
+        with pending.open("xb"):
+            pass
+        with closing(sqlite3.connect(pending)) as output:
+            require(output.execute("PRAGMA journal_mode=MEMORY").fetchone() == ("memory",),
+                    "PHASE_BACKUP", "private backup journal mode required")
+            staged.backup(output)
+    require(_restore_store_state(pending, expected, binding, pending=True),
+            "PHASE_BACKUP", "staged store or binding changed")
+    with pending.open("r+b") as handle:
+        os.fsync(handle.fileno())
+
+
+def _publish_restore_receipt(path: Path, pending: Path, raw: bytes) -> None:
+    if path.exists():
+        require(path.read_bytes() == raw, "PHASE_BACKUP", "existing restore receipt conflicts")
+    if pending.exists():
+        # A stopped writer can leave only a prefix of the exact receipt.
+        require(pending.stat().st_size <= len(raw) and raw.startswith(pending.read_bytes()),
+                "PHASE_BACKUP", "pending restore receipt conflicts")
+        pending.unlink()
+    if not path.exists():
+        with pending.open("xb") as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(pending, path)
+        except FileExistsError:
+            require(path.read_bytes() == raw,
+                    "PHASE_BACKUP", "existing restore receipt conflicts")
+        pending.unlink()
+    require(path.read_bytes() == raw, "PHASE_BACKUP", "restore receipt changed")
+
+
 def _restore_target_locked(*, capsule_path: str | Path, capsule_sha256: str,
                    target_root: str | Path, authorization: dict, trust,
                    target_implementation_sha256: str, phase_authority) -> dict:
@@ -270,79 +349,59 @@ def _restore_target_locked(*, capsule_path: str | Path, capsule_sha256: str,
         backups[name] = source
     require(set(backups) == {"checkpoint", "graph", "budget", "application_journal"},
             "PHASE_BACKUP", "all four source stores required")
+    targets = {name: root / (name + ".sqlite3") for name in ("graph", "budget")}
+    path = root / "phase-restore.json"
+    binding = binding_sha256(phase_authority.binding)
+    pending_receipt = path.with_name(f"{path.name}.{binding}.pending")
     if root.exists():
-        require(root.is_dir() and not any(path.is_symlink() for path in root.iterdir()) and
-                {path.name for path in root.iterdir()} <=
-                {"graph.sqlite3", "budget.sqlite3", "phase-restore.json",
+        require(root.is_dir(), "PHASE_DESTINATION", "partial target must be a directory")
+        entries = list(root.iterdir())
+        require(all(item.is_file() and not item.is_symlink() for item in entries) and
+                {item.name for item in entries} <=
+                {"graph.sqlite3", "budget.sqlite3", path.name, pending_receipt.name,
                  "graph.sqlite3.pending", "budget.sqlite3.pending"} |
-                {path.name for path in root.iterdir() if any(
-                    path.name.startswith(name + ".sqlite3.failed.")
-                    for name in ("graph", "budget"))},
+                {item.name for item in entries if any(
+                    item.name.startswith(name + ".sqlite3.failed.") for name in targets)},
                 "PHASE_DESTINATION", "partial target has unknown content")
+        # A receipt interrupted after linking has precisely two owned names.
+        receipt_pair = (path.exists() and pending_receipt.exists() and
+                        path.samefile(pending_receipt))
+        require(all(item.stat().st_nlink == (2 if receipt_pair and
+                    item in (path, pending_receipt) else 1) for item in entries),
+                "PHASE_DESTINATION", "partial target has aliased content")
     else:
         root.mkdir(parents=True)
-    for name in ("graph", "budget"):
-        require(bytes_digest(backups[name].read_bytes()) == capsule["database_backup_sha256"][name],
-                "PHASE_BACKUP", "backup changed during restore")
-        target = root / (name + ".sqlite3")
-        if target.exists():
-            existing = sqlite3.connect(f"file:{target.as_posix()}?mode=ro&immutable=1", uri=True)
+    bound = {}
+    for name, target in targets.items():
+        bound[name] = target.exists() and _restore_store_state(
+            target, capsule["database_state"][name], binding)
+    if path.exists() or pending_receipt.exists():
+        require(all(bound.values()), "PHASE_BACKUP", "existing restore receipt conflicts")
+    pending_stores = {name: target.with_suffix(".sqlite3.pending")
+                      for name, target in targets.items()}
+    pending_complete = {}
+    # Every allowed pending store must pass the binding check before any
+    # restore file changes, even when its final store is already bound.
+    for name, pending in pending_stores.items():
+        if pending.exists():
             try:
-                existing.execute("PRAGMA query_only=ON")
-                state = _tables(existing)
-                marker = state["tables"].pop("trace_phase_binding", None)
-                state["objects"] = [row for row in state["objects"]
-                                    if row[1] != "trace_phase_binding"]
-                require(digest(state) == capsule["database_state"][name],
-                        "PHASE_BACKUP", "partial restored store changed")
-                if marker is not None:
-                    require(existing.execute("SELECT binding_sha256 FROM trace_phase_binding WHERE id=1")
-                            .fetchall() == [(binding_sha256(phase_authority.binding),)],
-                            "PHASE_BACKUP", "partial binding changed")
-            finally:
-                existing.close()
-        else:
-            source = sqlite3.connect(f"file:{backups[name].as_posix()}?mode=ro&immutable=1", uri=True)
-            source.execute("PRAGMA query_only=ON")
-            pending = target.with_name(target.name + ".pending")
-            if pending.exists():
-                try:
-                    probe = sqlite3.connect(f"file:{pending.as_posix()}?mode=ro&immutable=1", uri=True)
-                    try:
-                        probe.execute("PRAGMA query_only=ON")
-                        complete = logical_state(probe) == capsule["database_state"][name]
-                    finally:
-                        probe.close()
-                except sqlite3.DatabaseError:
-                    complete = False
-                if not complete:
-                    pending.rename(target.with_name(target.name + ".failed." + uuid.uuid4().hex))
-            if not pending.exists():
-                destination = sqlite3.connect(pending)
-                try:
-                    source.backup(destination)
-                    destination.commit()
-                    require(logical_state(destination) == capsule["database_state"][name],
-                            "PHASE_BACKUP", "restored logical state changed")
-                finally:
-                    destination.close()
-            try:
-                os.replace(pending, target)
-            finally:
-                source.close()
-    for name in ("graph", "budget"):
-        destination = sqlite3.connect(root / (name + ".sqlite3"))
-        try:
-            existing = destination.execute("SELECT name FROM sqlite_master WHERE type='table' "
-                                           "AND name='trace_phase_binding'").fetchone()
-            if existing is None:
-                destination.execute("CREATE TABLE trace_phase_binding "
-                                    "(id INTEGER PRIMARY KEY CHECK(id=1), binding_sha256 TEXT NOT NULL)")
-                destination.execute("INSERT INTO trace_phase_binding VALUES (1,?)",
-                                    (binding_sha256(phase_authority.binding),))
-                destination.commit()
-        finally:
-            destination.close()
+                pending_complete[name] = _restore_store_state(
+                    pending, capsule["database_state"][name], binding, pending=True)
+            except sqlite3.DatabaseError:
+                pending_complete[name] = False
+    for name, target in targets.items():
+        if bound[name]:
+            continue
+        expected = capsule["database_state"][name]
+        pending = pending_stores[name]
+        if pending_complete.get(name) is False:
+            pending.rename(target.with_name(target.name + ".failed." + uuid.uuid4().hex))
+        if not pending_complete.get(name):
+            require(bytes_digest(backups[name].read_bytes()) == capsule["database_backup_sha256"][name],
+                    "PHASE_BACKUP", "backup changed during restore")
+            _stage_restored_store(backups[name], pending, expected, binding)
+        _require_restore_store_quiescent(target)
+        os.replace(pending, target)
     require(all(bytes_digest(backups[name].read_bytes()) == expected
                 for name, expected in capsule["database_backup_sha256"].items()),
             "PHASE_BACKUP", "source backup changed during target restore")
@@ -354,16 +413,8 @@ def _restore_target_locked(*, capsule_path: str | Path, capsule_sha256: str,
                "bound_graph_logical_sha256": _file_logical(root / "graph.sqlite3"),
                "bound_budget_logical_sha256": _file_logical(root / "budget.sqlite3"),
                "target_implementation_sha256": target_implementation_sha256}
-    path = root / "phase-restore.json"
     receipt_raw = dumps(receipt).encode("utf-8") + b"\n"
-    if path.exists():
-        require(path.read_bytes() == receipt_raw,
-                "PHASE_BACKUP", "existing restore receipt conflicts")
-    else:
-        with path.open("xb") as handle:
-            handle.write(receipt_raw)
-            handle.flush(); os.fsync(handle.fileno())
-    require(loads(path.read_bytes()) == receipt, "PHASE_BACKUP", "restore receipt changed")
+    _publish_restore_receipt(path, pending_receipt, receipt_raw)
     return receipt
 
 

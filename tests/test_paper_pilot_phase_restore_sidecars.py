@@ -104,6 +104,241 @@ class PhaseRestoreSidecarTests(unittest.TestCase):
         self.assertEqual({p.name for p in self.target.iterdir()},
                          {"graph.sqlite3", "budget.sqlite3", "phase-restore.json"})
 
+    def assert_archived_state(self):
+        self.assertEqual(self.capsule["database_backup_sha256"], {
+            name: bytes_digest((self.capsule_dir / f"{name}.sqlite3").read_bytes())
+            for name in self.capsule["database_backup_sha256"]})
+        self.assertEqual(bytes_digest(self.capsule_path.read_bytes()), self.capsule_sha)
+        self.assertFalse(Path(self.authority.binding["activation_path"]).exists())
+
+    def assert_restored_state(self):
+        for name in ("graph", "budget"):
+            db = self.target / f"{name}.sqlite3"
+            connection = sqlite3.connect(db.as_uri() + "?mode=ro&immutable=1", uri=True)
+            try:
+                self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone(), ("ok",))
+                state = transition._tables(connection)
+                state["tables"].pop("trace_phase_binding")
+                state["objects"] = [row for row in state["objects"]
+                                    if row[1] != "trace_phase_binding"]
+                self.assertEqual(transition.digest(state), self.capsule["database_state"][name])
+                if name == "budget":
+                    used = json.loads(connection.execute(
+                        "SELECT used FROM trace_budgets WHERE run_id=?",
+                        (self.capsule["run_id"],)).fetchone()[0])
+                    self.assertEqual((used["model_calls"], used["request_bytes"], used["retries"]),
+                                     (1, 14120, 0))
+            finally:
+                connection.close()
+        self.assert_only_restored_files()
+        self.assert_archived_state()
+
+    def restore_until_process_exit(self):
+        pid = os.fork()
+        if pid == 0:
+            try:
+                self.restore()
+            finally:
+                os._exit(2)
+        _, status = os.waitpid(pid, 0)
+        self.assertEqual(os.waitstatus_to_exitcode(status), 91)
+        self.assert_archived_state()
+
+    @unittest.skipUnless(hasattr(os, "fork"), "requires a process interruption fixture")
+    def test_process_interruption_between_create_and_insert_replays(self):
+        original = sqlite3.connect
+
+        class InterruptedConnection(sqlite3.Connection):
+            def execute(self, statement, *args, **kwargs):
+                result = super().execute(statement, *args, **kwargs)
+                if statement.startswith("CREATE TABLE trace_phase_binding"):
+                    if self.in_transaction:
+                        os._exit(91)
+                return result
+
+        def connect(path, *args, **kwargs):
+            if path == ":memory:":
+                kwargs["factory"] = InterruptedConnection
+            return original(path, *args, **kwargs)
+
+        with patch.object(sqlite3, "connect", side_effect=connect):
+            self.restore_until_process_exit()
+        self.assertEqual(list(self.target.iterdir()), [])
+        self.assertEqual(self.restore()["status"], "INACTIVE_RESTORED_NO_MODEL_CALL")
+        self.assert_restored_state()
+
+    @unittest.skipUnless(hasattr(os, "fork"), "requires a process interruption fixture")
+    def test_process_interruption_after_stage_before_database_publish_replays(self):
+        def interrupt(source, destination):
+            os._exit(91)
+
+        with patch.object(os, "replace", side_effect=interrupt):
+            self.restore_until_process_exit()
+        staged = self.target / "graph.sqlite3.pending"
+        self.assertEqual(list(self.target.iterdir()), [staged])
+        original = staged.stat()
+        raw = staged.read_bytes()
+        self.restore()
+        graph = self.target / "graph.sqlite3"
+        self.assertEqual(graph.stat().st_ino, original.st_ino)
+        self.assertEqual(graph.read_bytes(), raw)
+        self.assert_restored_state()
+
+    @unittest.skipUnless(hasattr(os, "fork"), "requires a process interruption fixture")
+    def test_process_interruption_during_receipt_write_replays(self):
+        original = Path.open
+
+        class InterruptedReceipt:
+            def __init__(self, stream):
+                self.stream = stream
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                pass
+
+            def write(self, raw):
+                self.stream.write(raw[:23])
+                self.stream.flush()
+                os.fsync(self.stream.fileno())
+                os._exit(91)
+
+        def open_path(path, *args, **kwargs):
+            stream = original(path, *args, **kwargs)
+            if path.name.startswith("phase-restore.json.") and args == ("xb",):
+                return InterruptedReceipt(stream)
+            return stream
+
+        with patch.object(Path, "open", open_path):
+            self.restore_until_process_exit()
+        self.assertFalse((self.target / "phase-restore.json").exists())
+        pending, = self.target.glob("phase-restore.json.*.pending")
+        prefix = pending.read_bytes()
+        self.assertEqual(len(prefix), 23)
+        self.restore()
+        self.assertTrue((self.target / "phase-restore.json").read_bytes().startswith(prefix))
+        self.assert_restored_state()
+
+    @unittest.skipUnless(hasattr(os, "fork"), "requires a process interruption fixture")
+    def test_process_interruption_after_receipt_link_replays_without_replacement(self):
+        link = os.link
+
+        def interrupt(source, destination):
+            link(source, destination)
+            os._exit(91)
+
+        with patch.object(os, "link", side_effect=interrupt):
+            self.restore_until_process_exit()
+        receipt = self.target / "phase-restore.json"
+        original = receipt.stat()
+        raw = receipt.read_bytes()
+        self.assertEqual(original.st_nlink, 2)
+        self.restore()
+        self.assertEqual(receipt.stat().st_ino, original.st_ino)
+        self.assertEqual(receipt.read_bytes(), raw)
+        self.assert_restored_state()
+
+    def test_mismatched_final_binding_and_receipt_leave_target_unchanged(self):
+        self.restore()
+        receipt = self.target / "phase-restore.json"
+        raw = receipt.read_bytes()
+        receipt.write_bytes(raw[:23])
+        before = {item.name: item.read_bytes() for item in self.target.iterdir()}
+        with self.assertRaisesRegex(ContractError, "existing restore receipt conflicts"):
+            self.restore()
+        self.assertEqual({item.name: item.read_bytes() for item in self.target.iterdir()}, before)
+        receipt.write_bytes(raw)
+        budget = self.target / "budget.sqlite3"
+        with sqlite3.connect(budget) as connection:
+            connection.execute("UPDATE trace_phase_binding SET binding_sha256='different'")
+        connection.close()
+        before = {item.name: item.read_bytes() for item in self.target.iterdir()}
+        with self.assertRaisesRegex(ContractError, "partial binding changed"):
+            self.restore()
+        self.assertEqual({item.name: item.read_bytes() for item in self.target.iterdir()}, before)
+        self.assert_archived_state()
+
+    def assert_pending_preflight_holds(self, rejected_pending):
+        before = {item.name: item.read_bytes() for item in self.target.iterdir()}
+        inspect_store = transition._restore_store_state
+
+        def inspect(path, expected, binding, *, pending=False):
+            if pending and path.name == rejected_pending.name:
+                # Restore resolves the target directory, which can expand a Windows short path.
+                self.assertTrue(path.samefile(rejected_pending))
+                raise ContractError("PHASE_BACKUP", "partial binding changed")
+            return inspect_store(path, expected, binding, pending=pending)
+
+        with patch.object(transition, "_restore_store_state", side_effect=inspect):
+            with self.assertRaisesRegex(ContractError, "partial binding changed") as caught:
+                self.restore()
+        self.assertEqual(caught.exception.code, "PHASE_BACKUP")
+        self.assertEqual({item.name: item.read_bytes() for item in self.target.iterdir()}, before)
+        self.assert_archived_state()
+
+    def test_pending_store_check_runs_beside_an_exact_final_and_receipt(self):
+        self.restore()
+        for name in ("graph", "budget"):
+            with self.subTest(store=name):
+                final = self.target / f"{name}.sqlite3"
+                pending = self.target / f"{name}.sqlite3.pending"
+                pending.write_bytes(final.read_bytes())
+                self.assert_pending_preflight_holds(pending)
+                pending.unlink()  # Disposable fixture only.
+        self.assert_restored_state()
+
+    def test_all_pending_store_checks_finish_before_recovery_changes_either_store(self):
+        self.target.mkdir()
+        for name in ("graph", "budget"):
+            pending = self.target / f"{name}.sqlite3.pending"
+            pending.write_bytes((self.capsule_dir / f"{name}.sqlite3").read_bytes())
+        self.assert_pending_preflight_holds(self.target / "budget.sqlite3.pending")
+        self.assertFalse((self.target / "graph.sqlite3").exists())
+        self.assertFalse((self.target / "budget.sqlite3").exists())
+        self.assertFalse((self.target / "phase-restore.json").exists())
+
+    def test_legacy_unbound_database_and_pending_backup_reconcile(self):
+        self.target.mkdir()
+        graph = self.target / "graph.sqlite3"
+        graph.write_bytes((self.capsule_dir / graph.name).read_bytes())
+        pending = self.target / "budget.sqlite3.pending"
+        raw = (self.capsule_dir / "budget.sqlite3").read_bytes()
+        pending.write_bytes(raw)
+        self.restore()
+        preserved, = self.target.glob("budget.sqlite3.failed.*")
+        self.assertEqual(preserved.read_bytes(), raw)
+        self.assert_archived_state()
+        preserved.unlink()  # Disposable fixture only.
+        self.assert_restored_state()
+
+    def test_unknown_staged_receipt_is_preserved(self):
+        self.restore()
+        receipt = self.target / "phase-restore.json"
+        binding = transition.digest(self.authority.binding)
+        pending = receipt.with_name(f"{receipt.name}.{binding}.pending")
+        pending.write_bytes(b"foreign")
+        before = {item.name: item.read_bytes() for item in self.target.iterdir()}
+        with self.assertRaisesRegex(ContractError, "pending restore receipt conflicts"):
+            self.restore()
+        self.assertEqual({item.name: item.read_bytes() for item in self.target.iterdir()}, before)
+
+    def test_staged_sidecars_and_unrelated_receipt_alias_are_preserved(self):
+        self.restore()
+        sidecar = self.target / "graph.sqlite3.pending-wal"
+        sidecar.write_bytes(b"foreign staged WAL")
+        with self.assertRaisesRegex(ContractError, "partial target has unknown content"):
+            self.restore()
+        self.assertEqual(sidecar.read_bytes(), b"foreign staged WAL")
+        sidecar.unlink()  # Disposable fixture only.
+        receipt = self.target / "phase-restore.json"
+        alias = self.root / "unrelated-receipt.json"
+        os.link(receipt, alias)
+        with self.assertRaisesRegex(ContractError, "partial target has aliased content"):
+            self.restore()
+        self.assertEqual(receipt.read_bytes(), alias.read_bytes())
+        self.assert_archived_state()
+
     def test_wal_readback_creates_no_sidecars(self):
         graph = self.capsule_dir / "graph.sqlite3"
         self.assertEqual(transition._file_logical(graph),
@@ -145,19 +380,7 @@ class PhaseRestoreSidecarTests(unittest.TestCase):
         self.assertEqual((self.target / "phase-restore.json").read_bytes(), receipt_before)
         self.assertEqual((self.target / "graph.sqlite3").read_bytes(), graph_before)
         self.assertEqual((self.target / "budget.sqlite3").read_bytes(), budget_before)
-        inspected = sqlite3.connect(
-            f"file:{(self.target / 'budget.sqlite3').as_posix()}?mode=ro&immutable=1",
-            uri=True)
-        try:
-            used = json.loads(inspected.execute(
-                "SELECT used FROM trace_budgets WHERE run_id=?",
-                ("authored-sidecar-run",)).fetchone()[0])
-        finally:
-            inspected.close()
-        self.assertEqual((used["model_calls"], used["request_bytes"]), (1, 14120))
-        self.assertEqual(self.capsule["database_backup_sha256"], {
-            name: bytes_digest((self.capsule_dir / f"{name}.sqlite3").read_bytes())
-            for name in self.capsule["database_backup_sha256"]})
+        self.assert_restored_state()
 
     def test_foreign_wal_and_shm_rejected_without_cleanup(self):
         self.restore()
