@@ -5,8 +5,9 @@ download papers, run converters, issue review signatures, enroll trusted keys,
 or register a graph qualification. `trace_gc.qualification.evaluate_labels` and
 `QualificationRegistry` retain their existing contracts.
 
-No real qualification is supplied by this change. The current development #19
-receipts fail preservation and source fidelity. No prospective paper, image or
+No real qualification is supplied by this change. When this evaluator was first
+implemented, the development #19 receipts failed preservation and source fidelity;
+see "Present limits" below for the current state. No prospective paper, image or
 prediction was opened to implement or test this evaluator. Its tests use authored
 protocol records, ephemeral test keys and source-rendered fixtures; fabricated
 converter/OCR outputs are clearly identified as test data.
@@ -268,29 +269,118 @@ graph qualification, changes extraction defaults or admits evidence to a graph.
 
 ## Present limits and required integration
 
-No prospective signed review records, selected cohort, genuine four-converter
-execution package or passing #19 prerequisite exists in this implementation.
-The study therefore remains blocked. The new producer/access contracts must be
-emitted by the genuine local execution controller; authored fixtures cannot fill
-that role. Native manual-closure reseals are currently rejected by this evaluator
-unless a separately reviewed prospective adapter is implemented and frozen;
-only exact native selection or the checked typed image route is supported.
-Prospective image title-page closure is likewise blocked until a page-two witness
-adapter is implemented; the supported image closure has an actual following
-section transition. This limitation cannot be recast as a successful title-page
-candidate or omitted from the challenge denominator.
+Status as of the current main branch (refreshed for issue #20; repository and
+GitHub issue state only, no private artifact was reread for this update):
 
-Identity replacement is also deliberately blocked until its actual alias proof
-adapter is implemented. The frozen protocol permits verified identity-only
-replacements before review; this evaluator does not accept an arbitrary exclusion
-reason as proof. A duplicate or unavailable source cannot trigger a silent cohort
-change. These remaining adapters require a new implementation freeze before any
-prospective source access; no current code or unit test closes issue #20.
+- **#19 regression prerequisite.** Issues #17, #18 and #19 are closed. The issue
+  #20 thread reports a privately pinned source-verified 200-paper gate PASS for
+  delivered runtime `d908283`, with the legacy v1 audit FAIL preserved alongside
+  it. That receipt is not in this repository. The evaluator accepts it only
+  through the `regression_policy` path (`src.paper_selector_acceptance_v2.verify`)
+  and reverifies it at evaluation time under the exact current code and runtime.
+  Whether it still verifies after later code changes is not established here.
+- **Implemented adapters.** The typed identity-alias proof
+  (`paper-identity-alias-proof-v1`, `verify_identity_exclusions`) and the
+  title-page page-two witness (`reviewed_title_page_end`,
+  `verify_title_page_source_extent`) are implemented and covered by authored
+  tests. See `docs/paper-qualification-alias-title-page-v1.md`. Neither has run on
+  a prospective cohort.
+- **Evaluator identity.** PR #112 (refs #97) binds the evaluator's static local
+  import closure. Earlier code maps and receipts stay historical and are not
+  rebound. A prospective run needs access and execution artifacts that carry the
+  current code hash.
+- **Still unsupported.** Native manual-closure reseals are rejected. Only exact
+  native selection (`native_or_hold`) or the checked typed image route
+  (`image_review`) is accepted. Arbitrary exclusion reasons are never accepted as
+  identity proof. A duplicate or unavailable source cannot silently change the
+  cohort.
+
+These pieces are still missing and cannot be produced offline:
+
+- a selected unseen cohort, with eligible versioned PDFs and DOI alias enrichment
+  (the issue #20 thread reports that the exposure snapshot records no DOIs);
+- the genuine local four-converter execution package and Windows image OCR,
+  emitted by the real execution controller (authored fixtures cannot fill this
+  role);
+- signed, attributed, blinded internal source-first reference review with
+  adjudication.
+
+The study therefore remains `BLOCKED`. No current code or unit test closes issue
+#20, and this limitation cannot be recast as a successful candidate or dropped
+from any denominator.
+
+## Running the qualification once the cohort exists
+
+Set these on the authorized host. All paths are relative to the external data
+root; nothing private belongs in the repository.
+
+```sh
+export TRACE_GC_TEST_DATA_ROOT=/authorized/TRACE-GC_RealPaper_Test
+STUDY=validation_v3_private/qualification-UNIQUE
+```
+
+1. **Read-only preflight.** Opens no selected source. It checks the data root is
+   outside the repository, the bundle hash, that the output path is fresh, that
+   the optional PDF/image dependencies are importable, and that the evaluator
+   identity and runtime receipt compute under the runtime lock.
+
+   ```sh
+   python -m src.paper_qualification_report_v1 preflight \
+     --data-root "$TRACE_GC_TEST_DATA_ROOT" \
+     --bundle "$STUDY/bundle.json" --bundle-sha256 "$BUNDLE_SHA256" \
+     --preregistration-sha256 "$PREREGISTRATION_SHA256" \
+     --output "$STUDY/evaluation-run"
+   ```
+
+   Exit 0 and `READY` mean only that the inputs and tools are present. On a host
+   whose interpreter does not match `runtime-windows-py312.lock.json`, the
+   `runtime_receipt` check is false, as the evaluator would also be. Pass
+   `--runtime-lock` only for a separately approved lock.
+2. **Evaluate and publish** from the application that owns the review
+   `TrustStore`, using the `evaluate` and `publish` snippet above with
+   `fresh_output_relative="$STUDY/evaluation-run"`. Then run `verify_published` on
+   the returned private receipt descriptor.
+3. **Redacted aggregate report.** Run this only after `verify_published` passes.
+   The execution descriptor must be the exact `execution` artifact the evaluation
+   consumed, so its hash must appear in the evaluation's `input_hashes`:
+
+   ```sh
+   python -m src.paper_qualification_report_v1 report \
+     --data-root "$TRACE_GC_TEST_DATA_ROOT" \
+     --evaluation "$STUDY/evaluation-run/evaluation.json" \
+     --evaluation-sha256 "$EVALUATION_SHA256" \
+     --execution "$STUDY/execution.json" --execution-sha256 "$EXECUTION_SHA256" \
+     --output "$STUDY/aggregate-report.json"
+   ```
+
+The report (`paper-qualification-aggregate-report-v1`) requires a sibling
+`publication-complete.json` for that evaluation hash and rejects an invalidated
+publication. This is a guard, not a replacement for `verify_published`. It is
+built from an allowlist and contains:
+
+- status;
+- overall primary and per-stratum challenge counts, exact bounds and 95%
+  intervals;
+- per-arm summaries;
+- reference-status and route counts;
+- image counts;
+- per-stage calls, failures, retries, review counts and timings (null when
+  unavailable);
+- spend and graph writes, both of which must be zero.
+
+Every string must belong to a fixed vocabulary, so work IDs, paths, study
+identity, source text and review audit membership cannot be emitted. Partial or
+absent accepts appear only as a count. A BLOCKED reason is kept only when it is a
+plain code. The write is once-only. Exit 2 with `BLOCKED` reports invalid input
+without echoing it. The report inherits the evaluation's scope: first-page
+abstract extraction only, internally attributed review, no independent human
+validation.
 
 Run authored checks with:
 
 ```powershell
 python -m unittest tests.test_paper_qualification_v1 -v
+python -m unittest tests.test_paper_qualification_report_v1 -v
 python tools/run_validation.py
 ```
 
@@ -302,3 +392,6 @@ authored driver fixture exercises 400 primary cases, 80 challenge cases, all
 external source/regression/converter/image ports. It can meet the numerical
 contract without qualifying, and mode-only relabeling is rejected. Separate
 tests exercise actual fixture source/image readback and converter-assessment replay.
+The aggregate-report tests use synthetic rows with planted canary text and
+identifiers. They test redaction and arithmetic only and are not empirical
+evidence.
