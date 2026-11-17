@@ -264,7 +264,9 @@ class PhaseRestoreSidecarTests(unittest.TestCase):
         inspect_store = transition._restore_store_state
 
         def inspect(path, expected, binding, *, pending=False):
-            if pending and path == rejected_pending:
+            if pending and path.name == rejected_pending.name:
+                # Restore resolves the target directory, which can expand a Windows short path.
+                self.assertTrue(path.samefile(rejected_pending))
                 raise ContractError("PHASE_BACKUP", "partial binding changed")
             return inspect_store(path, expected, binding, pending=pending)
 
