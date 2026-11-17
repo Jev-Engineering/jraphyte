@@ -351,8 +351,9 @@ class OfflineProducerGuards(unittest.TestCase):
         with patch.object(producer,'_verified_row',return_value=([],[100,100],'eligible')), \
                 patch.object(producer,'verify_source_bound_assessment',
                              side_effect=AssertionError('native receipt reached assessment verification')):
-            with self.assertRaises((ValueError, AttributeError)):
+            with self.assertRaisesRegex(AttributeError, r"^'list' object has no attribute 'get'$") as refused:
                 producer._verify_receipt(self.root,row,receipt,self.output,None,protocol)
+        self.assertEqual(refused.exception.obj, [{'text':'native'}])
 
     def test_model_not_called_rejected(self):
         row, protocol, runtime, folder, conversion, _ = self.setup_attempt()

@@ -160,14 +160,22 @@ headroom; the worker peak alone is not a host memory budget.
 
 The 2026-09-29 example used 10 documents and 66.02 seconds end to end, giving
 about 18.3 hours projected for 10,000 documents. Peak worker memory was
-1,475 MiB. Reserve at least 24 hours with the additional memory headroom above.
-This projection is planning evidence, not a measured full-corpus runtime, and
-must be recomputed on the final frozen #19 tree/profile.
+1,475 MiB. The 24-hour planning window and memory headroom described above
+belong to that example. Derive the actual budget from a fresh smoke on the
+final frozen #19 tree and profile for the verified eligible count.
 
 ## Aggregate public receipt schema
 
-A publishable redacted summary derived from a completed private `ledger.json`
-has schema version `retrieval-assessment-aggregate-public-v1`. Its contract is:
+The redacted `retrieval-assessment-aggregate-public-v1` receipt summarizes a
+completed private `ledger.json` after independent readback from the bound
+protocol, manifest, profile, row receipts and assessment map. Use
+`FULL_CORPUS` only after verifying coverage of the whole frozen manifest and
+`EXPOSED_SMOKE` for the verified exposed subset. For a migrated run, verify
+the origin protocols, imported rows and pending-conversion lineage, including
+nested imports, and bind their evidence by digest. Distinguish inherited work
+from new attempts and measurements when reporting totals.
+
+The receipt contains the following fields.
 
 - `scope`: `FULL_CORPUS` or `EXPOSED_SMOKE`; `status`.
 - `private_evidence_sha256`: protocol, ledger, assessment map, manifest and
@@ -177,8 +185,16 @@ has schema version `retrieval-assessment-aggregate-public-v1`. Its contract is:
 - Converter totals: attempts, success, error and unknown/held.
 - Resource measurements: total wall seconds, median and maximum converter
   seconds, and peak worker bytes.
-- `query_independent: true`, `new_paid_api_calls: 0`,
-  `production_graph_writes: 0`, `graph_admission_enabled: false`.
+- Operational claims with verified evidence for the declared scope.
+  Assert `query_independent` from the bound selection inputs and execution
+  records. Assert `new_paid_api_calls` and `production_graph_writes` from
+  verified accounting across the run and its workers. Assert
+  `graph_admission_enabled` from the effective admission policy and execution
+  evidence. Bind the supporting private evidence by digest. For imported
+  work, verify the same claims against its origin evidence and distinguish
+  its accounting from activity new to the resumed run. Omit unsupported
+  claims or mark them unverified, including when an origin has missing
+  evidence. A completed ledger alone does not establish these values.
 
 Never include sample IDs, source paths, converter text, native text, proposals,
 labels, per-paper rankings or private model paths. This schema is a
