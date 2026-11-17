@@ -1065,7 +1065,8 @@ class PaperPilot:
                 "PILOT_QUERY", "frozen current-state downstream question required")
         def retrieve_(_):
             stamp = self._stamp()
-            retriever = HybridRetriever(SQLiteGraphAdapter(self.backend, self.catalog), catalog=self.catalog,
+            retriever = HybridRetriever(SQLiteGraphAdapter(self.backend, self.catalog, audit_trust=self.trust),
+                                        catalog=self.catalog,
                                         access_policy=self._access(), run_budget=self.budget)
             result = GraphRAGQueryService(retriever).query(request)
             for citation in result["context"]["citations"]:

@@ -30,7 +30,6 @@ class AccessFilter:
         from ..schema import validate
         validate("graph-access", policy)
         self.policy, self.catalog, self.statuses = deepcopy(policy), catalog, deepcopy(statuses)
-        self.historical = historical
 
     @property
     def fingerprint(self) -> str:
@@ -45,16 +44,25 @@ class AccessFilter:
                 (not g["users"] or p["user"] in g["users"]) and
                 (not g["roles"] or bool(set(g["roles"]) & set(p["roles"]))))
 
+    def source(self, source_id: str, *, current_status: dict[str, Any] | None = None,
+               catalog: Catalog | None = None) -> bool:
+        authority = self.catalog if catalog is None else catalog
+        if not self.allows("source", source_id) or source_id not in authority:
+            return False
+        source = authority.get(source_id, "source")
+        statuses = self.statuses if current_status is None else current_status
+        status = statuses.get(source_id)
+        return (source["security_scope"] == self.policy["tenant"] and bool(status) and
+                status["permission"] == "READ" and not status["tombstone"] and status["active"])
+
     def evidence(self, ref: str) -> bool:
         if ref not in self.catalog:
             return False
-        self.catalog.verify_evidence(ref)  # Existing Evidence Firewall, not a replacement.
         source_id = self.catalog.get(ref, "evidence")["source_snapshot_id"]
-        source = self.catalog.get(source_id, "source")
-        status = self.statuses.get(source_id)
-        return (self.allows("source", source_id) and source["security_scope"] == self.policy["tenant"] and
-                bool(status) and status["permission"] == "READ" and not status["tombstone"] and
-                (status["active"] or self.historical))
+        if not self.source(source_id):
+            return False
+        self.catalog.verify_evidence(ref)  # Existing Evidence Firewall.
+        return True
 
     def edge(self, ref: str, fact: dict[str, Any]) -> bool:
         a = fact["assertion"]
