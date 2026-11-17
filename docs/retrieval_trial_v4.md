@@ -244,3 +244,20 @@ items explicitly; unjudged documents are not automatically irrelevant. Keep
 known-item recall/MRR separate from these judgments. Internal assistant reviews
 must not be called independent human judgments. A later independent query set
 is still required for generalization claims after tuning on these 60 queries.
+
+## Sanitized metrics report
+
+Run `python -m src.retrieval_trial_report --trial-dir DIR --output FILE` against
+a completed private trial directory, with a new output file. The
+`retrieval-trial-sanitized-metrics-v1` schema separates candidate-channel
+recall from final-stage top-one, top-ten and MRR metrics, preserves NOT_RUN
+channels, and labels candidate-order-only results as not reranked. It exports
+only allowlisted aggregate measurements, hashes and fixed statuses; permutation
+arms contribute statuses, not quality scores. Private IDs, text, paths and
+rankings are excluded.
+
+The reporter refuses incomplete receipts, missing or hash-mismatched listed
+results, inconsistent metric arithmetic or union hits, and an existing output
+file. It certifies arithmetic consistency, not input provenance, and always
+leaves `issue_acceptance_complete` false. It is ready to run once the real
+corpus trial exists; no real-run output exists yet.

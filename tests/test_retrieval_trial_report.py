@@ -1,0 +1,109 @@
+"""Synthetic private receipts; no models or corpus."""
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+from src.retrieval_trial_report import aggregate, CHANNELS
+
+
+class TrialReportTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.result = dict(queries=4, top1=1, top10=2, mrr=0.3958333333333333,
+            candidate_coverage=0.75, candidate_depth=50, stage='local_cross_encoder',
+            details=[dict(id='SECRETQUERY'+str(i), target_id='SECRETDOC'+str(i),
+                query='secret query alpha', rank=r, candidate_present=r is not None,
+                top10=['SECRETDOC'+str(j) for j in range(6)])
+                for i, r in enumerate((1, 2, 12, None))],
+            candidate_stage_metrics={c: dict(status='MEASURED', hits=3, queries=4, recall=.75)
+                                     for c in CHANNELS}, index_seconds=1, candidate_seconds=2,
+            rerank_seconds=3, wall_seconds=6, process_cpu_seconds=5,
+            rankings={'SECRETQUERY0': ['SECRETDOC0']}, private_path='secret/model/path')
+        self.receipt = dict(status='COMPLETE', protocol_sha256='a'*64, document_count=6,
+            query_count=4, full_10000_by_60=False, ablations={'without_dense': 'MEASURED'},
+            relevance_judgments='NOT_PERFORMED', memory={'peak_rss_bytes': 123, 'secret': 'SECRETDOC', 'scope': 'SECRETDOC',
+                'child_processes_included': False},
+            new_paid_api_calls=0, production_graph_writes=0,
+            target_permutation={'status': 'PASS', 'private': 'SECRETQUERY'},
+            all_arm_target_permutations={'primary': {'status': 'PASS'}}, result_file_sha256={})
+        for name in ('primary', 'target_permutation', 'without_dense'):
+            result = json.loads(json.dumps(self.result))
+            if name == 'without_dense':
+                result['candidate_stage_metrics']['specter2'] = {'status': 'NOT_RUN'}
+            self.write_arm(name, result)
+        self.write_receipt()
+
+    def write_receipt(self):
+        (self.root/'receipt.json').write_text(json.dumps(self.receipt), encoding='utf-8')
+
+    def write_arm(self, name, result):
+        raw = json.dumps(dict(status='MEASURED_PENDING_FINAL_INTEGRITY', result=result)).encode()
+        (self.root/(name+'.json')).write_bytes(raw)
+        self.receipt['result_file_sha256'][name+'.json'] = hashlib.sha256(raw).hexdigest()
+
+    def test_metrics_separation_and_sanitization(self):
+        report = aggregate(self.root)
+        arm = report['arms']['primary']
+        self.assertEqual(arm['final_stage'], dict(stage='local_cross_encoder', reranked=True,
+            queries=4, top1=1, top10=2, mrr=self.result['mrr'], top1_rate=.25,
+            top10_rate=.5, misses_outside_candidate_pool=1, in_pool_ranked_below_10=1))
+        self.assertEqual(arm['candidate_stage']['union']['recall'], .75)
+        self.assertEqual(arm['timing']['wall_seconds'], 6)
+        self.assertEqual(report['memory'], {'peak_rss_bytes': 123, 'scope': 'UNKNOWN',
+                                            'child_processes_included': False})
+        self.assertEqual(report['arms']['without_dense']['candidate_stage']['specter2'], {'status':'NOT_RUN'})
+        self.assertNotIn('target_permutation', report['arms'])
+        self.assertFalse(report['issue_acceptance_complete'])
+        for secret in ('SECRETDOC', 'SECRETQUERY', 'secret query alpha', 'secret/model/path',
+                       'details', 'rankings', 'scored_calls', 'target_id'):
+            self.assertNotIn(secret, json.dumps(report))
+
+    def test_tampered_file(self):
+        (self.root/'primary.json').write_text('{}', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'trial_result_hash_mismatch:primary.json'):
+            aggregate(self.root)
+
+    def test_metrics_and_union_mismatch(self):
+        for key in ('mrr', 'union', 'queries'):
+            with self.subTest(key=key):
+                value = json.loads(json.dumps(self.result))
+                if key == 'union':
+                    value['candidate_stage_metrics']['union']['hits'] = 2
+                else:
+                    value[key] = 0
+                self.write_arm('primary', value)
+                self.write_receipt()
+                with self.assertRaisesRegex(ValueError, 'trial_metrics_readback_mismatch:primary'):
+                    aggregate(self.root)
+
+    def test_blocked_receipt(self):
+        self.receipt['status'] = 'BLOCKED'
+        self.write_receipt()
+        with self.assertRaisesRegex(ValueError, 'trial_receipt_not_complete'):
+            aggregate(self.root)
+
+    def test_candidate_order_only(self):
+        self.result['stage'] = 'candidate_order_only_not_reranked'
+        self.write_arm('primary', self.result)
+        self.write_receipt()
+        final = aggregate(self.root)['arms']['primary']['final_stage']
+        self.assertFalse(final['reranked'])
+        self.assertEqual(final['stage'], 'candidate_order_only_not_reranked')
+
+    def test_cli_exclusive_output(self):
+        output = self.root/'report.json'
+        command = [sys.executable, '-m', 'src.retrieval_trial_report', '--trial-dir',
+                   str(self.root), '--output', str(output)]
+        cwd = Path(__file__).resolve().parents[1]
+        subprocess.run(command, cwd=cwd, check=True, capture_output=True)
+        original = output.read_bytes()
+        self.assertTrue(original.endswith(b'\n'))
+        result = subprocess.run(command, cwd=cwd, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(output.read_bytes(), original)
