@@ -244,3 +244,33 @@ items explicitly; unjudged documents are not automatically irrelevant. Keep
 known-item recall/MRR separate from these judgments. Internal assistant reviews
 must not be called independent human judgments. A later independent query set
 is still required for generalization claims after tuning on these 60 queries.
+
+## Sanitized metrics report
+
+Run `python -m src.retrieval_trial_report --trial-dir DIR --output FILE` against
+a completed private trial directory, with a new output file. The
+`retrieval-trial-sanitized-metrics-v1` schema separates candidate-channel
+recall from final-stage top-one, top-ten and MRR metrics, preserves NOT_RUN
+channels, and labels candidate-order-only results as not reranked. It exports
+only allowlisted aggregate measurements, hashes and fixed statuses; permutation
+arms contribute statuses, not quality scores. Private IDs, text, paths and
+rankings are excluded.
+
+The reporter requires the primary results and every declared ablation with its
+target-permutation results. For each pair, it checks both results against
+their query details and the frozen target rotation, then verifies unchanged
+rankings, candidate pools and dense-cache binding against the receipt's
+reported check. It checks every listed file's hash and verifies the measured
+channels against each declared page or dense ablation. Receipt and result files must be regular files. Input errors
+use fixed codes and may identify an arm by its predefined name. The report
+checks arithmetic and replays the stored score order and SPECTER2 cache
+against their reported candidates. The dense cache must account for every
+vector batch. The dense artifact inventory is limited to the cache, its vector
+protocol, and the resulting checkpoints and batch receipts. Each checkpoint
+and batch receipt must match the cache and
+its frozen vector protocol. Query batch input hashes are checked against the
+frozen ordered query texts, and the historical protocol binds the recorded
+historical field file bytes. Vector checkpoint payloads are treated as opaque
+bytes. Source rights and the frozen protocol's
+external inputs require separate verification. The report always sets
+`issue_acceptance_complete` to false.

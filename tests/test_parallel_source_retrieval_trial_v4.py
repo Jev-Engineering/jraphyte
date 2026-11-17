@@ -14,6 +14,26 @@ from trace_gc.pdf_source_parallel_v4 import digest_value
 from src.parallel_source_v4.retrieval_policy import coverage, VERSION as POLICY_VERSION
 
 
+def write_dense_batch_fixture(output, cache, query_texts, fields_file_sha):
+    """Write authored checkpoint byte files and their normal format receipts."""
+    bindings = ('fields_sha256', 'ranking_inputs_sha256', 'document_ids_sha256', 'query_ids_sha256',
+                'model_manifest_sha256', 'model_revisions', 'top_k', 'target_ids_used_for_ranking')
+    protocol = {key: cache[key] for key in bindings}
+    protocol.update(schema_version='specter2-vector-protocol-v1', batch_size=16, fields_file_sha256=fields_file_sha)
+    write_once(output / 'protocol.json', protocol)
+    cache['protocol_sha256'] = digest_value(protocol)
+    cache['vector_batches'] = {}
+    for group, count in (('papers', cache['document_count']), ('queries', cache['query_count'])):
+        path = output / group / '00000.npz'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f'authored {group} checkpoint'.encode())
+        receipt = {'start': 0, 'count': count, 'input_sha256': digest_value(query_texts if group == 'queries' else group),
+                   'checkpoint_sha256': digest(path), 'truncated': 0}
+        receipt_sha = write_once(path.with_suffix('.receipt.json'),
+            {**receipt, 'schema_version': 'specter2-batch-v1', 'protocol_sha256': cache['protocol_sha256']})
+        cache['vector_batches'][group] = [{**receipt, 'receipt_sha256': receipt_sha}]
+
+
 class EmpiricalTrialTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -94,11 +114,14 @@ class EmpiricalTrialTests(unittest.TestCase):
         rankings = {q["id"]: [f["id"] for f in fields] for q in queries}
         result = {"binding_version": "ranking-inputs-v2", "channel": "specter2", "rankings": rankings,
                   "ranking_sha256": digest_value(rankings), "model_revision": "a" * 40,
+                  "model_revisions": {role: "a" * 40 for role in ("base", "paper", "query")},
+                  "model_manifest_sha256": digest(model_manifest), "document_count": len(fields),
+                  "query_count": len(queries), "dense_input_absent_count": 0, "dense_input_absent_ids": [],
                   "document_ids_sha256": digest_value([f["id"] for f in fields]),
                   "query_ids_sha256": digest_value([q["id"] for q in queries]),
                   "fields_sha256": digest_value(fields), "top_k": 50, "target_ids_used_for_ranking": False,
                   "ranking_inputs_sha256": digest_value([{"id": q["id"], "query": q["query"]} for q in queries])}
-        write_once(output / "protocol.json", {"fixture": "no-real-model"})
+        write_dense_batch_fixture(output, result, [q['query'] for q in queries], digest(fields_file))
         write_once(output / "dense_cache.json", result)
         return result
 
@@ -314,6 +337,16 @@ class EmpiricalTrialTests(unittest.TestCase):
         self.assertTrue(all(not c["bm25_page_topk"] for c in arms["without_page"]["candidates"].values()))
         self.assertTrue(all(arm["fields_count"] == 2 for arm in arms.values()))
         self.assertFalse(result["historical_source_certification"])
+
+    def test_combined_trial_receipt_can_be_aggregated(self):
+        from src.retrieval_trial_report import aggregate
+
+        self.historical()
+        self.config.update(without_page_ablation=True, without_dense_ablation=True)
+        self.assertEqual(self.run_trial()["status"], "COMPLETE")
+        report = aggregate(self.output)
+        self.assertEqual(len(report["arms"]), 5)
+        self.assertFalse(report["issue_acceptance_complete"])
 
     def test_historical_inputs_require_exact_external_hash_and_full_order(self):
         path = self.historical()
