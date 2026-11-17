@@ -279,19 +279,15 @@ class ModeledTokenGateTests(ModeledFence):
         self.hold(v1.TOKEN_NOT_REFUSED)
         self.assert_no_effect(before)
 
-    def test_an_unprotected_parent_with_new_control_flags_is_restored(self):
+    def test_unprotected_parent_without_auto_inheritance_is_refused_before_effects(self):
         self.model.token_bypasses_deny = True
         self.model.marks_auto_inherited = True
         self.model.set(self.parent, "", ["(A;OICIID;FA;;;SY)"])
         before = self.model.sddl(self.parent)
-        self.hold("old parent DACL changed beyond the exact deny-create ACE")
+        self.hold("parent DACL lacks protected or auto-inherited state for an exact edit")
         self.assert_no_effect(before)
-        self.model.restore_adds_ai = True
-        self.hold("old parent DACL changed beyond the exact deny-create ACE"
-                  "; original parent DACL restoration could not be verified"
-                  " (DACL differs from its pre-state)")
-        self.assertEqual(self.model.sddl(self.parent), "D:AI(A;OICIID;FA;;;SY)")
-        self.assertTrue(self.old.is_dir() and not self.receipt.exists())
+        recovery = self.receipt.with_name(self.receipt.name + ".dacl-recovery")
+        self.assertFalse(recovery.exists())
 
     def test_a_protected_parent_restores_exactly_under_the_same_marking(self):
         self.model.token_bypasses_deny = True
@@ -305,6 +301,11 @@ class ModeledTokenGateTests(ModeledFence):
         self.model.restore_exit = 5
         self.hold(v1.TOKEN_NOT_REFUSED + "; original parent DACL restoration could not be verified"
                   " (icacls exit 5)")
+        recovery = self.receipt.with_name(self.receipt.name + ".dacl-recovery")
+        saved_acl = recovery / "original.acl"
+        self.assertGreater(saved_acl.stat().st_size, 0)
+        self.hold("parent DACL recovery is pending")
+        self.assertTrue(saved_acl.is_file())
 
     def test_success_status_with_a_removed_grant_holds_and_restores_the_grant(self):
         self.model.set(self.parent, "P", ["(A;;LC;;;BU)", "(A;OICI;FA;;;BA)"])
