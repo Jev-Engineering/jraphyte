@@ -14,7 +14,6 @@ import os
 from pathlib import Path
 import subprocess
 from subprocess import SubprocessError
-from tempfile import TemporaryDirectory
 
 from trace_gc.canonical import bytes_digest, dumps, loads
 from trace_gc.errors import require
@@ -83,53 +82,72 @@ def _restore_parent_dacl(parent: Path, backup: Path, original: str) -> str | Non
     return None
 
 
-def _install_parent_deny(parent: Path, deny_sid: str, original: str) -> str:
-    deny = canonical_dacl_ace(DENY_PARENT_ACE.format(sid=deny_sid))
-    with TemporaryDirectory(prefix="paper-pilot-dacl-") as directory:
-        backup = Path(directory) / "original.acl"
-        try:
-            saved = subprocess.run(["icacls.exe", parent.name, "/save", str(backup)],
-                                   cwd=parent.parent, capture_output=True, timeout=30)
-            saved_ok = saved.returncode == 0 and backup.stat().st_size > 0
-        except (OSError, SubprocessError):
-            saved_ok = False
-        require(saved_ok, "PHASE_FENCE", "original parent DACL could not be saved")
+def _clear_recovery(backup: Path) -> None:
+    try:
+        backup.unlink(missing_ok=True)
+        backup.parent.rmdir()
+    except OSError:
+        require(False, "PHASE_FENCE", "parent DACL recovery artifact could not be cleared")
 
-        try:
-            updated = subprocess.run(["icacls.exe", str(parent), "/deny", "*" + deny_sid + ":(AD)"],
-                                     capture_output=True, timeout=30)
-        except (OSError, SubprocessError):
+
+def _install_parent_deny(parent: Path, deny_sid: str, original: str, recovery: Path) -> str:
+    flags = original.partition("(")[0].removeprefix("D:")
+    require("P" in flags or "AI" in flags, "PHASE_FENCE",
+            "parent DACL lacks protected or auto-inherited state for an exact edit")
+    deny = canonical_dacl_ace(DENY_PARENT_ACE.format(sid=deny_sid))
+    try:
+        recovery.mkdir()
+    except OSError:
+        require(False, "PHASE_FENCE", "parent DACL recovery is already pending or unavailable")
+    backup = recovery / "original.acl"
+    try:
+        saved = subprocess.run(["icacls.exe", parent.name, "/save", str(backup)],
+                               cwd=parent.parent, capture_output=True, timeout=30)
+        saved_ok = saved.returncode == 0 and backup.stat().st_size > 0
+    except (OSError, SubprocessError):
+        saved_ok = False
+    if not saved_ok:
+        _clear_recovery(backup)
+        require(False, "PHASE_FENCE", "original parent DACL could not be saved")
+
+    try:
+        updated = subprocess.run(["icacls.exe", str(parent), "/deny", "*" + deny_sid + ":(AD)"],
+                                 capture_output=True, timeout=30)
+    except (OSError, SubprocessError):
+        problem = "could not deny old state recreation"
+    else:
+        if updated.returncode != 0:
             problem = "could not deny old state recreation"
         else:
-            if updated.returncode != 0:
-                problem = "could not deny old state recreation"
+            try:
+                current = directory_dacl_sddl(parent)
+                exact_deny = dacl_has_ace(current, DENY_PARENT_ACE, deny_sid)
+                # Remove exactly one serialized deny from the candidate. All
+                # control flags and every original ACE must compare exactly.
+                unchanged = any(ace in current and current.replace(ace, "", 1) == original
+                                for ace in (deny, DENY_PARENT_ACE.format(sid=deny_sid)))
+            except Exception:
+                problem = DACL_UNVERIFIED
             else:
-                try:
-                    current = directory_dacl_sddl(parent)
-                    exact_deny = dacl_has_ace(current, DENY_PARENT_ACE, deny_sid)
-                    # Remove exactly one serialized deny from the candidate. All
-                    # control flags and every original ACE must compare exactly.
-                    unchanged = any(ace in current and current.replace(ace, "", 1) == original
-                                    for ace in (deny, DENY_PARENT_ACE.format(sid=deny_sid)))
-                except Exception:
-                    problem = DACL_UNVERIFIED
+                if not exact_deny:
+                    problem = "old parent lacks exact deny-create ACE"
+                elif not unchanged:
+                    problem = "old parent DACL changed beyond the exact deny-create ACE"
                 else:
-                    if not exact_deny:
-                        problem = "old parent lacks exact deny-create ACE"
-                    elif not unchanged:
-                        problem = "old parent DACL changed beyond the exact deny-create ACE"
-                    else:
-                        try:
-                            problem = _denial_problem(parent)
-                        except Exception:
-                            problem = DENIAL_UNVERIFIED
-                    if problem is None:
-                        return current
+                    try:
+                        problem = _denial_problem(parent)
+                    except Exception:
+                        problem = DENIAL_UNVERIFIED
+                if problem is None:
+                    _clear_recovery(backup)
+                    return current
 
-        why = _restore_parent_dacl(parent, backup, original)
-        if why is not None:
-            problem += "; original parent DACL restoration could not be verified (" + why + ")"
-        require(False, "PHASE_FENCE", problem)
+    why = _restore_parent_dacl(parent, backup, original)
+    if why is None:
+        _clear_recovery(backup)
+    else:
+        problem += "; original parent DACL restoration could not be verified (" + why + ")"
+    require(False, "PHASE_FENCE", problem)
 
 
 def _pinned_files(root: Path, expected: dict[str, str]) -> None:
@@ -169,8 +187,10 @@ def fence_closed_old_phase(*, old_root: str | Path, archived_root: str | Path,
     old, archived, receipt = Path(old_root), Path(archived_root), Path(receipt_path)
     # Reject existing reparse ancestors before the first DACL or namespace edit.
     # In particular, a Windows junction does not satisfy Path.is_symlink().
-    for path in (old, archived, receipt):
+    recovery = receipt.with_name(receipt.name + ".dacl-recovery")
+    for path in (old, archived, receipt, recovery):
         _plain_absolute_path(str(path))
+    require(not recovery.exists(), "PHASE_FENCE", "parent DACL recovery is pending")
     require(old.is_absolute() and archived.is_absolute() and receipt.is_absolute() and
             old.name == "state" and old != archived and
             old.drive.lower() == archived.drive.lower() and
@@ -199,7 +219,7 @@ def fence_closed_old_phase(*, old_root: str | Path, archived_root: str | Path,
         require(old.exists(), "PHASE_FENCE", "archive moved without durable parent deny")
         require(not dacl_has_deny_trustee(sddl, deny_sid), "PHASE_FENCE",
                 "old parent already carries another deny for the fence SID")
-        sddl = _install_parent_deny(old.parent, deny_sid, sddl)
+        sddl = _install_parent_deny(old.parent, deny_sid, sddl, recovery)
         problem = None
     else:
         problem = _denial_problem(old.parent)
