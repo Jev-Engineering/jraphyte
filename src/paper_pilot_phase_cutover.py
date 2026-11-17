@@ -84,6 +84,7 @@ def _restore_parent_dacl(parent: Path, backup: Path, original: str) -> str | Non
 
 def _clear_recovery(backup: Path) -> None:
     try:
+        backup.with_name("expected.json").unlink(missing_ok=True)
         backup.unlink(missing_ok=True)
         backup.parent.rmdir()
     except OSError:
@@ -109,6 +110,10 @@ def _install_parent_deny(parent: Path, deny_sid: str, original: str, recovery: P
     if not saved_ok:
         _clear_recovery(backup)
         require(False, "PHASE_FENCE", "original parent DACL could not be saved")
+    _write_once(backup.with_name("expected.json"), {
+        "original_dacl_sha256": bytes_digest(original.encode("utf-8")),
+        "backup_sha256": bytes_digest(backup.read_bytes()),
+    })
 
     try:
         updated = subprocess.run(["icacls.exe", str(parent), "/deny", "*" + deny_sid + ":(AD)"],

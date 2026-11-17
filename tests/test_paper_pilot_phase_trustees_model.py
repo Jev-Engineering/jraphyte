@@ -215,9 +215,12 @@ class ModeledFence(unittest.TestCase):
 
 
 class ModeledAliasFenceTests(ModeledFence):
-    def test_unsupported_conditional_ace_is_refused_without_truncation(self):
-        with self.assertRaisesRegex(ContractError, "unsupported DACL ACE syntax"):
-            authority.canonical_dacl_aces('D:P(XA;;LC;;;BU;(@User.Title == "Fixture"))')
+    def test_conditional_ace_is_preserved_without_truncation(self):
+        conditional = '(XA;;LC;;;BU;((@User.Title == "Fixture (test)") || Exists @User.Team))'
+        simple = '(D;;LC;;;BU)'
+        self.assertEqual(authority.canonical_dacl_aces('D:P' + conditional + simple), [conditional, simple])
+        with self.assertRaisesRegex(ContractError, "incomplete DACL ACE"):
+            authority.canonical_dacl_aces('D:P' + conditional[:-1])
 
     def test_the_literal_check_cannot_see_the_alias_spelled_deny(self):
         # The issue #110 mechanism: Windows spells the numeric SID as BU in DACL text.
@@ -304,6 +307,7 @@ class ModeledTokenGateTests(ModeledFence):
         recovery = self.receipt.with_name(self.receipt.name + ".dacl-recovery")
         saved_acl = recovery / "original.acl"
         self.assertGreater(saved_acl.stat().st_size, 0)
+        self.assertTrue(saved_acl.with_name("expected.json").is_file())
         self.hold("parent DACL recovery is pending")
         self.assertTrue(saved_acl.is_file())
 

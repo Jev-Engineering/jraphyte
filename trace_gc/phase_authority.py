@@ -140,13 +140,27 @@ def canonical_dacl_ace(ace: str) -> str:
 
 
 def canonical_dacl_aces(sddl: str) -> list[str]:
-    """Canonicalize supported ACEs in order, refusing unparsed condition text."""
+    """Keep complete ACEs in order, including opaque conditional expressions."""
     flags, opening, tail = sddl.partition("(")
     require(flags.startswith("D:") and ")" not in flags, "PHASE_FENCE", "invalid DACL text")
     entries = opening + tail
-    require(re.fullmatch(r"(?:\([^()]*\))*", entries) is not None,
-            "PHASE_FENCE", "unsupported DACL ACE syntax")
-    return [canonical_dacl_ace(ace) for ace in re.findall(r"\([^()]*\)", entries)]
+    result = []
+    depth = start = 0
+    quoted = False
+    for index, char in enumerate(entries):
+        if not depth:
+            require(char == "(", "PHASE_FENCE", "invalid DACL ACE delimiters")
+            start = index
+        if char == '"':
+            quoted = not quoted
+        elif not quoted and char == "(":
+            depth += 1
+        elif not quoted and char == ")":
+            depth -= 1
+            if not depth:
+                result.append(canonical_dacl_ace(entries[start:index + 1]))
+    require(not depth and not quoted, "PHASE_FENCE", "incomplete DACL ACE")
+    return result
 
 
 def dacl_has_ace(sddl: str, template: str, sid: str) -> bool:
