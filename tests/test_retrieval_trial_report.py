@@ -381,6 +381,15 @@ class TrialReportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '^trial_dense_cache_readback_mismatch$'):
             aggregate(self.root)
 
+    def test_dense_readback_allows_only_frozen_producer_files(self):
+        extra = self.root / 'specter2' / 'local-notes.json'
+        extra.write_bytes(b'{}')
+        files = self.receipt['dense_artifact_sha256']
+        files[extra.name] = hashlib.sha256(extra.read_bytes()).hexdigest()
+        self.write_receipt()
+        with self.assertRaisesRegex(ValueError, '^trial_dense_cache_readback_mismatch$'):
+            aggregate(self.root)
+
     def test_dense_readback_verifies_every_listed_producer_artifact(self):
         self.receipt['dense_artifact_sha256']['model-evidence.json'] = 'a'*64
         self.receipt['dense_conditions']['current']['artifact_sha256'] = self.receipt['dense_artifact_sha256']

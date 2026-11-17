@@ -307,6 +307,7 @@ def _check_dense_batches(directory, cache, artifacts, counts, query_texts, histo
     batches = cache['vector_batches']
     if type(batches) is not dict or set(batches) != set(counts):
         raise ValueError(error)
+    expected_files = {'dense_cache.json', 'protocol.json'}
     for group, total in counts.items():
         starts = range(0, total, batch_size)
         if type(batches[group]) is not list or len(batches[group]) != len(starts):
@@ -322,6 +323,7 @@ def _check_dense_batches(directory, cache, artifacts, counts, query_texts, histo
                     (group == 'queries' and expected['input_sha256'] != _canonical_hash(query_texts[start:start + count]))):
                 raise ValueError(error)
             name = f'{group}/{start:05d}'
+            expected_files.update((name + '.npz', name + '.receipt.json'))
             raw = _read_regular(directory / (name + '.receipt.json'), error)
             receipt_sha = hashlib.sha256(raw).hexdigest()
             if (artifacts[name + '.npz'] != expected['checkpoint_sha256'] or
@@ -329,6 +331,8 @@ def _check_dense_batches(directory, cache, artifacts, counts, query_texts, histo
                     receipt_sha != batch['receipt_sha256'] or
                     _canonical_hash(_json_object(raw, error)) != _canonical_hash(expected)):
                 raise ValueError(error)
+    if set(artifacts) != expected_files:
+        raise ValueError(error)
 
 
 def _check_dense_caches(trial_dir, receipt, results, queries, historical_ids):

@@ -265,7 +265,9 @@ channels against each declared page or dense ablation. Receipt and result files 
 use fixed codes and may identify an arm by its predefined name. The report
 checks arithmetic and replays the stored score order and SPECTER2 cache
 against their reported candidates. The dense cache must account for every
-vector batch, and each checkpoint and batch receipt must match the cache and
+vector batch. The dense artifact inventory is limited to the cache, its vector
+protocol, and the resulting checkpoints and batch receipts. Each checkpoint
+and batch receipt must match the cache and
 its frozen vector protocol. Query batch input hashes are checked against the
 frozen ordered query texts, and the historical protocol binds the recorded
 historical field file bytes. Vector checkpoint payloads are treated as opaque
