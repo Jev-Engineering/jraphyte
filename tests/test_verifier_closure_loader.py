@@ -275,13 +275,82 @@ class RejectionTests(unittest.TestCase):
         self.assertEqual(gate["rejected"], "unapproved_dynamic_import")
         self.assertNotIn("unreviewed_fixture", json.dumps(gate))
 
-    def test_copy_digest_covers_the_snapshot_supplied_to_the_verifier(self):
+    def test_receipt_hashes_cover_canonical_input_and_contract_snapshots(self):
+        release = Release(self)
+        release.write("entry.py", "def evaluate(inputs):\n"
+                                  "    return 'PASS' if list(inputs) == ['a', 'b'] else 'HOLD'\n")
+        contract = release.contract()
+        expected_contract_sha = loader.contract_sha256(contract)
+        inputs = {"b": 2, "a": 1}
+        original = loader._read_closure
+
+        def change_contract(*args, **kwargs):
+            contract["verifier_id"] = "changed_after_snapshot"
+            contract["closure"].clear()
+            return original(*args, **kwargs)
+
+        with mock.patch.object(loader, "_read_closure", side_effect=change_contract):
+            record = release.run(contract, inputs)
+        self.assertEqual(record["status"], "PASS")
+        self.assertEqual(record["verifier_id"], "authored-fixture")
+        self.assertEqual(record["release_contract_sha256"], expected_contract_sha)
+        self.assertEqual(record["input_sha256"], hashlib.sha256(loader.json_bytes(inputs)).hexdigest())
+
+    def test_inputs_and_contracts_reject_non_json_native_values(self):
         release = Release(self)
         contract = release.contract()
-        digest = hashlib.sha256(loader.json_bytes(ABOVE)).hexdigest()
-        self.assertEqual(release.run(contract, ABOVE)["input_sha256"], digest)
-        with mock.patch.object(loader.copy, "deepcopy", return_value=ABOVE):
-            self.assert_rejected("inputs_changed_during_snapshot", lambda: release.run(contract, BELOW))
+        class Text(str):
+            pass
+
+        for values in ({"value": (1, 2)}, {1: "fixture"}, {Text("key"): "fixture"},
+                       [float("nan")], [Text("value")]):
+            with self.subTest(values=values):
+                self.assert_rejected("invalid_verifier_inputs", lambda: release.run(contract, values))
+        cases = (
+            dict(contract, approved_external=("json",)),
+            dict(contract, closure={1: "0" * 64}),
+            dict(contract, verifier_id=Text("authored-fixture")),
+        )
+        for changed in cases:
+            with self.subTest(changed=changed):
+                self.assert_rejected("invalid_verifier_contract", lambda: release.run(changed))
+                self.assert_rejected("invalid_verifier_contract", lambda: loader.contract_sha256(changed))
+
+    def test_verifier_callable_is_resolved_without_module_getattr(self):
+        release = Release(self)
+        release.write("entry.py", "def __getattr__(name):\n    raise RuntimeError('fixture')\n")
+        contract = release.contract()
+        result = loader.evaluate_closure_gate(release.root, contract, BELOW, approved_roots=[release.root])
+        self.assertEqual((result["status"], result["rejected"]), ("HOLD", "verifier_callable_missing"))
+
+    def test_verifier_system_exit_is_hold_and_keyboard_interrupt_propagates(self):
+        release = Release(self)
+        for body, reason in (
+            ("raise SystemExit(1)\n", "import_SystemExit"),
+            ("def evaluate(inputs):\n    raise SystemExit(1)\n", "SystemExit"),
+        ):
+            with self.subTest(reason=reason):
+                release.write("entry.py", body)
+                result = release.run(release.contract())
+                self.assertEqual((result["status"], result["hold_reason"]), ("HOLD", reason))
+        contract = release.contract()
+        with mock.patch.object(loader._PrivateImporter, "module", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                loader.evaluate_closure_gate(release.root, contract, BELOW, approved_roots=[release.root])
+
+    def test_compilation_behavior_is_fixed_under_optimized_python(self):
+        release = Release(self)
+        release.write("entry.py", "def evaluate(inputs):\n"
+                                  "    \"\"\"Authored verifier fixture.\"\"\"\n"
+                                  "    return 'PASS' if __debug__ else 'HOLD'\n")
+        contract = release.contract()
+        invoke = ("import json, sys; from src.verifier_closure_loader import run_verifier; "
+                  "root, contract = sys.argv[1:]; "
+                  "print(run_verifier(root, json.loads(contract), {}, approved_roots=[root])['status'])")
+        completed = subprocess.run(
+            [sys.executable, "-OO", "-c", invoke, str(release.root), json.dumps(contract)],
+            capture_output=True, text=True, check=True)
+        self.assertEqual(completed.stdout.strip(), "PASS")
 
     def test_mutated_snapshot_is_rejected_and_caller_inputs_are_isolated(self):
         release = Release(self)

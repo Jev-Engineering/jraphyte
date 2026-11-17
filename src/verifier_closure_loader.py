@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import ast
 import builtins
-import copy
 import hashlib
 import importlib.machinery
 import importlib.util
@@ -76,7 +75,8 @@ def runtime_identity() -> dict:
 
 
 def contract_sha256(contract: dict) -> str:
-    return hashlib.sha256(json_bytes(contract)).hexdigest()
+    """Hash the canonical representation accepted by the verifier loader."""
+    return hashlib.sha256(_canonical_json(contract, "invalid_verifier_contract")).hexdigest()
 
 
 def _approved_root(root, approved_roots) -> Path:
@@ -279,8 +279,8 @@ def _read_closure(root: Path, contract: dict, *, check_ambiguity: bool) -> tuple
     hashes = {relative: hashlib.sha256(raw).hexdigest() for relative, raw in payloads.items()}
     try:
         reused = method_hashes(root, additional_roots=(contract["entry"], *contract["approved_dynamic"]))
-    except ValueError as exc:
-        _fail("closure_changed_while_reading", str(exc))
+    except (ValueError, OSError) as exc:
+        _fail("closure_changed_while_reading", type(exc).__name__)
     if reused != hashes:
         _fail("closure_scan_disagreement", ",".join(sorted(set(reused) ^ set(hashes))) or "hash")
     return modules, payloads
@@ -374,7 +374,8 @@ class _PrivateImporter:
             module.__path__ = []  # no finder may search the directory
         self.loaded[name] = module
         try:
-            code = compile(self.payloads[relative].decode("utf-8"), module.__file__, "exec", dont_inherit=True)
+            code = compile(self.payloads[relative].decode("utf-8"), module.__file__, "exec",
+                           dont_inherit=True, optimize=0)
             exec(code, module.__dict__)
         except BaseException:
             self.loaded.pop(name, None)
@@ -404,10 +405,22 @@ class _PrivateImporter:
         return module if fromlist else self.loaded[self.local_top]
 
 
-def _input_digest(value, rejection) -> str:
+def _copy_json(value):
+    """Copy exact JSON-native types before serialization can coerce values."""
+    kind = type(value)
+    if value is None or kind is str or kind is bool or kind is int or kind is float:
+        return value
+    if kind is list:
+        return [_copy_json(item) for item in value]
+    if kind is dict and all(type(key) is str for key in value):
+        return {key: _copy_json(item) for key, item in value.items()}
+    raise TypeError("expected JSON-native value")
+
+
+def _canonical_json(value, rejection: str) -> bytes:
     try:
-        return hashlib.sha256(json_bytes(value)).hexdigest()
-    except (TypeError, ValueError, RecursionError):
+        return json_bytes(_copy_json(value))
+    except (TypeError, ValueError, RuntimeError):
         _fail(rejection)
 
 
@@ -418,7 +431,11 @@ def _exception_name(exc) -> str:
 
 def run_verifier(root, contract: dict, inputs, *, approved_roots) -> dict:
     """Verify the full closure, execute only those bytes, recheck, then accept."""
+    contract_bytes = _canonical_json(contract, "invalid_verifier_contract")
+    contract = json.loads(contract_bytes)
     _validate_contract(contract)
+    input_bytes = _canonical_json(inputs, "invalid_verifier_inputs")
+    snapshot = json.loads(input_bytes)
     root = _approved_root(root, approved_roots)
     modules, payloads = _read_closure(root, contract, check_ambiguity=True)
     actual = {relative: hashlib.sha256(raw).hexdigest() for relative, raw in payloads.items()}
@@ -426,26 +443,20 @@ def run_verifier(root, contract: dict, inputs, *, approved_roots) -> dict:
         changed = sorted(k for k in set(actual) | set(contract["closure"])
                          if actual.get(k) != contract["closure"].get(k))
         _fail("closure_mismatch", ",".join(changed))
-    try:
-        snapshot = copy.deepcopy(inputs)
-    except (TypeError, ValueError, RecursionError):
-        _fail("invalid_verifier_inputs")
-    input_sha = _input_digest(snapshot, "invalid_verifier_inputs")
-    if _input_digest(inputs, "invalid_verifier_inputs") != input_sha:
-        _fail("inputs_changed_during_snapshot")
     importer = _PrivateImporter(root, modules, payloads, contract)
     outcome, error = "HOLD", None
     try:
         entry = importer.module(contract["entry"])
-    except Exception as exc:  # import-time failure is a HOLD, never a PASS
+    except (Exception, SystemExit) as exc:
         entry, error = None, "import_" + _exception_name(exc)
-    function = getattr(entry, contract["callable"], None) if entry is not None else None
+    # Lookup only a binding in the loaded module; this cannot call __getattr__.
+    function = entry.__dict__.get(contract["callable"]) if entry is not None else None
     if entry is not None and not isinstance(function, types.FunctionType):
         _fail("verifier_callable_missing", contract["callable"])
     if function is not None:
         try:
             outcome = function(snapshot)
-        except Exception as exc:  # a verifier failure is a HOLD, never a PASS
+        except (Exception, SystemExit) as exc:
             outcome, error = "HOLD", _exception_name(exc)
     if type(outcome) is str and outcome in RESULTS:
         outcome = RESULTS[RESULTS.index(outcome)]  # canonical literal, never a subclass
@@ -456,10 +467,12 @@ def run_verifier(root, contract: dict, inputs, *, approved_roots) -> dict:
     _, after = _read_closure(root, contract, check_ambiguity=False)
     if after != payloads:
         _fail("closure_changed_during_execution")
-    if any(_input_digest(value, "inputs_changed_during_execution") != input_sha for value in (snapshot, inputs)):
+    if any(_canonical_json(value, "inputs_changed_during_execution") != input_bytes
+           for value in (snapshot, inputs)):
         _fail("inputs_changed_during_execution")
     record = {"contract": CONTRACT, "verifier_id": contract["verifier_id"],
-              "release_contract_sha256": contract_sha256(contract), "input_sha256": input_sha,
+              "release_contract_sha256": hashlib.sha256(contract_bytes).hexdigest(),
+              "input_sha256": hashlib.sha256(input_bytes).hexdigest(),
               "status": outcome,
               "executed_representation": "verified_source_bytes_compiled_in_memory",
               "evidence": "mechanical_closure_check_not_qualification"}

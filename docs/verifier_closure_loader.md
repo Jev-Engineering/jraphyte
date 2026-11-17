@@ -31,7 +31,11 @@ of a top-level-only pin. It is not V6.
 | `approved_dynamic` | Sorted modules inside the verifier package that the code loads with a literal `__import__("...")`. They are pinned like static imports |
 | `closure` | `{relative path: sha256}` for every local file: entry, transitive helpers, package `__init__` files and approved dynamic modules |
 
-The contract digest is the SHA-256 of its canonical JSON (`json_bytes`).
+The loader accepts JSON-native contract and input values with string object
+keys. It takes an isolated snapshot of each and uses their canonical JSON
+bytes for the receipt digests. Tuples, subclasses of JSON types, non-string
+keys and non-finite numbers are rejected. The verifier receives input decoded
+from those same canonical bytes, including canonical object key order.
 `build_release_contract` produces a contract from a root for review. The review
 itself, signing and delivery happen out of band and are not performed here.
 
@@ -60,7 +64,8 @@ itself, signing and delivery happen out of band and are not performed here.
 
 Only after all of these checks pass does any verifier code run. The scanned
 bytes are decoded as UTF-8 for both scanning and in-memory compilation.
-Compilation uses `dont_inherit=True` and execution uses private module objects. The loader keeps them outside `sys.modules` and gives packages an empty `__path__`. No `__pycache__` file is read or written. A private
+Compilation uses `dont_inherit=True` and optimization level zero. Execution
+uses private module objects. The loader keeps them outside `sys.modules` and gives packages an empty `__path__`. No `__pycache__` file is read or written. A private
 `__import__` resolves local names only from the verified map and passes only
 declared host-provided exports to the verifier. It rejects dotted external
 imports and checks named external exports without calling the ambient importer.
@@ -68,9 +73,11 @@ A failed runtime check rejects the run even if the verifier catches the
 `ImportError`. The input digest covers the isolated copy passed to the
 verifier. Before accepting the result, the loader checks that the source bytes,
 the input copy and the caller's inputs still match their recorded state.
-A verifier exception, an import-time exception or any result other than the exact `str` `PASS`/`HOLD` (a `str` subclass or an
+The callable must be a function explicitly bound in the entry module. A
+verifier exception, including `SystemExit`, or any result other than the exact `str` `PASS`/`HOLD` (a `str` subclass or an
 object with its own `__eq__` is not accepted) becomes HOLD. The record stores
-the canonical literal. `evaluate_closure_gate` turns every closure rejection
+the canonical literal. Host keyboard interrupts propagate.
+`evaluate_closure_gate` turns every closure rejection
 into a HOLD record that carries the rejection code without source literals.
 Read and parse failures in the scan map to `closure_unreadable`, `closure_not_utf8`,
 `closure_syntax_error` and `invalid_module_reference`.
