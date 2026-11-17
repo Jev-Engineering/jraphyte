@@ -37,18 +37,28 @@ class RunBudget:
             else:
                 require(phase_authority is None, "PHASE_GUARD", "budget phase marker absent")
             if phase_authority is not None:
-                phase_scope = (phase_authority.write() if
-                    Path(phase_authority.binding["activation_path"]).exists() else
-                    phase_authority.staging())
+                binding = phase_authority.binding
+                require(run_id == binding["run_id"], "PHASE_BUDGET",
+                        "budget run differs from the phase binding")
+                active = Path(binding["activation_path"]).exists()
+                phase_scope = phase_authority.write() if active else phase_authority.staging()
                 phase_scope.__enter__()
                 phase_entered = True
-            self.db.execute("CREATE TABLE IF NOT EXISTS trace_budgets (run_id TEXT PRIMARY KEY, limits TEXT NOT NULL, used TEXT NOT NULL)")
-            with self._lock:
-                self.db.execute("BEGIN IMMEDIATE")
-                self.db.execute("INSERT OR IGNORE INTO trace_budgets VALUES (?,?,?)",(run_id,dumps(dict(limits)),dumps({k:0 for k in limits})))
-                current = self.db.execute("SELECT limits FROM trace_budgets WHERE run_id=?",(run_id,)).fetchone()
-                require(loads(current[0]) == dict(limits),"BUDGET_CONFIG_CHANGED","cannot reset an existing run's limits")
-                self.db.execute("COMMIT")
+                current = self.snapshot()
+                require(current["limits"] == dict(limits), "BUDGET_CONFIG_CHANGED",
+                        "cannot reset an existing run's limits")
+                if active:
+                    from .phase_transition import _read_once
+                    capsule = loads(_read_once(binding["capsule_path"], binding["capsule_sha256"]))
+                    self._verify_phase_floor(capsule["budget_snapshot"])
+            else:
+                self.db.execute("CREATE TABLE IF NOT EXISTS trace_budgets (run_id TEXT PRIMARY KEY, limits TEXT NOT NULL, used TEXT NOT NULL)")
+                with self._lock:
+                    self.db.execute("BEGIN IMMEDIATE")
+                    self.db.execute("INSERT OR IGNORE INTO trace_budgets VALUES (?,?,?)",(run_id,dumps(dict(limits)),dumps({k:0 for k in limits})))
+                    current = self.db.execute("SELECT limits FROM trace_budgets WHERE run_id=?",(run_id,)).fetchone()
+                    require(loads(current[0]) == dict(limits),"BUDGET_CONFIG_CHANGED","cannot reset an existing run's limits")
+                    self.db.execute("COMMIT")
         except BaseException:
             try:
                 if self.db.in_transaction:self.db.execute("ROLLBACK")
@@ -90,7 +100,18 @@ class RunBudget:
     def snapshot(self) -> dict[str,Any]:
         with self._lock:
             row=self.db.execute("SELECT limits,used FROM trace_budgets WHERE run_id=?",(self.run_id,)).fetchone()
+            require(row is not None, "PHASE_BUDGET", "restored run budget row is missing")
             return {"run_id":self.run_id,"limits":loads(row[0]),"used":loads(row[1])}
+
+    def _verify_phase_floor(self, historical):
+        current = self.snapshot()
+        floor, used, limits = historical["used"], current["used"], current["limits"]
+        require(historical["run_id"] == current["run_id"] and limits == historical["limits"] and
+                set(floor) == set(used) == set(limits) == RESOURCES and
+                all(type(used[key]) is int and 0 <= floor[key] <= used[key] <= limits[key]
+                    for key in RESOURCES),
+                "PHASE_BUDGET", "current budget differs from its inherited allocation or counters")
+        return current
 
     def close(self) -> None:
         self.db.close()

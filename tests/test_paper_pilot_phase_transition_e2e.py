@@ -1,0 +1,757 @@
+"""Authored synthetic mechanics only; no real transition or private-run evidence."""
+import copy
+from contextlib import contextmanager
+import json
+import os
+from pathlib import Path
+import shutil
+import tempfile
+import threading
+import unittest
+from unittest.mock import patch
+
+from tests import test_paper_pilot as fixtures
+from trace_gc.backend import CompilerService, SQLiteReferenceBackend
+from trace_gc.budget import RunBudget
+from trace_gc.canonical import bytes_digest, digest, dumps, loads
+from trace_gc.catalog import Catalog
+from trace_gc.compiler import now
+from trace_gc.demo import limits
+from trace_gc.errors import ContractError, require
+from trace_gc.paper_ingestion import CHECKS
+from trace_gc.paper_pilot import PaperPilot, implementation_identity
+from trace_gc.paper_pilot_controller import PaperPilotController
+from trace_gc.phase_authority import PhaseAuthority
+from trace_gc import phase_transition as transition
+from trace_gc.retrieval.security import grant
+from trace_gc.trust import IssuerPolicy, Signer
+from src import paper_pilot_phase_export as exporter
+
+fitz = fixtures.fitz
+NAMES = {'checkpoint.sqlite3', 'graph.sqlite3', 'budget.sqlite3',
+         'application-journal.sqlite3', 'controller.lock'}
+
+
+def files(root):
+    return {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()}
+
+
+class PhaseFixture:
+    access = fixtures.PaperPilotTests.access
+
+    def open(self):
+        # Called by the reused authored PDF/catalog setup, before any old steps.
+        self.base = self.root
+        self.root = self.base / 'state' / 'run'
+        self.root.mkdir(parents=True)
+        fixtures.PaperPilotTests.open(self)
+
+    def setUp(self):
+        self.old_identity = copy.deepcopy(implementation_identity())
+        self.old_identity['files']['synthetic-old-runtime-marker.py'] = '0' * 64
+        self.patches = [patch('trace_gc.paper_pilot.implementation_identity', return_value=self.old_identity),
+                        patch.object(exporter, 'implementation_identity', return_value=self.old_identity)]
+        for p in self.patches:
+            p.start()
+        self.addCleanup(self.stop_old)
+        temporary = tempfile.TemporaryDirectory
+        with patch.object(fixtures.tempfile, 'TemporaryDirectory',
+                          side_effect=lambda: temporary(dir=os.environ.get('ISSUE90_TEST_TMPDIR'))):
+            fixtures.PaperPilotTests.setUp(self)
+        self.addCleanup(self.temp.cleanup)
+        self.controller = None
+        self.authority = None
+        self.addCleanup(self.close_all)
+        self.initial = [self.catalog.record(ref) for ref in (self.schema, self.policy, self.claim)]
+        self.old_root = self.root
+        self.archive = self.base / 'archive' / 'run'
+        self.target = self.base / 'target' / 'run'
+        self.capsule_dir = self.base / 'capsule'
+        self.phase = self.base / 'phase'
+        self.phase.mkdir()
+        (self.phase / 'phase.lock').touch()
+        self.active = self.base / 'active'
+        self.active.mkdir()
+        self.pointer = self.active / 'phase.json'
+        self.manifest = {'version': 'real-paper-pilot-controller-v1', 'pilot_config': self.config,
+            'questions': self.config['questions'], 'acceptance': {
+                'phase': 'source_preparation_only', 'source_review_checks': sorted(CHECKS)},
+            'pages': [{'id': 'paper-page-2', 'source_id': 'authored-paper', 'version': 'v1',
+                       'pdf_sha256': bytes_digest(self.pdf), 'physical_page': 2,
+                       'start': 0, 'end': len(self.native.strip())}]}
+        self.controller = PaperPilotController(self.pilot, manifest=self.manifest, private_dir=self.root)
+        self.controller.preflight({'paper-page-2': self.pdf})
+        self.controller.prepare('paper-page-2', self.pdf)
+        prepared = 'source-prepare:paper-page-2'
+        at = now()
+        payload = self.pilot.source_review_payload(prepared, reviewer='authored-test-reviewer',
+            reviewer_kind='assistant', reviewed_at=at, checks={k: True for k in CHECKS})
+        reviewed = self.pilot.accept_source_review('review', prepared_id=prepared,
+            receipt=self.signer.issue('SOURCE_STATUS', payload, issued_at=at))
+        self.grants['source:' + reviewed['source_id']] = grant('pilot-test', 'private-test')
+        self.pilot.admit_sources('admit', review_ids=['review'], expected_version=0,
+            authorization=self.signer.issue('SOURCE_STATUS',
+                self.pilot.admission_payload(['review'], expected_version=0)))
+        self.candidates = [{'assertion': {'subject': 'authored-paper', 'predicate': 'supports',
+            'object': self.claim, 'qualifiers': {}}, 'claim_id': self.claim,
+            'evidence_ids': [reviewed['evidence_id']]}]
+        result = self.pilot.compile_candidates('compile', candidates=self.candidates)
+        self.assertEqual(result['state'], 'WAIT_SEMANTIC_RESPONSE')
+        self.old_requests = copy.deepcopy(self.pilot.requests)
+        attempt = self.base / 'attempt'
+        attempt.mkdir()
+        intent = {'version': 'issue23-semantic-intent-v1', 'compile_id': 'compile',
+            'pack_sha256': result['pack_sha256'], 'request_sha256': result['request_sha256'],
+            'automatic_retry': False, 'attempts_authorized': 1, 'graph_writes': 0}
+        intent_path = attempt / 'semantic-intent.json'
+        intent_path.write_text(dumps(intent) + '\n')
+        inventory = {'version': 'paper-pilot-phase-attempt-manifest-v1',
+            'run_id': self.config['run_id'], 'intent_sha256': bytes_digest(intent_path.read_bytes()),
+            'artifacts': {name: None for name in exporter.ATTEMPT_NAMES},
+            'source_receipts': {k: digest(v['args']['receipt']) for k, v in self.pilot.requests.items()
+                                if v['kind'] == 'REVIEW_SOURCE'},
+            'source_open_sha256': 'a' * 64, 'expected_budget_used': self.budget.snapshot()['used']}
+        manifest_path = attempt / 'attempt-manifest.json'
+        manifest_path.write_text(dumps(inventory) + '\n')
+        self.export_args = dict(expected_historical_identity_sha256=digest(self.old_identity),
+            external_semantic_intent_path=intent_path,
+            external_semantic_intent_sha256=bytes_digest(intent_path.read_bytes()),
+            attempt_manifest_path=manifest_path, attempt_manifest_sha256=bytes_digest(manifest_path.read_bytes()),
+            source_open_sha256='a' * 64)
+        # Establish main-file byte pins at the quiescent export boundary.
+        for db in (self.pilot.db, self.backend.db, self.budget.db, self.controller.db):
+            db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        self.export_old_bytes = {n: (self.old_root / n).read_bytes() for n in NAMES}
+
+    def stop_old(self):
+        for p in self.patches:
+            p.stop()
+        self.patches = []
+
+    def close_all(self):
+        for name in ('controller', 'pilot', 'backend', 'budget', 'authority'):
+            obj = getattr(self, name, None)
+            if obj is not None:
+                obj.close()
+                setattr(self, name, None)
+
+    def export(self, **changes):
+        args = {**self.export_args, **changes}
+        return exporter.export_phase(self.pilot, self.controller.db,
+                                     args.pop('destination', self.capsule_dir), **args)
+
+    def cutover(self):
+        self.export()
+        self.capsule_path = self.capsule_dir / 'capsule.json'
+        self.capsule = loads(self.capsule_path.read_bytes())
+        self.capsule_sha = bytes_digest(self.capsule_path.read_bytes())
+        self.capsule_bytes = files(self.capsule_dir)
+        self.close_all()
+        self.old_bytes = files(self.old_root)
+        self.assertEqual(set(self.old_bytes), NAMES)
+        self.assertEqual(self.old_bytes, self.export_old_bytes)
+        self.archive.parent.mkdir()
+        os.replace(self.old_root, self.archive)
+        self.stop_old()
+        fence = {'version': 'paper-pilot-phase-namespace-fence-v1',
+            'old_root_path': str(self.old_root), 'archived_root_path': str(self.archive),
+            'old_parent_dacl_sha256': 'b' * 64, 'deny_sid': 'S-1-5-21-authored',
+            'archived_files_sha256': {k: bytes_digest(v) for k, v in self.old_bytes.items()},
+            'status': 'OLD_PATH_FENCED_NEW_PHASE_ALLOWED'}
+        fence_path = self.phase / 'fence.json'
+        fence_path.write_text(dumps(fence) + '\n')
+        self.phase_signer = Signer.ephemeral('authored-phase-reviewer')
+        self.trust.enroll(self.phase_signer.issuer, IssuerPolicy(self.phase_signer.public_key(),
+            'authored phase reviewer', frozenset({'AUTHORIZATION'}),
+            frozenset({'PHASE_IMPORT', 'PHASE_ACTIVATE'}), frozenset({'pilot-test'}),
+            frozenset({'SYNTHETIC', 'LIVE'}), can_review=True))
+        self.identity = digest(implementation_identity())
+        self.auth = self.phase_signer.issue('AUTHORIZATION', {'version': transition.AUTH_VERSION,
+            'operation': 'PHASE_IMPORT', 'capsule_sha256': self.capsule_sha,
+            'target_implementation_sha256': self.identity, 'run_id': self.config['run_id']})
+        auth_path = self.phase / 'authorization.json'
+        auth_path.write_text(dumps(self.auth))
+        self.binding = dict(phase_id='authored-phase', run_id=self.config['run_id'],
+            capsule_sha256=self.capsule_sha, implementation_sha256=self.identity,
+            activation_path=str(self.pointer), activation_sha256='', activation_epoch=1,
+            phase_lock_path=str(self.phase / 'phase.lock'), fence_receipt_path=str(fence_path),
+            fence_receipt_sha256=bytes_digest(fence_path.read_bytes()), old_root_path=str(self.old_root),
+            archived_old_root_path=str(self.archive), capsule_path=str(self.capsule_path.resolve()),
+            authorization_path=str(auth_path), authorization_sha256=bytes_digest(auth_path.read_bytes()))
+        self.authority = self.make_authority()
+        self.receipt = self.phase_signer.issue('AUTHORIZATION', self.authority.activation_payload())
+        self.binding['activation_sha256'] = bytes_digest((dumps(self.receipt) + '\n').encode())
+        self.authority.binding = copy.deepcopy(self.binding)
+
+    def make_authority(self):
+        # Portable stand-in ONLY: Windows fence tests cover the real DACL fence.
+        # Keep real staging/write/current/signature/archive-handle implementations.
+        a = object.__new__(PhaseAuthority)
+        a.binding, a.trust = copy.deepcopy(self.binding), self.trust
+        a._mutex, a._depth, a._archived_lock_file = threading.RLock(), 0, None
+        a._lock_path = Path(a.binding['phase_lock_path'])
+        a._lock_file = a._lock_path.open('r+b')
+        stat = os.fstat(a._lock_file.fileno())
+        a._lock_identity = (stat.st_dev, stat.st_ino)
+
+        def fence():
+            b = a.binding
+            raw = Path(b['fence_receipt_path']).read_bytes()
+            require(bytes_digest(raw) == b['fence_receipt_sha256'], 'PHASE_FENCE', 'fence bytes')
+            f = loads(raw)
+            old, archived = Path(b['old_root_path']), Path(b['archived_old_root_path'])
+            require(set(f) == {'version', 'old_root_path', 'archived_root_path',
+                'old_parent_dacl_sha256', 'archived_files_sha256', 'deny_sid', 'status'} and
+                f['version'] == 'paper-pilot-phase-namespace-fence-v1' and
+                f['status'] == 'OLD_PATH_FENCED_NEW_PHASE_ALLOWED' and
+                f['old_root_path'] == str(old) and f['archived_root_path'] == str(archived) and
+                type(f['deny_sid']) is str and not old.exists() and archived.is_dir() and
+                set(f['archived_files_sha256']) == NAMES and
+                {p.name for p in archived.iterdir()} == NAMES and
+                all(not (getattr((archived / n).lstat(), 'st_file_attributes', 0) & 0x400)
+                    for n in NAMES) and
+                all(bytes_digest(a._archive_bytes(archived, n)) == sha
+                    for n, sha in f['archived_files_sha256'].items()), 'PHASE_FENCE', 'archive changed')
+
+        @contextmanager
+        def locked(*, active):
+            with a._mutex:
+                stat = a._lock_path.stat()
+                require((stat.st_dev, stat.st_ino) == a._lock_identity, 'PHASE_LOCK', 'lock replaced')
+                a._depth += 1
+                try:
+                    a._current() if active else a.verify_fence()
+                    yield
+                finally:
+                    a._depth -= 1
+        a.verify_fence, a._locked = fence, locked
+        return a
+
+    def restore(self, **changes):
+        return transition.restore_target(**{**dict(capsule_path=self.capsule_path,
+            capsule_sha256=self.capsule_sha, target_root=self.target, authorization=self.auth,
+            trust=self.trust, target_implementation_sha256=self.identity,
+            phase_authority=self.authority), **changes})
+
+    def open_target(self, config=None, binding=None):
+        self.root = self.target
+        self.catalog = Catalog(self.initial)
+        self.backend = SQLiteReferenceBackend(self.root / 'graph.sqlite3', catalog=self.catalog,
+            schema_id=self.schema, nodes=self.nodes, sandbox=True, phase_authority=self.authority)
+        self.budget = RunBudget(self.root / 'budget.sqlite3', self.config['run_id'],
+                               limits(model_calls=10), phase_authority=self.authority)
+        self.service = CompilerService(self.backend, self.trust, self.validator,
+            policy_version='pilot-reviewed-v1', population='authored-synthetic-only',
+            security_scope='pilot-test', policy_hash=self.catalog.hash(self.policy), publication_mode='REVIEWED')
+        self.pilot = PaperPilot(self.root, config=config or self.config, catalog=self.catalog,
+            backend=self.backend, service=self.service, budget=self.budget, current_access=self.access,
+            token_counter=lambda x: len(json.dumps(x)), phase_import=binding or self.binding,
+            phase_authority=self.authority)
+
+    def import_phase(self, **changes):
+        return self.pilot.import_phase(**{**dict(capsule_path=self.capsule_path,
+            capsule_sha256=self.capsule_sha, authorization=self.auth), **changes})
+
+    def controller_open(self):
+        self.controller = PaperPilotController(self.pilot, manifest=self.manifest, private_dir=self.target)
+
+    def activate(self, **changes):
+        return transition.activate_imported_phase(**{**dict(pilot=self.pilot,
+            controller=self.controller, phase_authority=self.authority,
+            activation_receipt=self.receipt), **changes})
+
+    def reopen_target(self, controller=True):
+        self.close_all()
+        self.authority = self.make_authority()
+        self.open_target()
+        if controller:
+            self.controller_open()
+
+    def preserved(self):
+        self.assertEqual(files(self.archive), self.old_bytes)
+        self.assertEqual(files(self.capsule_dir), self.capsule_bytes)
+        if self.budget is not None:
+            self.assertEqual(self.budget.snapshot(), self.capsule['budget_snapshot'])
+            self.assertEqual(self.backend.state(), self.capsule['graph_state'])
+            self.assertEqual(self.backend.statuses(), self.capsule['source_statuses'])
+
+    def inactive(self):
+        before = self.budget.snapshot()
+        with self.assertRaises(ContractError) as caught:
+            self.pilot.compile_candidates('compile2', candidates=self.candidates)
+        self.assertEqual(caught.exception.code, 'PHASE_INACTIVE')
+        with self.assertRaises(ContractError):
+            self.budget.consume_many({'model_calls': 1})
+        self.assertEqual(self.budget.snapshot(), before)
+
+
+@unittest.skipIf(fitz is None, 'optional PyMuPDF fixture dependency unavailable')
+class PhaseTransitionTests(PhaseFixture, unittest.TestCase):
+    def test_full_transition_and_reopen(self):
+        self.cutover()
+        restored = self.restore()
+        self.assertEqual(self.restore(), restored)
+        self.open_target()
+        self.import_phase()
+        self.controller_open()
+        result = self.activate()
+        self.assertEqual(result['status'], 'ACTIVE_IMPORTED_PHASE_EXACT')
+        self.assertEqual((result['model_calls'], result['graph_writes']), (0, 0))
+        pointer = self.pointer.read_bytes()
+        self.assertEqual(self.activate(), result)
+        self.assertEqual(self.pointer.read_bytes(), pointer)
+        with self.assertRaises(ContractError) as caught:
+            self.import_phase()
+        self.assertEqual(caught.exception.code, 'PHASE_INACTIVE')
+        self.reopen_target()
+        self.preserved()
+        events = [loads(r[0]) for r in self.pilot.db.execute('SELECT body FROM events ORDER BY seq')]
+        self.assertEqual([e['kind'] for e in events], ['OPEN', 'IMPORT_PHASE'])
+        self.assertNotEqual(events[0]['value']['implementation'], self.old_identity)
+        journal = [loads(r[0]) for r in self.controller.db.execute('SELECT body FROM events ORDER BY seq')]
+        self.assertEqual([e['kind'] for e in journal], ['FREEZE', 'APPLICATION_PHASE_IMPORT'])
+        self.assertEqual(journal[1]['old_journal_head'], self.capsule['application_journal_head'])
+        self.assertEqual(journal[1]['old_pilot_head'], self.capsule['checkpoint_head'])
+        self.assertEqual(self.pilot.requests, self.old_requests)
+        for record in self.capsule['catalog_records']:
+            self.assertEqual(self.catalog.record(record['id']), record)
+        self.assertFalse(any(r['kind'] == 'SEMANTIC_RESPONSE' for r in self.pilot.requests.values()))
+        with self.assertRaises(ContractError) as caught:
+            self.pilot.semantic_execution_context('compile')
+        self.assertEqual(caught.exception.code, 'PHASE_HISTORICAL_REQUEST')
+        # An identical replay of the pending COMPILE runs through the phased
+        # _step guard and returns the durable result without a second charge.
+        self.assertEqual(self.pilot.compile_candidates('compile', candidates=self.candidates),
+                         self.old_requests['compile']['result'])
+        self.preserved()
+        # Guard check uses disposable copies, never the immutable archive.
+        saved = (self.root, self.pilot, self.backend, self.budget, self.catalog)
+        self.root = self.base / 'scratch'
+        shutil.copytree(self.archive, self.root)
+        self.catalog = Catalog(self.initial)
+        try:
+            with self.assertRaises(ContractError) as caught:
+                fixtures.PaperPilotTests.open(self)
+            self.assertEqual(caught.exception.code, 'PILOT_CONFIG_CHANGED')
+        finally:
+            self.backend.close()
+            self.budget.close()
+            self.root, self.pilot, self.backend, self.budget, self.catalog = saved
+        self.preserved()
+
+    def test_historical_compile_cannot_import_but_new_phase_work_survives_reopen(self):
+        self.cutover(); self.restore(); self.open_target(); self.import_phase(); self.controller_open()
+        activation = self.activate()
+        self.reopen_target()
+        historical = self.pilot.requests['compile']['result']
+        response = fixtures.fixture_response(self.catalog.get(historical['pack_id'], 'pack'))
+        execution = fixtures.PaperPilotTests.execution
+        receipt = execution(self, 'compile', 'SEMANTIC', response)
+        before = [exporter._logical(db) for db in
+                  (self.pilot.db, self.backend.db, self.budget.db, self.controller.db)]
+        with self.assertRaises(ContractError) as caught:
+            self.pilot.record_semantic_response('historical-response', compile_id='compile',
+                response=response, execution_receipt=receipt)
+        self.assertEqual(caught.exception.code, 'PHASE_HISTORICAL_REQUEST')
+        self.assertEqual(before, [exporter._logical(db) for db in
+                                 (self.pilot.db, self.backend.db, self.budget.db, self.controller.db)])
+
+        compiled = self.pilot.compile_candidates('new-compile', candidates=self.candidates)
+        self.assertNotEqual(compiled['request_sha256'], historical['request_sha256'])
+        self.assertEqual(self.pilot.semantic_execution_context('new-compile')['pack_sha256'],
+                         compiled['pack_sha256'])
+        response = fixtures.fixture_response(self.catalog.get(compiled['pack_id'], 'pack'))
+        receipt = execution(self, 'new-compile', 'SEMANTIC', response)
+        before = exporter._logical(self.pilot.db)
+        with patch.object(self.authority, '_current', side_effect=ContractError('PHASE_INACTIVE')):
+            with self.assertRaises(ContractError) as caught:
+                self.pilot.semantic_execution_context('new-compile')
+            self.assertEqual(caught.exception.code, 'PHASE_INACTIVE')
+            with self.assertRaises(ContractError) as caught:
+                self.pilot.record_semantic_response('new-response', compile_id='new-compile',
+                    response=response, execution_receipt=receipt)
+            self.assertEqual(caught.exception.code, 'PHASE_INACTIVE')
+        self.assertEqual(exporter._logical(self.pilot.db), before)
+        result = self.pilot.record_semantic_response('new-response', compile_id='new-compile',
+            response=response, execution_receipt=receipt)
+        self.assertEqual(result['state'], 'WAIT_OBSERVATION_ATTESTATION')
+        attestations = {ref: fixtures.attest_observation(self.signer, self.catalog.record(ref, 'observation'))
+                        for ref in result['observation_ids']}
+        resolved = self.pilot.resolve_plan('new-resolve', response_id='new-response', attestations=attestations)
+        self.pilot.preflight_plan('new-preflight', resolve_id='new-resolve')
+        authorization = fixtures.authorize_plan(self.signer, self.catalog.get(resolved['plan_id'], 'plan'),
+            self.catalog.hash(resolved['plan_id']), reviewed_by='authored-test-reviewer')
+        def lose_publish_result():
+            raise RuntimeError('authored process loss after commit')
+
+        before_publish = self.budget.snapshot()
+        graph_before_publish = self.backend.state()
+        publish_args = {'preflight_id': 'new-preflight', 'authorization': authorization}
+        with self.assertRaisesRegex(RuntimeError, 'process loss after commit'):
+            self.pilot.publish_plan('new-publish', **publish_args, after_commit=lose_publish_result)
+        state, budget = self.backend.state(), self.budget.snapshot()
+        self.assertEqual(budget['used']['review_actions'], before_publish['used']['review_actions'] + 1)
+        self.assertNotIn('result', self.pilot.requests['new-publish'])
+        version = state['graph_version']
+        actual_event = self.backend.db.execute('SELECT * FROM trace_journal WHERE version=?', (version,)).fetchone()
+        self.backend.db.execute('DELETE FROM trace_journal WHERE version=?', (version,))
+        self.backend.db.execute('UPDATE trace_state SET body=? WHERE id=1', (dumps(graph_before_publish),))
+        try:
+            with self.assertRaises(ContractError) as caught:
+                self.pilot.publish_plan('new-publish', **publish_args)
+            self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+            self.assertNotIn('result', self.pilot.requests['new-publish'])
+        finally:
+            self.backend.db.execute('INSERT INTO trace_journal VALUES(?,?,?,?,?)', actual_event)
+            self.backend.db.execute('UPDATE trace_state SET body=? WHERE id=1', (dumps(state),))
+        self.reopen_target()
+        self.assertEqual(self.activate(), activation)
+        with self.assertRaises(ContractError) as caught:
+            self.pilot.compile_candidates('unrelated-while-publication-pending', candidates=self.candidates)
+        self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+        publication = self.pilot.publish_plan('new-publish', **publish_args)
+        self.assertEqual(self.pilot.publish_plan('new-publish', **publish_args), publication)
+        self.assertEqual(self.backend.state(), state)
+        self.assertEqual(self.budget.snapshot(), budget)
+        self.assertGreater(state['graph_version'], self.capsule['graph_state']['graph_version'])
+        self.assertEqual(budget['used']['model_calls'], 2)
+        self.reopen_target()
+        self.assertEqual(self.pilot.requests['new-response']['result'], result)
+        self.assertEqual(self.pilot.requests['compile']['result'], historical)
+        self.assertEqual(self.backend.state(), state)
+        self.assertEqual(self.budget.snapshot(), budget)
+        self.controller.prepare('paper-page-2', self.pdf)
+        stores = (self.pilot.db, self.backend.db, self.budget.db, self.controller.db)
+        before = [exporter._logical(db) for db in stores]
+        self.assertEqual(self.activate(), activation)
+        self.assertEqual([exporter._logical(db) for db in stores], before)
+        self.assertEqual(files(self.archive), self.old_bytes)
+
+        response_sha = self.pilot.requests['new-response']['args']['response_blob']
+        self.assertNotIn(response_sha, self.capsule['blobs'])
+        self.pilot.db.execute('DELETE FROM blobs WHERE hash=?', (response_sha,))
+        try:
+            with self.assertRaises(ContractError) as caught:
+                self.activate()
+            self.assertEqual(caught.exception.code, 'PILOT_BLOB_CHANGED')
+        finally:
+            self.pilot.db.execute('INSERT INTO blobs VALUES (?,?)', (response_sha, response))
+
+        # The internally consistent pre-publication graph lacks a completed
+        # checkpoint transaction. Active verification must detect the rollback.
+        version = state['graph_version']
+        row = self.backend.db.execute('SELECT * FROM trace_journal WHERE version=?', (version,)).fetchone()
+        self.backend.db.execute('DELETE FROM trace_journal WHERE version=?', (version,))
+        self.backend.db.execute('UPDATE trace_state SET body=? WHERE id=1', (dumps(graph_before_publish),))
+        try:
+            self.assertEqual(self.backend.audit()['events'], version - 1)
+            with self.assertRaises(ContractError) as caught:
+                self.activate()
+            self.assertEqual(caught.exception.code, 'PHASE_GRAPH')
+        finally:
+            self.backend.db.execute('INSERT INTO trace_journal VALUES(?,?,?,?,?)', row)
+            self.backend.db.execute('UPDATE trace_state SET body=? WHERE id=1', (dumps(state),))
+
+        # Restore a counter row that still meets the inherited floor, but
+        # omits completed current-phase work.
+        self.budget.db.execute('UPDATE trace_budgets SET used=? WHERE run_id=?',
+            (dumps(self.capsule['budget_snapshot']['used']), self.config['run_id']))
+        with self.assertRaises(ContractError) as caught:
+            self.activate()
+        self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+        with self.assertRaises(ContractError) as caught:
+            self.reopen_target()
+        self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+
+    def test_inactive_image_preparation_cannot_write_checkpoint_blobs(self):
+        self.cutover(); self.restore(); self.open_target(); self.import_phase()
+        before = exporter._logical(self.pilot.db)
+        text = 'authored image review fixture before phase activation'
+        with patch.object(self.pilot, "_blob", wraps=self.pilot._blob) as store:
+            with self.assertRaises(ContractError) as caught:
+                self.pilot.prepare_image_page('inactive-image', pdf_bytes=self.pdf,
+                    source_id='authored-paper', version='v1', physical_page=2,
+                    crop_bbox=[0, 0, 1, 1], transcription=text, producer='authored-fixture',
+                    raw_output=text.encode(), fallback_reason='native_corrupt',
+                    native_defect_note='authored test')
+            self.assertEqual(caught.exception.code, 'PHASE_INACTIVE')
+            store.assert_not_called()
+        self.assertEqual(exporter._logical(self.pilot.db), before)
+
+    def test_active_budget_holds_unreconciled_interrupted_reservation(self):
+        self.cutover(); self.restore(); self.open_target(); self.import_phase(); self.controller_open()
+        self.activate()
+        append = self.pilot._append
+
+        def lose_result(kind, value):
+            if kind == 'RESULT':
+                raise RuntimeError('authored loss after budget charge')
+            append(kind, value)
+
+        with patch.object(self.pilot, '_append', side_effect=lose_result):
+            with self.assertRaises(RuntimeError):
+                self.pilot.compile_candidates('interrupted-compile', candidates=self.candidates)
+        charged = self.budget.snapshot()
+        self.assertEqual(charged['used']['model_calls'], 2)
+        with self.assertRaises(ContractError) as caught:
+            self.pilot.compile_candidates('interrupted-compile', candidates=self.candidates)
+        self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+        self.assertEqual(self.budget.snapshot(), charged)
+        before = exporter._logical(self.pilot.db)
+        graph = self.pilot.backend.state()
+        with self.assertRaises(ContractError) as caught:
+            self.pilot.compile_candidates('separate-compile', candidates=self.candidates)
+        self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+        self.assertEqual(exporter._logical(self.pilot.db), before)
+        self.assertEqual(self.pilot.backend.state(), graph)
+        self.assertEqual(self.budget.snapshot(), charged)
+        with self.assertRaises(ContractError) as caught:
+            self.reopen_target()
+        self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+
+    def test_active_budget_allows_reopen_after_uncharged_validation_failure(self):
+        self.cutover(); self.restore(); self.open_target(); self.import_phase(); self.controller_open()
+        self.activate()
+        before = self.budget.snapshot()
+        for _ in range(2):
+            with self.assertRaises(ContractError) as caught:
+                self.pilot.compile_candidates('invalid-compile', candidates=[{}])
+            self.assertEqual(caught.exception.code, 'PILOT_CANDIDATE')
+        self.assertEqual(self.budget.snapshot(), before)
+        self.assertNotIn('result', self.pilot.requests['invalid-compile'])
+        self.reopen_target()
+        result = self.pilot.compile_candidates('valid-compile', candidates=self.candidates)
+        self.assertEqual(result['state'], 'WAIT_SEMANTIC_RESPONSE')
+        self.assertEqual(self.budget.snapshot()['used']['model_calls'], before['used']['model_calls'] + 1)
+        self.reopen_target()
+        self.assertEqual(self.pilot.requests['valid-compile']['result'], result)
+
+    def test_active_budget_rejects_alias_rollback_and_missing_row(self):
+        self.cutover(); self.restore(); self.open_target(); self.import_phase(); self.controller_open()
+        self.activate()
+        run_id = self.config['run_id']
+        original = self.budget.snapshot()
+
+        def open_budget(id_):
+            return RunBudget(self.target / 'budget.sqlite3', id_, original['limits'],
+                             phase_authority=self.authority)
+
+        before = exporter._logical(self.budget.db)
+        with self.assertRaises(ContractError) as caught:
+            open_budget('other-authored-run')
+        self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+        self.assertEqual(exporter._logical(self.budget.db), before)
+
+        # No pending intent accounts for the extra persisted use.
+        untracked = {**original['used'], 'review_actions': original['used']['review_actions'] + 1}
+        self.budget.db.execute('UPDATE trace_budgets SET used=? WHERE run_id=?', (dumps(untracked), run_id))
+        with self.assertRaises(ContractError) as caught:
+            self.activate()
+        self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+        self.budget.db.execute('UPDATE trace_budgets SET used=? WHERE run_id=?', (dumps(original['used']), run_id))
+
+        for key in ('model_calls', 'request_bytes'):
+            with self.subTest(counter=key):
+                used = {**original['used'], key: original['used'][key] - 1}
+                self.budget.db.execute('UPDATE trace_budgets SET used=? WHERE run_id=?', (dumps(used), run_id))
+                with self.assertRaises(ContractError) as caught:
+                    open_budget(run_id)
+                self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+                with self.assertRaises(ContractError) as caught:
+                    self.activate()
+                self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+        self.budget.db.execute('DELETE FROM trace_budgets WHERE run_id=?', (run_id,))
+        with self.assertRaises(ContractError) as caught:
+            open_budget(run_id)
+        self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+        self.assertEqual(self.budget.db.execute('SELECT * FROM trace_budgets').fetchall(), [])
+
+    def test_import_replay_and_activation_reject_missing_or_changed_historical_blob(self):
+        self.cutover(); self.restore(); self.open_target(); self.import_phase(); self.controller_open()
+        sha = self.old_requests['source-prepare:paper-page-2']['result']['page_png_blob']
+        original = self.pilot._read_blob(sha)
+        for body in (None, b'changed authored test bytes'):
+            with self.subTest(body=body):
+                self.pilot.db.execute('DELETE FROM blobs WHERE hash=?', (sha,))
+                if body is not None:
+                    self.pilot.db.execute('INSERT INTO blobs VALUES (?,?)', (sha, body))
+                before = exporter._logical(self.pilot.db)
+                for operation in (self.import_phase, self.activate):
+                    with self.assertRaises(ContractError) as caught:
+                        operation()
+                    self.assertEqual(caught.exception.code, 'PILOT_BLOB_CHANGED')
+                self.assertEqual(exporter._logical(self.pilot.db), before)
+                self.assertFalse(self.pointer.exists())
+        self.pilot.db.execute('UPDATE blobs SET body=? WHERE hash=?', (original, sha))
+        self.import_phase()
+        self.activate()
+        self.pilot.db.execute('DELETE FROM blobs WHERE hash=?', (sha,))
+        with self.assertRaises(ContractError) as caught:
+            self.reopen_target()
+        self.assertEqual(caught.exception.code, 'PILOT_BLOB_CHANGED')
+
+    def test_capsule_requires_historical_source_blob_references(self):
+        self.cutover()
+        sha = self.old_requests['source-prepare:paper-page-2']['result']['page_png_blob']
+        capsule = copy.deepcopy(self.capsule)
+        del capsule['blobs'][sha]
+        with self.assertRaises(ContractError) as caught:
+            transition.verify_capsule(capsule)
+        self.assertEqual(caught.exception.code, 'PHASE_BLOB')
+
+    def test_export_interruptions_resume(self):
+        original = exporter._backup
+        calls = 0
+        def interrupted(*args):
+            nonlocal calls
+            calls += 1
+            if calls == 3:
+                raise RuntimeError('third backup')
+            return original(*args)
+        before = [exporter._logical(db) for db in
+                  (self.pilot.db, self.backend.db, self.budget.db, self.controller.db)]
+        with patch.object(exporter, '_backup', side_effect=interrupted):
+            with self.assertRaises(RuntimeError):
+                self.export()
+        path_open = Path.open
+        def no_capsule(path, *args, **kwargs):
+            if path.name == 'capsule.json':
+                raise RuntimeError('before capsule')
+            return path_open(path, *args, **kwargs)
+        with patch.object(Path, 'open', no_capsule):
+            with self.assertRaises(RuntimeError):
+                self.export()
+        self.assertEqual(before, [exporter._logical(db) for db in
+            (self.pilot.db, self.backend.db, self.budget.db, self.controller.db)])
+        self.assertEqual({n: (self.old_root / n).read_bytes() for n in NAMES}, self.export_old_bytes)
+        self.cutover()
+        transition.verify_capsule(self.capsule)
+        self.assertEqual(set(files(self.capsule_dir)), {'capsule.json'} |
+                         {n + '.sqlite3' for n in self.capsule['database_backup_sha256']})
+        self.restore()
+        self.open_target()
+        self.preserved()
+
+    def test_import_interrupted_before_event(self):
+        self.cutover(); self.restore(); self.open_target()
+        append = self.pilot._append
+        def fail(kind, value):
+            if kind == 'IMPORT_PHASE':
+                raise RuntimeError('before import event')
+            return append(kind, value)
+        with patch.object(self.pilot, '_append', side_effect=fail):
+            with self.assertRaises(RuntimeError):
+                self.import_phase()
+        self.assertGreater(self.pilot.db.execute('SELECT count(*) FROM blobs').fetchone()[0], 0)
+        self.reopen_target(controller=False)
+        self.assertEqual(self.pilot.requests, {})
+        self.assertFalse(self.pilot._phase_imported)
+        self.import_phase()
+        self.assertEqual(self.pilot.db.execute('SELECT count(*) FROM events').fetchone()[0], 2)
+        self.preserved()
+
+    def test_import_lost_return_is_idempotent(self):
+        self.cutover(); self.restore(); self.open_target()
+        with patch('trace_gc.trust.now', return_value=self.auth['expires_at']):
+            with self.assertRaises(ContractError) as caught:
+                self.import_phase()
+            self.assertEqual(caught.exception.code, 'RECEIPT_EXPIRED')
+            self.assertEqual(self.pilot.db.execute('SELECT count(*) FROM events').fetchone()[0], 1)
+        append = self.pilot._append
+        def lost_return(kind, value):
+            append(kind, value)
+            if kind == 'IMPORT_PHASE':
+                raise RuntimeError('durable import, lost return')
+        with patch.object(self.pilot, '_append', side_effect=lost_return):
+            with self.assertRaises(RuntimeError):
+                self.import_phase()
+        result = {'status': 'PHASE_IMPORTED_HELD', 'capsule_sha256': self.capsule_sha,
+                  'checkpoint_head': self.pilot._head, 'model_calls': 0}
+        self.reopen_target(controller=False)
+        self.assertTrue(self.pilot._phase_imported)
+        before = files(self.target)
+        with patch('trace_gc.trust.now', return_value=self.auth['expires_at']):
+            self.assertEqual(self.import_phase(), result)
+        self.assertEqual(files(self.target), before)
+        for changes in ({'capsule_sha256': '0' * 64}, {'authorization': {}},
+                        {'capsule_path': self.phase / 'authorization.json'}):
+            with self.assertRaises(ContractError):
+                self.import_phase(**changes)
+        self.assertEqual(self.pilot.db.execute('SELECT count(*) FROM events').fetchone()[0], 2)
+        self.preserved()
+
+    def test_import_interrupted_after_append_requires_fresh_reopen(self):
+        self.cutover(); self.restore(); self.open_target()
+        apply = self.pilot._apply
+
+        def lose_projection(event):
+            if event['kind'] == 'IMPORT_PHASE':
+                raise RuntimeError('authored loss after checkpoint append')
+            apply(event)
+
+        with patch.object(self.pilot, '_apply', side_effect=lose_projection):
+            with self.assertRaises(RuntimeError):
+                self.import_phase()
+        before = exporter._logical(self.pilot.db)
+        with self.assertRaises(ContractError) as caught:
+            self.import_phase()
+        self.assertEqual(caught.exception.code, 'PHASE_IMPORT')
+        self.assertEqual(exporter._logical(self.pilot.db), before)
+        self.reopen_target(controller=False)
+        self.assertEqual(self.import_phase()['status'], 'PHASE_IMPORTED_HELD')
+        self.assertEqual(exporter._logical(self.pilot.db), before)
+
+    def test_controller_interruption_resumes(self):
+        self.cutover(); self.restore(); self.open_target(); self.import_phase()
+        append = PaperPilotController._append
+        def fail(controller, body):
+            if body['kind'] == 'APPLICATION_PHASE_IMPORT':
+                raise RuntimeError('after freeze')
+            return append(controller, body)
+        with patch.object(PaperPilotController, '_append', fail):
+            with self.assertRaises(RuntimeError):
+                self.controller_open()
+        self.reopen_target()
+        rows = self.controller.db.execute('SELECT body FROM events').fetchall()
+        self.assertEqual([loads(r[0])['kind'] for r in rows], ['FREEZE', 'APPLICATION_PHASE_IMPORT'])
+        self.preserved()
+
+    def test_first_activation_requires_the_signed_graph_journal_prefix(self):
+        self.cutover(); self.restore(); self.open_target(); self.import_phase(); self.controller_open()
+        version = self.backend.state()["graph_version"]
+        body, original_hash = self.backend.db.execute(
+            "SELECT body,hash FROM trace_journal WHERE version=?", (version,)).fetchone()
+        alternate = loads(body)
+        alternate["lineage_prefix"] = [{"authored_fixture": "different history"}]
+        alternate_hash = digest({key: value for key, value in alternate.items()
+                                 if key not in {"hash", "transaction_receipt"}})
+        alternate["hash"] = alternate_hash
+        alternate["transaction_receipt"]["event_hash"] = alternate_hash
+        self.backend.db.execute("UPDATE trace_journal SET body=?,hash=? WHERE version=?",
+                                (dumps(alternate), alternate_hash, version))
+        self.assertEqual(self.backend.audit()["head_hash"], alternate_hash)
+        with self.assertRaises(ContractError) as caught:
+            self.activate()
+        self.assertEqual(caught.exception.code, "PHASE_GRAPH")
+        self.assertFalse(Path(self.authority.binding["activation_path"]).exists())
+        self.backend.db.execute("UPDATE trace_journal SET body=?,hash=? WHERE version=?",
+                                (body, original_hash, version))
+        self.activate()
+
+    def test_activation_interruptions_resume(self):
+        self.cutover(); self.restore(); self.open_target(); self.import_phase(); self.controller_open()
+        with patch.object(transition.os, 'link', side_effect=RuntimeError('before publish')):
+            with self.assertRaises(RuntimeError):
+                self.activate()
+        self.assertEqual(list(self.active.iterdir()), [])
+        self.inactive()
+        self.preserved()
+        with patch.object(self.authority, '_current', side_effect=RuntimeError('lost return')):
+            with self.assertRaises(RuntimeError):
+                self.activate()
+        pointer = self.pointer.read_bytes()
+        result = self.activate()
+        self.assertEqual(result, self.activate())
+        self.assertEqual(self.pointer.read_bytes(), pointer)
+        self.reopen_target()
+        self.preserved()

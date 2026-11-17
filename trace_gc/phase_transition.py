@@ -136,6 +136,16 @@ def verify_capsule(capsule: dict[str, Any]) -> tuple[dict[str, dict], str]:
     for sha, encoded in capsule["blobs"].items():
         require(bytes_digest(base64.b64decode(encoded, validate=True)) == sha,
                 "PHASE_BLOB", "old blob changed")
+    for row in requests.values():
+        kind = row["kind"]
+        if kind not in {"PREPARE_SOURCE", "PREPARE_SOURCE_IMAGE"} or "result" not in row:
+            continue
+        args, result = row["args"], row["result"]
+        refs = {args["pdf_sha256"], result["page_png_blob"]}
+        if kind == "PREPARE_SOURCE_IMAGE":
+            refs.update([args["raw_output_sha256"], result["crop_png_blob"]])
+        require(refs.issubset(capsule["blobs"]), "PHASE_BLOB",
+                "historical source evidence is missing from the capsule")
     require(capsule["application_journal_events"] and
             capsule["application_journal_head"] == capsule["application_journal_events"][-1][2],
             "PHASE_JOURNAL", "application journal absent or changed")
@@ -401,6 +411,19 @@ def _restore_target_locked(*, capsule_path: str | Path, capsule_sha256: str,
     return receipt
 
 
+def _phase_events(db, error_code):
+    previous = None
+    events = []
+    for expected, (seq, raw, hash_) in enumerate(db.execute(
+            "SELECT seq,body,hash FROM events ORDER BY seq"), 1):
+        event = loads(raw)
+        require(seq == expected and event["previous"] == previous and digest(event) == hash_,
+                error_code, "phase event chain changed")
+        events.append(event)
+        previous = hash_
+    return events, previous
+
+
 def activate_imported_phase(*, pilot, controller, phase_authority,
                             activation_receipt: dict) -> dict:
     """Publish the signed active pointer after exact inactive import readback.
@@ -424,34 +447,45 @@ def activate_imported_phase(*, pilot, controller, phase_authority,
     require(bytes_digest(raw) == binding["activation_sha256"],
             "PHASE_ACTIVATION", "activation receipt bytes differ from binding")
     with phase_authority.staging():
-        phase_authority.verify_activation_receipt(activation_receipt)
+        active = pointer.exists()
+        if active:
+            require(pointer.read_bytes() == raw, "PHASE_ACTIVATION",
+                    "conflicting active phase pointer")
+        phase_authority.verify_activation_receipt(activation_receipt, historical=active)
         capsule = loads(_read_once(binding["capsule_path"], binding["capsule_sha256"]))
         imported, _ = verify_capsule(capsule)
-        checkpoint = [loads(row[0]) for row in pilot.db.execute(
-            "SELECT body FROM events ORDER BY seq")]
-        journal = [loads(row[0]) for row in controller.db.execute(
-            "SELECT body FROM events ORDER BY seq")]
-        require(len(checkpoint) == 2 and checkpoint[0]["kind"] == "OPEN" and
+        authorization = loads(_read_once(binding["authorization_path"], binding["authorization_sha256"]))
+        verify_import_authorization(pilot.trust, authorization,
+            capsule_sha256=binding["capsule_sha256"],
+            target_implementation_sha256=binding["implementation_sha256"],
+            run_id=binding["run_id"], historical=True)
+        checkpoint, head = _phase_events(pilot.db, "PHASE_ACTIVATION")
+        journal, _ = _phase_events(controller.db, "PHASE_ACTIVATION")
+        require(len(checkpoint) >= 2 and checkpoint[0]["kind"] == "OPEN" and
                 checkpoint[1] == {"kind": "IMPORT_PHASE", "value": {
                     "capsule_sha256": binding["capsule_sha256"],
                     "authorization_sha256": binding["authorization_sha256"]},
-                    "previous": digest(checkpoint[0])} and
-                len(journal) == 2 and journal[0]["kind"] == "FREEZE" and
+                    "previous": digest(checkpoint[0])} and head == pilot._head and
+                len(journal) >= 2 and journal[0]["kind"] == "FREEZE" and
+                journal[0]["manifest"] == controller.manifest and
+                journal[0]["pilot_head"] == digest(checkpoint[0]) and
                 journal[1]["kind"] == "APPLICATION_PHASE_IMPORT" and
                 journal[1]["capsule_sha256"] == binding["capsule_sha256"] and
                 journal[1]["old_journal_head"] == capsule["application_journal_head"] and
                 journal[1]["old_pilot_head"] == capsule["checkpoint_head"] and
-                set(pilot.requests) == set(imported) and
-                pilot.backend.state() == capsule["graph_state"] and
-                pilot.backend.statuses() == capsule["source_statuses"] and
-                pilot.budget.snapshot() == capsule["budget_snapshot"],
-                "PHASE_ACTIVATION", "inactive imported state or history changed")
-        controller._check_actions()
-        pilot.backend.audit()
-        if pointer.exists():
-            require(pointer.read_bytes() == raw, "PHASE_ACTIVATION",
-                    "conflicting active phase pointer")
+                all(pilot.requests.get(id_) == row for id_, row in imported.items()),
+                "PHASE_ACTIVATION", "imported phase history changed")
+        if active:
+            pilot._verify_active_budget(opening=True)
+            pilot._verify_completed_phase_blobs()
         else:
+            require(len(checkpoint) == len(journal) == 2 and pilot.requests == imported and
+                    pilot._matches_imported_state(capsule),
+                    "PHASE_ACTIVATION", "inactive imported state changed")
+        pilot._verify_imported_blobs(capsule)
+        controller._check_actions()
+        pilot._verify_active_graph()
+        if not active:
             temporary = pointer.parent / ("." + pointer.name + "." + uuid.uuid4().hex + ".tmp")
             with temporary.open("xb") as stream:
                 stream.write(raw)
