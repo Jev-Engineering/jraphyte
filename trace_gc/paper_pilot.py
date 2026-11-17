@@ -32,6 +32,10 @@ from .schema import validate
 from .trust import verify_observation_attestation
 
 VERSION = "paper-pilot-v1"
+_BUDGET_CHARGING_STAGES = frozenset({
+    "REVIEW_SOURCE_IMAGE", "REVIEW_SOURCE", "COMPILE", "RESOLVE",
+    "PUBLISH", "RETRIEVE", "PREPARE_ANSWER", "REVIEW_ANSWER",
+})
 
 
 def implementation_identity() -> dict:
@@ -75,6 +79,8 @@ class PaperPilot:
         self._phase_authority = phase_authority
         self._old_lock_file = None
         self._phase_imported = False
+        self._phase_budget_floor = None
+        self._historical_request_ids = frozenset()
         require(set(config) == {"run_id", "security_scope", "execution_mode", "documents", "questions",
                 "semantic_model", "answer_model", "cohort_manifest_sha256"}, "PILOT_CONFIG", "exact config fields required")
         require(config["execution_mode"] in {"LIVE", "SYNTHETIC"} and
@@ -154,9 +160,8 @@ class PaperPilot:
                     import fcntl
                     fcntl.flock(self._old_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 phase_authority.bind_archived_lock(self._old_lock_file)
-                phase_scope = (phase_authority.write() if
-                    Path(self.phase_import["activation_path"]).exists() else
-                    phase_authority.staging())
+                active_phase = Path(self.phase_import["activation_path"]).exists()
+                phase_scope = phase_authority.write() if active_phase else phase_authority.staging()
                 phase_scope.__enter__()
                 phase_entered = True
             self.db = sqlite3.connect(self.root / "checkpoint.sqlite3", isolation_level=None)
@@ -190,9 +195,15 @@ class PaperPilot:
             if not events:
                 self._append("OPEN", expected)
             if self.phase_import is not None:
+                if active_phase:
+                    self._verify_active_budget(opening=True)
                 backend.bind_phase_guard(phase_authority.write)
                 budget.bind_phase_guard(phase_authority.write)
-            backend.audit()
+            if self.phase_import is not None and active_phase:
+                self._verify_active_graph()
+                self._verify_completed_phase_blobs()
+            else:
+                backend.audit()
             for record in backend.load_catalog().all():
                 if record["id"] in catalog:
                     require(catalog.record(record["id"]) == record, "PILOT_RECORD_CHANGED", "checkpoint differs from graph record")
@@ -236,6 +247,14 @@ class PaperPilot:
         elif event["kind"] == "RESULT":
             request = self.requests[value["id"]]
             require("result" not in request, "PILOT_CHECKPOINT", "duplicate completion")
+            if self._phase_imported:
+                prior, limits = self._phase_budget_floor["used"], self._phase_budget_floor["limits"]
+                used = value.get("budget_used")
+                require(type(used) is dict and used.keys() == prior.keys() and
+                        all(type(used[key]) is int and prior[key] <= used[key] <= limits[key]
+                            for key in prior),
+                        "PHASE_BUDGET", "checkpoint budget evidence is missing or inconsistent")
+                self._phase_budget_floor = {**self._phase_budget_floor, "used": used}
             for record in value["records"]:
                 self.catalog.add(record)
             request["result"] = value["result"]
@@ -255,14 +274,26 @@ class PaperPilot:
                 run_id=self.config["run_id"], historical=True)
             imported, _ = verify_capsule(capsule)
             require(capsule["run_id"] == self.config["run_id"] and
-                    capsule["config"] == self.config and not self.requests and
-                    self.backend.state() == capsule["graph_state"] and
-                    self.backend.statuses() == capsule["source_statuses"] and
-                    self.budget.snapshot() == capsule["budget_snapshot"],
+                    capsule["config"] == self.config and not self.requests,
                     "PHASE_IMPORT", "import run/config/request inventory differs")
-            for record in capsule["catalog_records"]:
+            # Activation verifies the starting state before publishing the signed
+            # pointer. An active phase can have advanced its graph and budget.
+            if not Path(self.phase_import["activation_path"]).exists():
+                require(self._matches_imported_state(capsule),
+                        "PHASE_IMPORT", "inactive target state differs from capsule")
+            self._verify_imported_blobs(capsule)
+            # The raw checkpoint preserves insertion order used by wire_request.
+            # Canonical capsule catalog JSON has the same verified records but
+            # sorts their keys, which can change the reserved adapter bytes.
+            records = [loads(row[1])["value"]["records"]
+                       for row in capsule["checkpoint_events"]
+                       if loads(row[1])["kind"] == "RESULT"][-1]
+            for record in records:
                 self.catalog.add(record)
             self.requests.update(imported)
+            self._historical_request_ids = frozenset(imported)
+            self._phase_budget_floor = capsule["budget_snapshot"]
+            self._phase_graph_origin = self._inherited_graph_origin(capsule)
             self._phase_imported = True
         else:
             require(False, "PILOT_CHECKPOINT", "unknown event")
@@ -290,10 +321,101 @@ class PaperPilot:
         require(row is not None and bytes_digest(row[0]) == hash_, "PILOT_BLOB_CHANGED", "evidence missing or changed")
         return bytes(row[0])
 
+    def _matches_imported_state(self, capsule):
+        return (self.backend.state() == capsule["graph_state"] and
+                self.backend.statuses() == capsule["source_statuses"] and
+                self.budget.snapshot() == capsule["budget_snapshot"])
+
+    def _verify_imported_blobs(self, capsule):
+        for sha in capsule["blobs"]:
+            self._read_blob(sha)
+
+    def _verify_completed_phase_blobs(self):
+        refs = set()
+        for id_, request in self.requests.items():
+            if id_ in self._historical_request_ids or "result" not in request:
+                continue
+            args, result, kind = request["args"], request["result"], request["kind"]
+            if kind in {"PREPARE_SOURCE", "PREPARE_SOURCE_IMAGE"}:
+                refs.update((args["pdf_sha256"], result["page_png_blob"]))
+                if kind == "PREPARE_SOURCE_IMAGE":
+                    refs.update((args["raw_output_sha256"], result["crop_png_blob"]))
+            elif kind in {"SEMANTIC_RESPONSE", "ANSWER_RESPONSE"}:
+                refs.add(args["response_blob"])
+        for sha in sorted(refs):
+            self._read_blob(sha)
+
+    def _inherited_graph_origin(self, capsule):
+        from .phase_transition import _read_once
+        graph = capsule["graph_state"]
+        backup = Path(self.phase_import["capsule_path"]).parent / "graph.sqlite3"
+        expected = capsule["database_backup_sha256"]["graph"]
+        _read_once(backup, expected)
+        connection = sqlite3.connect(backup.as_uri() + "?mode=ro&immutable=1", uri=True)
+        try:
+            tip = connection.execute("SELECT version,hash FROM trace_journal ORDER BY version DESC LIMIT 1").fetchone()
+        finally:
+            connection.close()
+        _read_once(backup, expected)
+        version, head = tip if tip is not None else (0, None)
+        require(version == graph["graph_version"], "PHASE_GRAPH", "signed graph backup version differs")
+        return version, head, digest(graph), digest(capsule["source_statuses"])
+
+    def _verify_active_graph(self):
+        version, head, graph_hash, status_hash = self._phase_graph_origin
+        with self.backend._lock:
+            audit = self.backend.audit()
+            require(audit["events"] >= version, "PHASE_GRAPH", "active graph predates the signed capsule")
+            if version:
+                row = self.backend.db.execute("SELECT body,hash FROM trace_journal WHERE version=?", (version,)).fetchone()
+                require(row is not None and row[1] == head, "PHASE_GRAPH", "active graph lost the signed prefix")
+                inherited = loads(row[0])
+                graph, statuses = inherited["state_after"], inherited["source_status"]
+            else:
+                metadata = self.backend.db.execute("SELECT body FROM trace_meta WHERE id=1").fetchone()
+                graph, statuses = loads(metadata[0])["genesis_state"], {}
+            require(digest(graph) == graph_hash and digest(statuses) == status_hash,
+                    "PHASE_GRAPH", "inherited graph or source statuses differ")
+            for request in self.requests.values():
+                result = request.get("result")
+                if request["kind"] not in {"ADMIT", "PUBLISH"} or result is None:
+                    continue
+                receipt = result["receipt"]
+                row = self.backend.db.execute("SELECT body FROM trace_journal WHERE version=?",
+                                              (receipt["version"],)).fetchone()
+                require(row is not None and loads(row[0])["transaction_receipt"] == receipt,
+                        "PHASE_GRAPH", "completed checkpoint transaction differs from active graph")
+
+    def _verify_active_budget_floor(self):
+        require(self._phase_imported, "PHASE_INACTIVE", "historical phase import incomplete")
+        return self.budget._verify_phase_floor(self._phase_budget_floor)
+
+    def _verify_active_budget(self, *, opening=False, recovering_id=None):
+        used = self._verify_active_budget_floor()["used"]
+        floor = self._phase_budget_floor["used"]
+        pending = [row for id_, row in self.requests.items() if id_ not in self._historical_request_ids
+                   and "result" not in row and row["kind"] in _BUDGET_CHARGING_STAGES]
+        if used == floor:
+            return
+        if (opening or recovering_id is not None) and used == {**floor, "review_actions": floor["review_actions"] + 1}:
+            proven = []
+            for row in pending:
+                if row["kind"] != "PUBLISH" or row.get("budget_used_before") != floor:
+                    continue
+                recovered = self._committed_publication(**row["args"])
+                if (recovered and recovered["receipt"]["version"] == row["graph_version_before"] + 1 and
+                        timestamp(recovered["receipt"]["committed_at"]) >= timestamp(row["created_at"])):
+                    proven.append(row["id"])
+            # A matching authoritative commit makes this one charge attributable.
+            # Resume only that request; all unrelated charged interruptions hold.
+            if len(proven) == 1 and (opening or recovering_id == proven[0]):
+                return
+        require(False, "PHASE_BUDGET", "interrupted stage has unreconciled budget usage")
+
     def _step(self, id_, kind, args, action):
         with self._mutex, (self._phase_authority.write() if self._phase_authority is not None else nullcontext()):
             if self.phase_import is not None:
-                require(self._phase_imported, "PHASE_INACTIVE", "historical phase import incomplete")
+                self._verify_active_budget_floor()
             require(type(id_) is str and bool(id_), "PILOT_REQUEST", "stable request ID required")
             require(implementation_identity() == self._identity, "PILOT_CODE_CHANGED", "implementation changed during run")
             require(self.service.backend is self.backend and self.service.trust is self.trust and
@@ -303,18 +425,31 @@ class PaperPilot:
                             "semantic_profile": self.semantic_profile,
                             "schema_hash": self.backend.state()["schema_hash"], "policy_hash": self.service.policy_hash,
                             "population": self.service.population, "policy_version": self.service.policy_version,
-                            "sandbox": self.backend.sandbox}) == self._application_binding,
+                            "sandbox": self.backend.sandbox,
+                            **({"phase_import": self.phase_import} if self.phase_import is not None else {})}) == self._application_binding,
                     "PILOT_CONFIG_CHANGED", "application capability or configuration changed during run")
             args = loads(dumps(args))
-            if id_ not in self.requests:
-                self._append("INTENT", {"id": id_, "kind": kind, "args": args, "created_at": now()})
+            existing = id_ in self.requests
+            if not existing:
+                if self.phase_import is not None:
+                    self._verify_active_budget()
+                initial = {"id": id_, "kind": kind, "args": args, "created_at": now()}
+                if self._phase_imported and kind == "PUBLISH":
+                    initial.update(graph_version_before=self.backend.state()["graph_version"],
+                                   budget_used_before=self.budget.snapshot()["used"])
+                self._append("INTENT", initial)
             intent = self.requests[id_]
             require(intent["kind"] == kind and intent["args"] == args,
                     "PILOT_IDEMPOTENCY_CONFLICT", "same request ID has different immutable input")
             if "result" not in intent:
+                if self.phase_import is not None and existing:
+                    self._verify_active_budget(recovering_id=id_ if kind == "PUBLISH" else None)
                 result = action(intent["created_at"])
                 require(implementation_identity() == self._identity, "PILOT_CODE_CHANGED", "implementation changed during stage")
-                self._append("RESULT", {"id": id_, "result": result, "records": self.catalog.all()})
+                completed = {"id": id_, "result": result, "records": self.catalog.all()}
+                if self._phase_imported:
+                    completed["budget_used"] = self.budget.snapshot()["used"]
+                self._append("RESULT", completed)
             return loads(dumps(self.requests[id_]["result"]))
 
     def _require_active_phase(self):
@@ -333,8 +468,8 @@ class PaperPilot:
                 capsule_sha256=capsule_sha256, authorization=authorization)
 
     def _import_phase_locked(self, *, capsule_path, capsule_sha256, authorization):
-        from .phase_transition import _read_once, verify_capsule, verify_import_authorization
-        require(self.phase_import is not None and not self._phase_imported and
+        from .phase_transition import _phase_events, _read_once, verify_capsule, verify_import_authorization
+        require(self.phase_import is not None and
                 str(Path(capsule_path).resolve(strict=True)) ==
                     str(Path(self.phase_import["capsule_path"]).resolve(strict=True)) and
                 capsule_sha256 == self.phase_import["capsule_sha256"],
@@ -345,19 +480,38 @@ class PaperPilot:
         require(authorization == loads(_read_once(self.phase_import["authorization_path"],
                                                   self.phase_import["authorization_sha256"])),
                 "PHASE_AUTHORITY", "import authorization file differs")
-        verify_import_authorization(self.trust, authorization,
-            capsule_sha256=capsule_sha256,
-            target_implementation_sha256=digest(self._identity),
-            run_id=self.config["run_id"])
+        receipt_binding = {"capsule_sha256": capsule_sha256,
+                           "target_implementation_sha256": digest(self._identity),
+                           "run_id": self.config["run_id"]}
+        events, head = _phase_events(self.db, "PHASE_IMPORT")
+        if self._phase_imported:
+            # Reconcile a durable import whose caller lost the return value.
+            # Only the untouched, inactive two-event transition can replay.
+            require(len(events) == 2 and events[0]["kind"] == "OPEN" and
+                    events[1] == {"kind": "IMPORT_PHASE", "value": {
+                        "capsule_sha256": capsule_sha256,
+                        "authorization_sha256": self.phase_import["authorization_sha256"]},
+                        "previous": digest(events[0])} and
+                    self._head == head and self.requests == requests and
+                    capsule["config"] == self.config and
+                    capsule["run_id"] == self.config["run_id"] and
+                    self._matches_imported_state(capsule),
+                    "PHASE_IMPORT", "import replay differs from durable transition")
+            verify_import_authorization(self.trust, authorization, historical=True, **receipt_binding)
+            self._verify_imported_blobs(capsule)
+            return {"status": "PHASE_IMPORTED_HELD", "capsule_sha256": capsule_sha256,
+                    "checkpoint_head": self._head, "model_calls": 0}
+        require(len(events) == 1 and events[0]["kind"] == "OPEN" and self._head == head,
+                "PHASE_IMPORT", "checkpoint requires a fresh reopen before import")
+        verify_import_authorization(self.trust, authorization, **receipt_binding)
         require(capsule["config"] == self.config and capsule["run_id"] == self.config["run_id"] and
-                not self.requests and self.backend.state() == capsule["graph_state"] and
-                self.backend.statuses() == capsule["source_statuses"] and
-                self.budget.snapshot() == capsule["budget_snapshot"],
+                not self.requests and self._matches_imported_state(capsule),
                 "PHASE_IMPORT", "new phase is not an exact target")
         for sha, encoded in capsule["blobs"].items():
             body = base64.b64decode(encoded, validate=True)
             require(bytes_digest(body) == sha, "PHASE_BLOB", "import blob differs")
             self.db.execute("INSERT OR IGNORE INTO blobs(hash,body) VALUES (?,?)", (sha, body))
+        self._verify_imported_blobs(capsule)
         self._append("IMPORT_PHASE", {"capsule_sha256": capsule_sha256,
                                      "authorization_sha256": self.phase_import["authorization_sha256"]})
         require(set(self.requests) == set(requests), "PHASE_IMPORT", "request projection differs")
@@ -406,8 +560,7 @@ class PaperPilot:
         require(allowed is not None and allowed["version"] == version and
                 allowed["document_sha256"] == bytes_digest(pdf_bytes) and physical_page in allowed["physical_pages"],
                 "PILOT_COHORT", "source or physical page outside frozen frame")
-        blob = self._blob(pdf_bytes)
-        args = dict(pdf_sha256=blob, source_id=source_id, version=version, physical_page=physical_page, start=start, end=end)
+        args = dict(pdf_sha256=bytes_digest(pdf_bytes), source_id=source_id, version=version, physical_page=physical_page, start=start, end=end)
         def prepare(_):
             metadata, png, _ = render_source(pdf_bytes, physical_page=physical_page, dpi=144)
             native = _native_text(pdf_bytes, physical_page)
@@ -415,6 +568,7 @@ class PaperPilot:
                     "PILOT_SPAN", "nonempty exact native span required")
             packet = {**args, "render": metadata["render"], "native_text_sha256": text_digest(native),
                       "excerpt": native[start:end], "excerpt_sha256": text_digest(native[start:end])}
+            self._blob(pdf_bytes)
             return {"state": "WAIT_SOURCE_REVIEW", "packet": packet, "packet_sha256": digest(packet),
                     "page_png_blob": self._blob(png)}
         return self._step(id_, "PREPARE_SOURCE", args, prepare)
@@ -459,7 +613,7 @@ class PaperPilot:
                 ((fallback_reason == "native_absent" and native_defect_note is None) or
                  (fallback_reason == "native_corrupt" and type(native_defect_note) is str and
                   native_defect_note.strip())), "PILOT_IMAGE_ROUTE", "explicit native defect required")
-        pdf_hash, raw_hash = self._blob(pdf_bytes), self._blob(raw_output)
+        pdf_hash, raw_hash = bytes_digest(pdf_bytes), bytes_digest(raw_output)
         args = dict(pdf_sha256=pdf_hash, raw_output_sha256=raw_hash, source_id=source_id,
                     version=version, physical_page=physical_page, crop_bbox=crop_bbox,
                     transcription=transcription, producer=producer,
@@ -481,6 +635,8 @@ class PaperPilot:
                 input_crop_sha256=metadata["crop"]["png_sha256"], fallback_reason=fallback_reason)
             verify_artifacts(candidate, pdf_bytes=pdf_bytes, raw_output=raw_output,
                              page_png=page_png, crop_png=crop_png)
+            self._blob(pdf_bytes)
+            self._blob(raw_output)
             return {"state": "WAIT_IMAGE_SOURCE_REVIEW", "candidate": candidate,
                     "candidate_sha256": candidate_hash(candidate),
                     "page_png_blob": self._blob(page_png), "crop_png_blob": self._blob(crop_png)}
@@ -639,11 +795,11 @@ class PaperPilot:
         return max(a[0], b[0]) < min(a[2], b[2]) and max(a[1], b[1]) < min(a[3], b[3])
 
     def _committed(self, key, *, authorization, operation_hash=None, plan_hash=None, preflight_hash=None):
-        self.backend.audit()
-        rows = [r["body"] for r in self.backend.load_catalog().all("transaction") if r["body"]["idempotency_key"] == key]
-        require(len(rows) <= 1, "PILOT_TRANSACTION", "duplicate backend receipt")
-        if rows:
-            receipt = rows[0]
+        with self.backend._lock:
+            self.backend.audit()
+            row = self.backend.db.execute("SELECT body FROM trace_journal WHERE key=?", (key,)).fetchone()
+        if row is not None:
+            receipt = loads(row[0])["transaction_receipt"]
             require(receipt["authorization_hash"] == digest(authorization) and
                     (operation_hash is None or receipt["operation_hash"] == operation_hash) and
                     (plan_hash is None or receipt["plan_hash"] == plan_hash) and
@@ -695,6 +851,10 @@ class PaperPilot:
         self._fresh(result["stamp"])
         return result, pack
 
+    def _require_current_semantic_compile(self, compile_id):
+        require(compile_id not in self._historical_request_ids,
+                "PHASE_HISTORICAL_REQUEST", "historical compile is held for audit")
+
     @boundary
     def semantic_execution_context(self, compile_id):
         """Fresh application callback for a separately authorized local execution.
@@ -702,12 +862,16 @@ class PaperPilot:
         This does not reserve another model call, sign a response or run a model.
         The durable COMPILE intent must already exist.
         """
-        result, pack = self._pack_fresh(compile_id)
-        context = {"pack_sha256": self.catalog.hash(result["pack_id"]),
-                   "graph_version": pack["graph_version"], "schema_hash": pack["schema_hash"],
-                   "source_status": self.backend.statuses(), "graph_access": self._access()}
-        self._fresh(result["stamp"])
-        return context
+        with self._mutex, (self._phase_authority.write() if self._phase_authority is not None else nullcontext()):
+            if self._phase_authority is not None:
+                self._verify_active_budget()
+            self._require_current_semantic_compile(compile_id)
+            result, pack = self._pack_fresh(compile_id)
+            context = {"pack_sha256": self.catalog.hash(result["pack_id"]),
+                       "graph_version": pack["graph_version"], "schema_hash": pack["schema_hash"],
+                       "source_status": self.backend.statuses(), "graph_access": self._access()}
+            self._fresh(result["stamp"])
+            return context
 
     @boundary
     def compile_candidates(self, id_, *, candidates):
@@ -787,24 +951,32 @@ class PaperPilot:
 
     @boundary
     def record_semantic_response(self, id_, *, compile_id, response, execution_receipt, local_execution=None):
-        result, pack = self._pack_fresh(compile_id)
-        require(type(response) is bytes, "PILOT_EXECUTION", "original response bytes required")
-        self._execution(compile_id, "SEMANTIC", response, execution_receipt, local_execution)
-        self._one_import(id_, "SEMANTIC_RESPONSE", "compile_id", compile_id)
-        def record(_):
-            ids = record_response(self.catalog, result["pack_id"], response,
-                                  completed_at=execution_receipt["payload"]["generated_at"], local_execution=local_execution)
-            if local_execution is None and all(self.catalog.get(ref, "observation")["status"] == "OK" for ref in ids):
-                require(loads(response)["usage"] == execution_receipt["payload"]["usage"],
-                        "PILOT_EXECUTION", "wire usage differs from execution receipt")
-            # Execution receipts are private orchestration evidence. OBSERVATION
-            # catalog receipts have the existing, narrower observation_hash contract.
-            self._fresh(result["stamp"])
-            return {"state": "WAIT_OBSERVATION_ATTESTATION", "observation_ids": ids, "compile_id": compile_id}
-        arguments = {"compile_id": compile_id, "response_blob": self._blob(response), "execution_receipt": execution_receipt}
-        if local_execution is not None:
-            arguments["local_execution"] = local_execution
-        return self._step(id_, "SEMANTIC_RESPONSE", arguments, record)
+        with self._mutex, (self._phase_authority.write() if self._phase_authority is not None else nullcontext()):
+            if self._phase_authority is not None:
+                self._verify_active_budget()
+            self._require_current_semantic_compile(compile_id)
+            result, _ = self._pack_fresh(compile_id)
+            require(type(response) is bytes, "PILOT_EXECUTION", "original response bytes required")
+            self._execution(compile_id, "SEMANTIC", response, execution_receipt, local_execution)
+            self._one_import(id_, "SEMANTIC_RESPONSE", "compile_id", compile_id)
+            def record(_):
+                self._blob(response)
+                ids = record_response(self.catalog, result["pack_id"], response,
+                                      completed_at=execution_receipt["payload"]["generated_at"], local_execution=local_execution)
+                if local_execution is None and all(self.catalog.get(ref, "observation")["status"] == "OK" for ref in ids):
+                    require(loads(response)["usage"] == execution_receipt["payload"]["usage"],
+                            "PILOT_EXECUTION", "wire usage differs from execution receipt")
+                # Execution receipts are private orchestration evidence. OBSERVATION
+                # catalog receipts have the existing, narrower observation_hash contract.
+                self._fresh(result["stamp"])
+                return {"state": "WAIT_OBSERVATION_ATTESTATION", "observation_ids": ids, "compile_id": compile_id}
+            arguments = {"compile_id": compile_id, "response_blob": bytes_digest(response),
+                         "execution_receipt": execution_receipt}
+            if local_execution is not None:
+                arguments["local_execution"] = local_execution
+            recorded = self._step(id_, "SEMANTIC_RESPONSE", arguments, record)
+            self._read_blob(arguments["response_blob"])
+            return recorded
 
     @boundary
     def resolve_plan(self, id_, *, response_id, attestations):
@@ -856,27 +1028,31 @@ class PaperPilot:
             return {"state": "WAIT_AUTHORIZATION", "preflight": receipt, "resolve_id": resolve_id}
         return self._step(id_, "PREFLIGHT", {"resolve_id": resolve_id}, preflight)
 
-    @boundary
-    def publish_plan(self, id_, *, preflight_id, authorization, after_commit=None):
+    def _committed_publication(self, *, preflight_id, authorization):
         preflight = self._result(preflight_id, "PREFLIGHT")
         resolved = self._result(preflight["resolve_id"], "RESOLVE")
-        plan_id = resolved["plan_id"]
-        plan = self.catalog.get(plan_id, "plan")
+        plan = self.catalog.get(resolved["plan_id"], "plan")
+        return self._committed(plan["idempotency_key"], authorization=authorization,
+            plan_hash=self.catalog.hash(resolved["plan_id"]), preflight_hash=digest(preflight["preflight"]))
+
+    @boundary
+    def publish_plan(self, id_, *, preflight_id, authorization, after_commit=None):
+        args = {"preflight_id": preflight_id, "authorization": authorization}
+        preflight = self._result(preflight_id, "PREFLIGHT")
+        resolved = self._result(preflight["resolve_id"], "RESOLVE")
         def publish(_):
-            recovered = self._committed(plan["idempotency_key"], authorization=authorization,
-                plan_hash=self.catalog.hash(plan_id), preflight_hash=digest(preflight["preflight"]))
+            recovered = self._committed_publication(**args)
             if recovered:
                 return recovered
             self.resolve_plan(preflight["resolve_id"], **self.requests[preflight["resolve_id"]]["args"])
             self._pack_fresh(resolved["compile_id"])
             self.budget.consume("review_actions")
-            result = self.service.publish(self.catalog, plan_id, authorization=authorization, preflight=preflight["preflight"])
+            result = self.service.publish(self.catalog, resolved["plan_id"], authorization=authorization, preflight=preflight["preflight"])
             if after_commit is not None:
                 after_commit()
             return {"state": "TRANSACTION_RECORDED", "receipt": result["receipt"], "historical_receipt_only": True}
-        result = self._step(id_, "PUBLISH", {"preflight_id": preflight_id, "authorization": authorization}, publish)
-        require(result == self._committed(plan["idempotency_key"], authorization=authorization,
-                plan_hash=self.catalog.hash(plan_id), preflight_hash=digest(preflight["preflight"])),
+        result = self._step(id_, "PUBLISH", args, publish)
+        require(result == self._committed_publication(**args),
                 "PILOT_TRANSACTION", "checkpoint receipt differs from authoritative graph journal")
         return result
 
@@ -933,6 +1109,8 @@ class PaperPilot:
     @boundary
     def record_answer_response(self, id_, *, prepared_id, response, execution_receipt):
         from .paper_answer import draft_answer
+        require(prepared_id not in self._historical_request_ids,
+                "PHASE_HISTORICAL_REQUEST", "historical answer preparation is held for audit")
         prepared = self._result(prepared_id, "PREPARE_ANSWER")
         args = self.requests[prepared_id]["args"]
         answer_args = self._answer_args(**args)
@@ -944,10 +1122,11 @@ class PaperPilot:
                 require(bytes_digest(prompt) == prepared["request_sha256"], "PILOT_PROMPT_CHANGED", "answer request differs")
                 return response
             draft = draft_answer(self.catalog, self.backend, generate=actual, **answer_args)
+            self._blob(response)
             return {"state": "WAIT_ANSWER_REVIEW" if draft["review_required"] else draft["status"],
                     "draft": draft, "prepared_id": prepared_id}
         return self._step(id_, "ANSWER_RESPONSE", {"prepared_id": prepared_id,
-            "response_blob": self._blob(response), "execution_receipt": execution_receipt}, record)
+            "response_blob": bytes_digest(response), "execution_receipt": execution_receipt}, record)
 
     def answer_review_payload(self, response_id, *, reviewer, reviewer_kind, reviewed_at, claim_support):
         draft = self._result(response_id, "ANSWER_RESPONSE")["draft"]
