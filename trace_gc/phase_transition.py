@@ -377,19 +377,26 @@ def _restore_target_locked(*, capsule_path: str | Path, capsule_sha256: str,
             target, capsule["database_state"][name], binding)
     if path.exists() or pending_receipt.exists():
         require(all(bound.values()), "PHASE_BACKUP", "existing restore receipt conflicts")
+    pending_stores = {name: target.with_suffix(".sqlite3.pending")
+                      for name, target in targets.items()}
+    pending_complete = {}
+    # Every allowed pending store must pass the binding check before any
+    # restore file changes, even when its final store is already bound.
+    for name, pending in pending_stores.items():
+        if pending.exists():
+            try:
+                pending_complete[name] = _restore_store_state(
+                    pending, capsule["database_state"][name], binding, pending=True)
+            except sqlite3.DatabaseError:
+                pending_complete[name] = False
     for name, target in targets.items():
         if bound[name]:
             continue
         expected = capsule["database_state"][name]
-        pending = target.with_suffix(".sqlite3.pending")
-        if pending.exists():
-            try:
-                complete = _restore_store_state(pending, expected, binding, pending=True)
-            except sqlite3.DatabaseError:
-                complete = False
-            if not complete:
-                pending.rename(target.with_name(target.name + ".failed." + uuid.uuid4().hex))
-        if not pending.exists():
+        pending = pending_stores[name]
+        if pending_complete.get(name) is False:
+            pending.rename(target.with_name(target.name + ".failed." + uuid.uuid4().hex))
+        if not pending_complete.get(name):
             require(bytes_digest(backups[name].read_bytes()) == capsule["database_backup_sha256"][name],
                     "PHASE_BACKUP", "backup changed during restore")
             _stage_restored_store(backups[name], pending, expected, binding)

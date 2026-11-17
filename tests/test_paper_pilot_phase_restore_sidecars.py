@@ -259,6 +259,43 @@ class PhaseRestoreSidecarTests(unittest.TestCase):
         self.assertEqual({item.name: item.read_bytes() for item in self.target.iterdir()}, before)
         self.assert_archived_state()
 
+    def assert_pending_preflight_holds(self, rejected_pending):
+        before = {item.name: item.read_bytes() for item in self.target.iterdir()}
+        inspect_store = transition._restore_store_state
+
+        def inspect(path, expected, binding, *, pending=False):
+            if pending and path == rejected_pending:
+                raise ContractError("PHASE_BACKUP", "partial binding changed")
+            return inspect_store(path, expected, binding, pending=pending)
+
+        with patch.object(transition, "_restore_store_state", side_effect=inspect):
+            with self.assertRaisesRegex(ContractError, "partial binding changed") as caught:
+                self.restore()
+        self.assertEqual(caught.exception.code, "PHASE_BACKUP")
+        self.assertEqual({item.name: item.read_bytes() for item in self.target.iterdir()}, before)
+        self.assert_archived_state()
+
+    def test_pending_store_check_runs_beside_an_exact_final_and_receipt(self):
+        self.restore()
+        for name in ("graph", "budget"):
+            with self.subTest(store=name):
+                final = self.target / f"{name}.sqlite3"
+                pending = self.target / f"{name}.sqlite3.pending"
+                pending.write_bytes(final.read_bytes())
+                self.assert_pending_preflight_holds(pending)
+                pending.unlink()  # Disposable fixture only.
+        self.assert_restored_state()
+
+    def test_all_pending_store_checks_finish_before_recovery_changes_either_store(self):
+        self.target.mkdir()
+        for name in ("graph", "budget"):
+            pending = self.target / f"{name}.sqlite3.pending"
+            pending.write_bytes((self.capsule_dir / f"{name}.sqlite3").read_bytes())
+        self.assert_pending_preflight_holds(self.target / "budget.sqlite3.pending")
+        self.assertFalse((self.target / "graph.sqlite3").exists())
+        self.assertFalse((self.target / "budget.sqlite3").exists())
+        self.assertFalse((self.target / "phase-restore.json").exists())
+
     def test_legacy_unbound_database_and_pending_backup_reconcile(self):
         self.target.mkdir()
         graph = self.target / "graph.sqlite3"
