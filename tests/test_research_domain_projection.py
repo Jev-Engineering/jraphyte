@@ -60,7 +60,9 @@ class PublicationProjectionTests(unittest.TestCase):
             apply_operations(self.catalog, self.state, [assignment], security_scope="test")
         self.assertEqual(caught.exception.code, "DOMAIN_MIGRATION_REQUIRED")
 
-        for invalid in (None, {}, {"contract_version": 1, "revision": 0, "assignments": {}}):
+        for invalid in (None, {}, {"contract_version": 1, "revision": 0, "assignments": {}},
+                        {"contract_version": 1.0, "revision": 1, "assignments": {}},
+                        {"contract_version": 1, "revision": 1.0, "assignments": {}}):
             state = {**self.state, "classifications": invalid}
             checks = {
                 "identity": lambda: classification_identity(state),

@@ -121,7 +121,7 @@ def validate_bundle(bundle: dict[str,Any], *, trust: TrustStore | None=None,at: 
         if domain_plan or "classifications" in snapshot:
             prospective = validate_plan(catalog, plan, source_status=m["source_status"])
             projection = receipt_projection(prospective)
-        require({key: tx[key] for key in ("classification_revision", "classification_hash") if key in tx} == projection,
+        require(digest({key: tx[key] for key in ("classification_revision", "classification_hash") if key in tx}) == digest(projection),
                 "TRANSACTION_PLAN_BINDING", "transaction classification differs from the exact plan")
         require(tx["upstream_head"] is not None and tx["upstream_head"] in {e["hash"] for e in bundle["ledger"]},"LEDGER_BINDING","atomic journal's provenance anchor is absent")
         anchor_index=next(i for i,e in enumerate(bundle["ledger"]) if e["hash"]==tx["upstream_head"])
