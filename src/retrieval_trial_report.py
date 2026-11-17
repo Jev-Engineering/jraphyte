@@ -290,6 +290,44 @@ def _check_ablation(base, variant, removed):
         raise ValueError(error)
 
 
+def _check_dense_batches(directory, cache, artifacts, counts, error):
+    raw = _read_regular(directory / 'protocol.json', error)
+    protocol = _json_object(raw, error)
+    protocol_sha = sha(cache['protocol_sha256'])
+    batch_size = protocol['batch_size']
+    bindings = ('fields_sha256', 'ranking_inputs_sha256', 'document_ids_sha256', 'query_ids_sha256',
+                'model_manifest_sha256', 'model_revisions', 'top_k', 'target_ids_used_for_ranking')
+    if (_canonical_hash(protocol) != protocol_sha or artifacts['protocol.json'] != hashlib.sha256(raw).hexdigest() or
+            protocol['schema_version'] != 'specter2-vector-protocol-v1' or
+            type(batch_size) is not int or batch_size <= 0 or
+            any(_canonical_hash(protocol[key]) != _canonical_hash(cache[key]) for key in bindings)):
+        raise ValueError(error)
+    batches = cache['vector_batches']
+    if type(batches) is not dict or set(batches) != set(counts):
+        raise ValueError(error)
+    for group, total in counts.items():
+        starts = range(0, total, batch_size)
+        if type(batches[group]) is not list or len(batches[group]) != len(starts):
+            raise ValueError(error)
+        for start, batch in zip(starts, batches[group], strict=True):
+            count = min(batch_size, total - start)
+            expected = {'schema_version': 'specter2-batch-v1', 'start': start, 'count': count,
+                        'input_sha256': sha(batch['input_sha256']), 'protocol_sha256': protocol_sha,
+                        'checkpoint_sha256': sha(batch['checkpoint_sha256']), 'truncated': batch['truncated']}
+            if (type(batch['start']) is not int or batch['start'] != start or
+                    type(batch['count']) is not int or batch['count'] != count or
+                    type(batch['truncated']) is not int or not 0 <= batch['truncated'] <= count):
+                raise ValueError(error)
+            name = f'{group}/{start:05d}'
+            raw = _read_regular(directory / (name + '.receipt.json'), error)
+            receipt_sha = hashlib.sha256(raw).hexdigest()
+            if (artifacts[name + '.npz'] != expected['checkpoint_sha256'] or
+                    artifacts[name + '.receipt.json'] != sha(batch['receipt_sha256']) or
+                    receipt_sha != batch['receipt_sha256'] or
+                    _canonical_hash(_json_object(raw, error)) != _canonical_hash(expected)):
+                raise ValueError(error)
+
+
 def _check_dense_caches(trial_dir, receipt, results, queries, historical_ids):
     error = 'trial_dense_cache_readback_mismatch'
     measured = [result for result in results.values() if result['dense_stage'] == 'supplied_bound_cache']
@@ -312,7 +350,16 @@ def _check_dense_caches(trial_dir, receipt, results, queries, historical_ids):
                     (condition == 'current' and (receipt['dense_cache_file_sha256'] != file_sha or
                      receipt['dense_artifact_sha256'] != binding['artifact_sha256']))):
                 raise ValueError(error)
-            for name, expected in binding['artifact_sha256'].items():
+            artifacts = binding['artifact_sha256']
+            actual = set()
+            for item in directory.rglob('*'):
+                if item.is_symlink() or (not item.is_dir() and not item.is_file()):
+                    raise ValueError(error)
+                if item.is_file():
+                    actual.add(item.relative_to(directory).as_posix())
+            if actual != set(artifacts):
+                raise ValueError(error)
+            for name, expected in artifacts.items():
                 relative = Path(name)
                 if (not name or relative.is_absolute() or '..' in relative.parts or
                         any(char in name for char in ('\\', ':', '\0'))):
@@ -325,6 +372,7 @@ def _check_dense_caches(trial_dir, receipt, results, queries, historical_ids):
             cache = _json_object(raw, error)
             rankings = cache['rankings']
             document_count, query_count = receipt['document_count'], len(query_ids)
+            _check_dense_batches(directory, cache, artifacts, {'papers': document_count, 'queries': query_count}, error)
             versions = cache['model_revisions']
             model_sha = sha(cache['model_manifest_sha256'])
             if (type(versions) is not dict or set(versions) != {'base', 'paper', 'query'} or

@@ -2,6 +2,7 @@
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -9,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from src.retrieval_trial_report import aggregate, CHANNELS, _canonical_hash
+from tests.test_parallel_source_retrieval_trial_v4 import write_dense_batch_fixture
 
 
 class TrialReportTests(unittest.TestCase):
@@ -92,12 +94,14 @@ class TrialReportTests(unittest.TestCase):
                      model_manifest_sha256='c'*64, model_revisions={role: 'e'*40 for role in ('base','paper','query')},
                      document_count=self.receipt['document_count'], query_count=len(queries),
                      dense_input_absent_count=1, dense_input_absent_ids=['SECRETDOC3'])
-        raw = json.dumps(cache).encode()
         path = self.root/'specter2'/'dense_cache.json'
         path.parent.mkdir(exist_ok=True)
+        write_dense_batch_fixture(path.parent, cache)
+        raw = json.dumps(cache).encode()
         path.write_bytes(raw)
         sha = hashlib.sha256(raw).hexdigest()
-        files = {path.name: sha}
+        files = {item.relative_to(path.parent).as_posix(): hashlib.sha256(item.read_bytes()).hexdigest()
+                 for item in path.parent.rglob('*') if item.is_file()}
         self.receipt.update(dense_cache_file_sha256=sha, dense_artifact_sha256=files,
                             dense_conditions={'current': {'cache_sha256': sha, 'artifact_sha256': files}})
         return _canonical_hash(cache)
@@ -202,6 +206,8 @@ class TrialReportTests(unittest.TestCase):
             aggregate(self.root)
 
     def test_report_accepts_producer_normalized_empty_query_id(self):
+        # This fixture represents a different frozen trial and dense cache.
+        shutil.rmtree(self.root / 'specter2')
         cache_sha = None
         for name in ('primary', 'without_dense', 'target_permutation', 'without_dense_target_permutation'):
             result = json.loads((self.root/(name+'.json')).read_bytes())['result']
@@ -367,6 +373,12 @@ class TrialReportTests(unittest.TestCase):
         self.write_arm('primary', result)
         self.write_receipt()
         with self.assertRaisesRegex(ValueError, '^trial_metrics_readback_mismatch:primary$'):
+            aggregate(self.root)
+
+    def test_dense_readback_requires_complete_vector_checkpoint_coverage(self):
+        required = self.root / 'specter2' / 'papers' / '00000.npz'
+        required.unlink()
+        with self.assertRaisesRegex(ValueError, '^trial_dense_cache_readback_mismatch$'):
             aggregate(self.root)
 
     def test_dense_readback_verifies_every_listed_producer_artifact(self):
