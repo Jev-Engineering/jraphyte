@@ -18,6 +18,7 @@ import re
 
 from .canonical import bytes_digest, digest, text_digest
 from .errors import boundary, require
+from .pdf_image_evidence import REPRESENTATION as IMAGE
 
 VERSION = "paper-pilot-aggregate-evaluator-v1"
 RECEIPTS_VERSION = "paper-pilot-receipts-v1"
@@ -29,6 +30,9 @@ ROW_STATUSES = ("PASS", "FAIL", "HOLD", "NOT_RUN", "INVALIDATED")
 _HEX = re.compile(r"[0-9a-f]{64}")
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._/-]{0,199}")
 _ABSTAIN = {"ABSTAIN_NO_AUTHORIZED_EVIDENCE": "NO_AUTHORIZED_EVIDENCE", "ABSTAIN_MODEL": "MODEL_ABSTAINED"}
+
+_ANSWER_STATES = {*_ABSTAIN, "INTENT_PENDING", "CONTEXT_ONLY", "WAIT_ANSWER_RESPONSE",
+                  "WAIT_ANSWER_REVIEW", "SUPPORTED", "REJECTED_UNSUPPORTED_CLAIM"}
 
 
 def evaluator_identity() -> dict:
@@ -79,7 +83,6 @@ def _readable(status):
 
 
 def _evidence_row(pilot, evidence_id, statuses):
-    from .pdf_image_evidence import REPRESENTATION as IMAGE
     evidence = pilot.catalog.get(evidence_id, "evidence")
     source = pilot.catalog.get(evidence["source_snapshot_id"], "source")
     page = page_png = crop_png = None
@@ -263,14 +266,24 @@ def _validate_receipts(receipts):
                   "abstention_reason", "claims", "reviewer_kind", "answer_graph_version",
                   "graph_version_current"}, path)
         _ident(a["retrieval_id"], path)
-        for field in ("prepare_id", "response_id", "review_id", "state", "abstention_reason"):
+        for field in ("prepare_id", "response_id", "review_id"):
             _opt(a[field], _ident, f"{path}.{field}")
+        state = a["state"]
+        require(type(state) is str and state in _ANSWER_STATES and
+                a["abstention_reason"] == _ABSTAIN.get(state),
+                "EVALUATOR_INPUT", "answer state and abstention reason", path=path)
         _sha(a["question_sha256"], path + ".question_sha256")
         require(a["reviewer_kind"] in {None, "assistant", "human"} and
                 (a["answer_graph_version"] is None or type(a["answer_graph_version"]) is int),
                 "EVALUATOR_INPUT", "answer review/version", path=path)
         _bool(a["graph_version_current"], path)
+        version = a["answer_graph_version"]
+        require(a["graph_version_current"] == (version is not None and
+                version == receipts["graph"]["graph_version"]),
+                "EVALUATOR_INPUT", "answer graph version consistency", path=path)
         require(type(a["claims"]) is list, "EVALUATOR_INPUT", "claims", path=path)
+        require(state not in _ABSTAIN or not a["claims"], "EVALUATOR_INPUT",
+                "abstention cannot carry claims", path=path)
         for j, c in enumerate(a["claims"]):
             _keys(c, {"claim_sha256", "evidence_ids", "support"}, f"{path}.claims[{j}]")
             _sha(c["claim_sha256"], f"{path}.claims[{j}]")
@@ -309,6 +322,8 @@ def _chain(evidence, ref):
         return "MISSING_EVIDENCE"
     if e["physical_page"] is None or e["page_png_sha256"] is None:
         return "MISSING_PAGE_LINEAGE"
+    if e["representation"] == IMAGE and e["crop_png_sha256"] is None:
+        return "MISSING_CROP_LINEAGE"
     return None if e["currently_readable"] else "SOURCE_NOT_CURRENTLY_READABLE"
 
 
@@ -331,6 +346,8 @@ def _question(q, attempt, evidence):
     if state != "SUPPORTED":
         return {**row, "status": "HOLD", "reason": "PENDING:" + state}
     problems = {_chain(evidence, ref) for c in attempt["claims"] for ref in c["evidence_ids"]} - {None}
+    if not all(attempt[key] for key in ("prepare_id", "response_id", "review_id", "reviewer_kind")):
+        return {**row, "status": "FAIL", "reason": "INCOMPLETE_ANSWER_REVIEW_CHAIN"}
     if not attempt["claims"] or not all(c["support"] is True for c in attempt["claims"]):
         return {**row, "status": "FAIL", "reason": "SUPPORT_JUDGMENT_INCOMPLETE"}
     if problems == {"SOURCE_NOT_CURRENTLY_READABLE"}:
@@ -346,11 +363,14 @@ def _question(q, attempt, evidence):
     return {**row, "status": "PASS", "reason": "SUPPORTED_WITH_COMPLETE_CURRENT_CHAINS"}
 
 
-def _assertion(ref, rows, evidence):
+def _assertion(ref, rows, evidence, graph_version):
     row = rows.get(ref)
     if row is None:
         return {"assertion_id": ref, "status": "NOT_RUN", "reason": "NOT_PUBLISHED"}
-    complete = (row["transaction_event_hash"] is not None and row["plan_id"] is not None and
+    version = row["transaction_version"]
+    complete = (row["transaction_event_hash"] is not None and
+                version is not None and 0 < version <= graph_version and
+                row["plan_id"] is not None and row["resolution_id"] is not None and bool(row["observation_ids"]) and
                 row["resolution_outcome"] == "SELECTED" and row["observations_ok"] and bool(row["evidence_ids"]) and
                 all(_chain(evidence, e) in {None, "SOURCE_NOT_CURRENTLY_READABLE"} for e in row["evidence_ids"]))
     if not complete:
@@ -375,7 +395,8 @@ def evaluate(protocol: dict, receipts: dict, recovery: list) -> dict:
     questions += [{"question_sha256": h, "expectation": None, "status": "FAIL", "reason": "UNDECLARED_QUESTION"}
                   for h in sorted(set(latest) - declared)]
     published = {a["assertion_id"]: a for a in receipts["assertions"]}
-    assertions = [_assertion(ref, published, evidence) for ref in protocol["expected_assertions"]]
+    assertions = [_assertion(ref, published, evidence, receipts["graph"]["graph_version"])
+                  for ref in protocol["expected_assertions"]]
     assertions += [{"assertion_id": ref, "status": "FAIL", "reason": "UNEXPECTED_ASSERTION"}
                    for ref in sorted(set(published) - set(protocol["expected_assertions"]))]
     chains = []

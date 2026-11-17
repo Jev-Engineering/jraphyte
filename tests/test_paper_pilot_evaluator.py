@@ -12,6 +12,7 @@ from trace_gc.cli import main
 from trace_gc.compiler import now
 from trace_gc.errors import ContractError
 from trace_gc.paper_pilot_evaluator import PROTOCOL_VERSION, RECEIPTS_VERSION, evaluate, export_receipts, question_sha256
+from trace_gc.pdf_image_evidence import REPRESENTATION as IMAGE
 from tests import test_paper_pilot as base
 
 H = "a" * 64
@@ -90,6 +91,8 @@ class AggregateEvaluatorTests(unittest.TestCase):
             "SUPPORT_JUDGMENT_INCOMPLETE": lambda r: r["answers"][0]["claims"][0].update(support=None),
             "REQUIRED_SOURCE_NOT_CITED": lambda r: r["evidence"][0].update(source_id="paper-b"),
             "INCOMPLETE_CITATION_CHAIN:MISSING_PAGE_LINEAGE": lambda r: r["evidence"][0].update(page_png_sha256=None),
+            "INCOMPLETE_CITATION_CHAIN:MISSING_CROP_LINEAGE": lambda r: r["evidence"][0].update(representation=IMAGE),
+            "INCOMPLETE_ANSWER_REVIEW_CHAIN": lambda r: r["answers"][0].update(review_id=None),
             "INCOMPLETE_CITATION_CHAIN:MISSING_EVIDENCE": lambda r: r["answers"][0]["claims"][0].update(
                 evidence_ids=["evidence:unknown"]),
         }
@@ -105,7 +108,9 @@ class AggregateEvaluatorTests(unittest.TestCase):
         value["answers"][1].update(state="SUPPORTED", abstention_reason=None)
         self.assertEqual(rows(evaluate(protocol(), value, []), "questions")[UNSUPPORTED]["reason"],
                          "ANSWERED_UNSUPPORTED_QUESTION")
-        for field, bad in (("transaction_event_hash", None), ("resolution_outcome", "REJECTED"), ("observations_ok", False)):
+        for field, bad in (("transaction_event_hash", None), ("resolution_outcome", "REJECTED"),
+                           ("observations_ok", False), ("resolution_id", None),
+                           ("transaction_version", None), ("transaction_version", 3), ("observation_ids", [])):
             with self.subTest(field=field):
                 value = receipts(); value["assertions"][0][field] = bad
                 self.assertEqual(rows(evaluate(protocol(), value, []), "assertions")["cand-1"]["reason"],
@@ -114,6 +119,12 @@ class AggregateEvaluatorTests(unittest.TestCase):
         value["assertions"].append({**value["assertions"][0], "assertion_id": "cand-unexpected"})
         report = evaluate(protocol(), value, [])
         self.assertEqual(rows(report, "assertions")["cand-unexpected"]["reason"], "UNEXPECTED_ASSERTION")
+
+    def test_answer_version_is_compared_with_receipt_graph_version(self):
+        value = receipts()
+        value["answers"][0].update(answer_graph_version=1, graph_version_current=False)
+        question = rows(evaluate(protocol(), value, []), "questions")[QUESTION]
+        self.assertEqual(question["reason"], "GRAPH_CHANGED_AFTER_ANSWER_REFRESH_REQUIRED")
 
     def test_withdrawn_source_invalidates_supported_answer_and_assertion(self):
         value = receipts()
@@ -141,6 +152,11 @@ class AggregateEvaluatorTests(unittest.TestCase):
             lambda r: r["source_reviews"][0].update(independent_review=True),
             lambda r: r["evidence"].append(copy.deepcopy(r["evidence"][0])),
             lambda r: r.update(execution_mode="PRODUCTION"),
+            lambda r: r["answers"][0].update(state="synthetic-private-state"),
+            lambda r: r["answers"][1].update(abstention_reason="synthetic-private-reason"),
+            lambda r: r["answers"][1].update(state="SUPPORTED"),
+            lambda r: r["answers"][1].update(claims=r["answers"][0]["claims"]),
+            lambda r: r["answers"][0].update(answer_graph_version=1),
         ]
         for i, mutate in enumerate(mutations):
             with self.subTest(case=i):

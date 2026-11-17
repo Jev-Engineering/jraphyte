@@ -43,9 +43,9 @@ report is written in that case.
 
 | Section | PASS | Not PASS |
 |---|---|---|
-| `questions` (SUPPORTED) | Latest attempt reviewed `SUPPORTED`; every claim judged `true`; every citation resolves to evidence → source → original PDF hash → physical page (and crop for image sources); every cited source currently readable; each `required_source_ids` entry cited; graph version unchanged since the answer | `FAIL`: rejected claim, abstention, missing judgment, missing evidence/page lineage, required source not cited. `INVALIDATED`: cited source withdrawn or denied. `HOLD`: pending stage or graph changed. `NOT_RUN`: no attempt |
+| `questions` (SUPPORTED) | Latest attempt has a complete preparation, response and attributed review chain with state `SUPPORTED`; every claim judged `true`; every citation resolves to evidence → source → original PDF hash → physical page (and crop for image sources); every cited source currently readable; each `required_source_ids` entry cited; graph version unchanged since the answer | `FAIL`: rejected claim, abstention, missing judgment, missing evidence, page or crop lineage, required source not cited. `INVALIDATED`: cited source withdrawn or denied. `HOLD`: pending stage or graph changed. `NOT_RUN`: no attempt |
 | `questions` (ABSTAIN) | Latest attempt abstained (`NO_AUTHORIZED_EVIDENCE` or `MODEL_ABSTAINED`) | `FAIL`: an answer was drafted or reviewed. `HOLD`/`NOT_RUN` as above |
-| `assertions` | Expected assertion active, with a journal transaction whose plan hash matches, a `SELECTED` resolution and `OK` observations | `FAIL`: incomplete chain or unexpected assertion. `INVALIDATED`: complete chain, now inactive. `NOT_RUN`: not published |
+| `assertions` | Expected assertion active, with a journal transaction at a recorded version whose plan hash matches, an identified `SELECTED` resolution and one or more identified `OK` observations | `FAIL`: incomplete chain or unexpected assertion. `INVALIDATED`: complete chain, now inactive. `NOT_RUN`: not published |
 | `citation_chains` | Each claim of each latest answer has complete, currently readable chains | `FAIL` / `INVALIDATED` as above |
 | `recovery` | Supplied row says `PASS` | Supplied `FAIL`/`HOLD`, or `NOT_RUN` |
 
