@@ -308,6 +308,10 @@ transcription and derived representation through the image methods above.
 Its evidence offsets belong to that reviewed representation; the held native
 route and first-page benchmark result remain separately recorded.
 
+The public [aggregate evaluator](paper_pilot_evaluator.md) counts a run's
+exported receipt rows against a frozen protocol (`trace-gc paper-pilot
+evaluate`). It emits no source text and does not qualify the run.
+
 ## Postpublication successor workflow
 
 Use the [lifecycle service workflow](paper_pilot_workflow.md) to archive a

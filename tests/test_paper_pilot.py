@@ -139,8 +139,13 @@ class PaperPilotTests(unittest.TestCase):
             self.grants["edge:" + ref] = grant("pilot-test", "private-test")
         return result, reviewed
 
-    def answer_request(self):
+    def answer_request(self, *, grant_decisions=False):
         _, reviewed = self.published()
+        if grant_decisions:
+            resolutions = self.pilot.requests["resolve"]["result"]["resolution_ids"]
+            observations = self.pilot.requests["response"]["result"]["observation_ids"]
+            for ref in resolutions + observations:
+                self.grants["decision:" + ref] = grant("pilot-test", "private-test")
         request = query(requesting_component="downstream-pilot-test", security_scope="pilot-test",
             text=self.config["questions"][0], focus_entities=[self.claim])
         context = self.pilot.retrieve("retrieve", request=request)

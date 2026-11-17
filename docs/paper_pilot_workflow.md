@@ -100,6 +100,13 @@ fresh successor identity, signed status change, normal replay, tampered
 response rejection, parent-path rejection, and a graph version 2 historical
 local semantic witness with a changed-context rejection. They do not establish a real
 paper, scientific notation, model-output, or end-to-end acceptance result.
+`tests/test_paper_pilot_postpublication.py` additionally publishes an authored
+assertion, records a reviewed supported answer, then withdraws or denies its
+source through `status_change_once`. From fresh connections it checks one
+status transaction under replay and reconciliation, the inactive assertion,
+`PILOT_STALE` for the cached answer review, an abstaining fresh retrieval with
+no exported model request, and the aggregate evaluator's `INVALIDATED` rows.
+That is authored mechanics evidence only.
 Each real scenario still needs its own source-first review, signed stage
 releases, immutable run receipts, current/historical access probes, and the
 numeric gate evaluator specified by its protocol.
