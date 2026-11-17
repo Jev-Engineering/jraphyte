@@ -337,6 +337,79 @@ class PhaseTransitionTests(PhaseFixture, unittest.TestCase):
             self.root, self.pilot, self.backend, self.budget, self.catalog = saved
         self.preserved()
 
+    def test_historical_compile_cannot_import_but_new_phase_work_survives_reopen(self):
+        self.cutover(); self.restore(); self.open_target(); self.import_phase(); self.controller_open()
+        self.activate()
+        self.reopen_target()
+        historical = self.pilot.requests['compile']['result']
+        response = fixtures.fixture_response(self.catalog.get(historical['pack_id'], 'pack'))
+        execution = fixtures.PaperPilotTests.execution
+        receipt = execution(self, 'compile', 'SEMANTIC', response)
+        before = [exporter._logical(db) for db in
+                  (self.pilot.db, self.backend.db, self.budget.db, self.controller.db)]
+        with self.assertRaises(ContractError) as caught:
+            self.pilot.record_semantic_response('historical-response', compile_id='compile',
+                response=response, execution_receipt=receipt)
+        self.assertEqual(caught.exception.code, 'PHASE_HISTORICAL_REQUEST')
+        self.assertEqual(before, [exporter._logical(db) for db in
+                                 (self.pilot.db, self.backend.db, self.budget.db, self.controller.db)])
+
+        compiled = self.pilot.compile_candidates('new-compile', candidates=self.candidates)
+        self.assertNotEqual(compiled['request_sha256'], historical['request_sha256'])
+        response = fixtures.fixture_response(self.catalog.get(compiled['pack_id'], 'pack'))
+        result = self.pilot.record_semantic_response('new-response', compile_id='new-compile',
+            response=response, execution_receipt=execution(self, 'new-compile', 'SEMANTIC', response))
+        self.assertEqual(result['state'], 'WAIT_OBSERVATION_ATTESTATION')
+        attestations = {ref: fixtures.attest_observation(self.signer, self.catalog.record(ref, 'observation'))
+                        for ref in result['observation_ids']}
+        resolved = self.pilot.resolve_plan('new-resolve', response_id='new-response', attestations=attestations)
+        self.pilot.preflight_plan('new-preflight', resolve_id='new-resolve')
+        authorization = fixtures.authorize_plan(self.signer, self.catalog.get(resolved['plan_id'], 'plan'),
+            self.catalog.hash(resolved['plan_id']), reviewed_by='authored-test-reviewer')
+        self.pilot.publish_plan('new-publish', preflight_id='new-preflight', authorization=authorization)
+        state, budget = self.backend.state(), self.budget.snapshot()
+        self.assertGreater(state['graph_version'], self.capsule['graph_state']['graph_version'])
+        self.assertEqual(budget['used']['model_calls'], 2)
+        self.reopen_target()
+        self.assertEqual(self.pilot.requests['new-response']['result'], result)
+        self.assertEqual(self.pilot.requests['compile']['result'], historical)
+        self.assertEqual(self.backend.state(), state)
+        self.assertEqual(self.budget.snapshot(), budget)
+        self.assertEqual(files(self.archive), self.old_bytes)
+
+    def test_import_replay_and_activation_reject_missing_or_changed_historical_blob(self):
+        self.cutover(); self.restore(); self.open_target(); self.import_phase(); self.controller_open()
+        sha = self.old_requests['source-prepare:paper-page-2']['result']['page_png_blob']
+        original = self.pilot._read_blob(sha)
+        for body in (None, b'changed authored test bytes'):
+            with self.subTest(body=body):
+                self.pilot.db.execute('DELETE FROM blobs WHERE hash=?', (sha,))
+                if body is not None:
+                    self.pilot.db.execute('INSERT INTO blobs VALUES (?,?)', (sha, body))
+                before = exporter._logical(self.pilot.db)
+                for operation in (self.import_phase, self.activate):
+                    with self.assertRaises(ContractError) as caught:
+                        operation()
+                    self.assertEqual(caught.exception.code, 'PILOT_BLOB_CHANGED')
+                self.assertEqual(exporter._logical(self.pilot.db), before)
+                self.assertFalse(self.pointer.exists())
+        self.pilot.db.execute('UPDATE blobs SET body=? WHERE hash=?', (original, sha))
+        self.import_phase()
+        self.activate()
+        self.pilot.db.execute('DELETE FROM blobs WHERE hash=?', (sha,))
+        with self.assertRaises(ContractError) as caught:
+            self.reopen_target()
+        self.assertEqual(caught.exception.code, 'PILOT_BLOB_CHANGED')
+
+    def test_capsule_requires_historical_source_blob_references(self):
+        self.cutover()
+        sha = self.old_requests['source-prepare:paper-page-2']['result']['page_png_blob']
+        capsule = copy.deepcopy(self.capsule)
+        del capsule['blobs'][sha]
+        with self.assertRaises(ContractError) as caught:
+            transition.verify_capsule(capsule)
+        self.assertEqual(caught.exception.code, 'PHASE_BLOB')
+
     def test_export_interruptions_resume(self):
         original = exporter._backup
         calls = 0

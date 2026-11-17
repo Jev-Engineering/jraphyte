@@ -75,6 +75,7 @@ class PaperPilot:
         self._phase_authority = phase_authority
         self._old_lock_file = None
         self._phase_imported = False
+        self._historical_request_ids = frozenset()
         require(set(config) == {"run_id", "security_scope", "execution_mode", "documents", "questions",
                 "semantic_model", "answer_model", "cohort_manifest_sha256"}, "PILOT_CONFIG", "exact config fields required")
         require(config["execution_mode"] in {"LIVE", "SYNTHETIC"} and
@@ -255,11 +256,14 @@ class PaperPilot:
                 run_id=self.config["run_id"], historical=True)
             imported, _ = verify_capsule(capsule)
             require(capsule["run_id"] == self.config["run_id"] and
-                    capsule["config"] == self.config and not self.requests and
-                    self.backend.state() == capsule["graph_state"] and
-                    self.backend.statuses() == capsule["source_statuses"] and
-                    self.budget.snapshot() == capsule["budget_snapshot"],
+                    capsule["config"] == self.config and not self.requests,
                     "PHASE_IMPORT", "import run/config/request inventory differs")
+            # Activation verifies the starting state before publishing the signed
+            # pointer. An active phase can have advanced its graph and budget.
+            if not Path(self.phase_import["activation_path"]).exists():
+                require(self._matches_imported_state(capsule),
+                        "PHASE_IMPORT", "inactive target state differs from capsule")
+            self._verify_imported_blobs(capsule)
             # The raw checkpoint preserves insertion order used by wire_request.
             # Canonical capsule catalog JSON has the same verified records but
             # sorts their keys, which can change the reserved adapter bytes.
@@ -269,6 +273,7 @@ class PaperPilot:
             for record in records:
                 self.catalog.add(record)
             self.requests.update(imported)
+            self._historical_request_ids = frozenset(imported)
             self._phase_imported = True
         else:
             require(False, "PILOT_CHECKPOINT", "unknown event")
@@ -295,6 +300,15 @@ class PaperPilot:
         row = self.db.execute("SELECT body FROM blobs WHERE hash=?", (hash_,)).fetchone()
         require(row is not None and bytes_digest(row[0]) == hash_, "PILOT_BLOB_CHANGED", "evidence missing or changed")
         return bytes(row[0])
+
+    def _matches_imported_state(self, capsule):
+        return (self.backend.state() == capsule["graph_state"] and
+                self.backend.statuses() == capsule["source_statuses"] and
+                self.budget.snapshot() == capsule["budget_snapshot"])
+
+    def _verify_imported_blobs(self, capsule):
+        for sha in capsule["blobs"]:
+            self._read_blob(sha)
 
     def _step(self, id_, kind, args, action):
         with self._mutex, (self._phase_authority.write() if self._phase_authority is not None else nullcontext()):
@@ -369,21 +383,19 @@ class PaperPilot:
                     self._head == digest(events[1]) and self.requests == requests and
                     capsule["config"] == self.config and
                     capsule["run_id"] == self.config["run_id"] and
-                    self.backend.state() == capsule["graph_state"] and
-                    self.backend.statuses() == capsule["source_statuses"] and
-                    self.budget.snapshot() == capsule["budget_snapshot"],
+                    self._matches_imported_state(capsule),
                     "PHASE_IMPORT", "import replay differs from durable transition")
+            self._verify_imported_blobs(capsule)
             return {"status": "PHASE_IMPORTED_HELD", "capsule_sha256": capsule_sha256,
                     "checkpoint_head": self._head, "model_calls": 0}
         require(capsule["config"] == self.config and capsule["run_id"] == self.config["run_id"] and
-                not self.requests and self.backend.state() == capsule["graph_state"] and
-                self.backend.statuses() == capsule["source_statuses"] and
-                self.budget.snapshot() == capsule["budget_snapshot"],
+                not self.requests and self._matches_imported_state(capsule),
                 "PHASE_IMPORT", "new phase is not an exact target")
         for sha, encoded in capsule["blobs"].items():
             body = base64.b64decode(encoded, validate=True)
             require(bytes_digest(body) == sha, "PHASE_BLOB", "import blob differs")
             self.db.execute("INSERT OR IGNORE INTO blobs(hash,body) VALUES (?,?)", (sha, body))
+        self._verify_imported_blobs(capsule)
         self._append("IMPORT_PHASE", {"capsule_sha256": capsule_sha256,
                                      "authorization_sha256": self.phase_import["authorization_sha256"]})
         require(set(self.requests) == set(requests), "PHASE_IMPORT", "request projection differs")
@@ -813,6 +825,8 @@ class PaperPilot:
 
     @boundary
     def record_semantic_response(self, id_, *, compile_id, response, execution_receipt, local_execution=None):
+        require(compile_id not in self._historical_request_ids,
+                "PHASE_HISTORICAL_REQUEST", "phase import does not authorize an outcome for a historical compile")
         result, pack = self._pack_fresh(compile_id)
         require(type(response) is bytes, "PILOT_EXECUTION", "original response bytes required")
         self._execution(compile_id, "SEMANTIC", response, execution_receipt, local_execution)

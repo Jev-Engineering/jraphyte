@@ -135,6 +135,16 @@ def verify_capsule(capsule: dict[str, Any]) -> tuple[dict[str, dict], str]:
     for sha, encoded in capsule["blobs"].items():
         require(bytes_digest(base64.b64decode(encoded, validate=True)) == sha,
                 "PHASE_BLOB", "old blob changed")
+    for row in requests.values():
+        kind = row["kind"]
+        if kind not in {"PREPARE_SOURCE", "PREPARE_SOURCE_IMAGE"} or "result" not in row:
+            continue
+        args, result = row["args"], row["result"]
+        refs = {args["pdf_sha256"], result["page_png_blob"]}
+        if kind == "PREPARE_SOURCE_IMAGE":
+            refs.update([args["raw_output_sha256"], result["crop_png_blob"]])
+        require(refs.issubset(capsule["blobs"]), "PHASE_BLOB",
+                "historical source evidence is missing from the capsule")
     require(capsule["application_journal_events"] and
             capsule["application_journal_head"] == capsule["application_journal_events"][-1][2],
             "PHASE_JOURNAL", "application journal absent or changed")
@@ -397,11 +407,9 @@ def activate_imported_phase(*, pilot, controller, phase_authority,
                 journal[1]["capsule_sha256"] == binding["capsule_sha256"] and
                 journal[1]["old_journal_head"] == capsule["application_journal_head"] and
                 journal[1]["old_pilot_head"] == capsule["checkpoint_head"] and
-                set(pilot.requests) == set(imported) and
-                pilot.backend.state() == capsule["graph_state"] and
-                pilot.backend.statuses() == capsule["source_statuses"] and
-                pilot.budget.snapshot() == capsule["budget_snapshot"],
+                pilot.requests == imported and pilot._matches_imported_state(capsule),
                 "PHASE_ACTIVATION", "inactive imported state or history changed")
+        pilot._verify_imported_blobs(capsule)
         controller._check_actions()
         pilot.backend.audit()
         if pointer.exists():
