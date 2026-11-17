@@ -16,7 +16,7 @@ from .canonical import digest, loads, write
 from .demo import build_fixture, POLICY, POPULATION, RUN, SCOPE
 from .domain_publication import OPERATIONS, classification_operation, migration_operation, restore_assignment
 from .domains import create_assignment, reference_taxonomy
-from .errors import require
+from .errors import ContractError, require
 from .plans import create_plan
 from .retrieval.store import SQLiteGraphAdapter
 from .trust import IssuerPolicy, Signer, authorize_plan
@@ -49,10 +49,10 @@ def run_domain_conformance(output: str | Path | None = None, *,
                 security_scope=SCOPE, publication_mode="REVIEWED", policy_hash=c.hash(f.policy_id), classification_enabled=True,
                 classification_taxonomy_hashes=frozenset({c.hash(taxonomy_id)}))
 
-            def plan(operations, key):
+            def plan(operations, key, *, source_status=None):
                 return create_plan(c, run_id=RUN, snapshot_id=b.snapshot(c), operations=operations,
-                    security_scope=SCOPE, execution_mode="SYNTHETIC", idempotency_key=key,
-                    policy_version=POLICY, source_status=b.statuses())
+                    security_scope=SCOPE, execution_mode="SYNTHETIC", idempotency_key=key, policy_version=POLICY,
+                    source_status=b.statuses() if source_status is None else source_status)
 
             def approvals(plan_id):
                 return {"preflight": service.preflight(c, plan_id, reviewed=True),
@@ -98,9 +98,31 @@ def run_domain_conformance(output: str | Path | None = None, *,
             for source_id, labels in zip(f.source_ids, (["research:biology", "research:chemistry"], ["research:chemistry"])):
                 assignments.append(create_assignment(c, source_snapshot_id=source_id, taxonomy_id=taxonomy_id,
                     domain_ids=labels, review=review, classifier_id="isolated-domain-reviewer", classifier_version="conformance-v1"))
-            assign_plan = plan([classification_operation(c, ref, operation_id="classify:" + str(i))
-                                for i, ref in enumerate(assignments)], "domain-assign")
+            operations = [classification_operation(c, ref, operation_id="classify:" + str(i))
+                          for i, ref in enumerate(assignments)]
+            assign_plan = plan(operations, "domain-assign")
+            stale_plan = plan(operations, "domain-stale-graph")
+            stale_approvals = approvals(stale_plan)
             publish(assign_plan)
+            accepted_state = b.state()
+            accepted_journal = list(b.db.execute("SELECT * FROM trace_journal ORDER BY version"))
+            try:
+                service.publish(c, stale_plan, **stale_approvals)
+            except ContractError as exc:
+                require(exc.code == "STALE_GRAPH_VERSION", "DOMAIN_CONFORMANCE", "wrong stale graph rejection")
+            else:
+                raise AssertionError("a preflighted classification plan committed against a stale graph")
+            require(b.state() == accepted_state and
+                    list(b.db.execute("SELECT * FROM trace_journal ORDER BY version")) == accepted_journal,
+                    "DOMAIN_CONFORMANCE", "stale graph rejection changed committed rows")
+            checks.append("signed_classification_stale_graph_cas")
+            try:
+                plan(operations, "domain-stale-predecessor")
+            except ContractError as exc:
+                require(exc.code == "DOMAIN_REVISION", "DOMAIN_CONFORMANCE", "wrong stale predecessor rejection")
+            else:
+                raise AssertionError("classification planning accepted a stale predecessor")
+            checks.append("classification_planning_rejects_stale_predecessor")
             classified_snapshot_id = b.snapshot(c)
             classified_snapshot = c.get(classified_snapshot_id, "graph-snapshot")
             classified = classified_snapshot["classifications"]["assignments"]
@@ -130,7 +152,20 @@ def run_domain_conformance(output: str | Path | None = None, *,
                     c.get(restored)["domain_ids"] == c.get(assignments[0])["domain_ids"],
                     "DOMAIN_CONFORMANCE", "compensation did not restore selected labels")
             checks.append("append_only_compensating_rollback")
+            previous_status = b.statuses()
             f.status_change(f.source_ids[0])
+            candidate = create_assignment(c, source_snapshot_id=f.source_ids[0], taxonomy_id=taxonomy_id,
+                domain_ids=["research:physics"], review=review, classifier_id="isolated-domain-reviewer",
+                classifier_version="conformance-v1", supersedes=restored)
+            outdated_source = plan([classification_operation(c, candidate, operation_id="outdated-source")],
+                                   "domain-stale-source", source_status=previous_status)
+            try:
+                approvals(outdated_source)
+            except ContractError as exc:
+                require(exc.code == "STALE_SOURCE_EPOCH", "DOMAIN_CONFORMANCE", "wrong stale source rejection")
+            else:
+                raise AssertionError("classification preflight accepted an outdated source epoch")
+            checks.append("classification_preflight_rejects_stale_source_epoch")
             require(not b.statuses()[f.source_ids[0]]["active"] and len(b.view(c)["edges"]) == 1,
                     "DOMAIN_CONFORMANCE", "withdrawal lost the independent alternative graph proof")
             checks.append("source_withdrawal_preserves_independent_proof")

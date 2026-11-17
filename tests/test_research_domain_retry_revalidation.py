@@ -2,7 +2,10 @@
 
 Each case lets pre-lock validation pass, then changes the clock, trust root,
 reviewer policy or application policy before the transaction is acquired. The
-accepted database must remain byte-identical and no transaction may stay open.
+committed database rows must remain unchanged and no transaction may stay open.
+The standalone lifecycle covers CAS and rollback. This suite separately tests
+request authorization. The pinned connection is thread-affine, so the threaded
+owner-lock case runs against the reference backend only.
 """
 from dataclasses import replace
 from datetime import timedelta
@@ -74,7 +77,7 @@ class RetryRevalidationMixin:
         self.assertEqual(first["receipt"], retry["receipt"])
 
     def advance_clock(self, seconds):
-        clock = patch("trace_gc.trust.now", lambda: shifted(seconds))
+        clock = patch("trace_gc.backend.now", lambda: shifted(seconds))
         def start():
             clock.start()
             self.addCleanup(clock.stop)
