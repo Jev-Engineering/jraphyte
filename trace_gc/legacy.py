@@ -181,7 +181,8 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
         return plan,list(sources.values()),facts,aliases
 
     def _transaction(self, *, key, fingerprint, expected_version, operation, catalog, apply,
-                     authorization_hash,preflight_hash,upstream_head=None,fault=None,at=None,lineage_prefix=None,authority_check=None):
+                     authorization_hash,preflight_hash,upstream_head=None,fault=None,at=None,lineage_prefix=None,authority_check=None,
+                     validate_fresh=None):
         require(bool(key) and type(expected_version) is int and expected_version>=0,"TRANSACTION_INPUT","explicit key/version required")
         plan,sources,facts,aliases=self._lower(operation,catalog)
         when=None;result={};prospective={};before=None
@@ -195,7 +196,11 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
             current=self.state()
             require(current["graph_version"]==expected_version,"STALE_GRAPH_VERSION","upstream CAS mismatch")
             require(self.db.execute("SELECT COUNT(*) FROM trace_journal").fetchone()[0]==expected_version,"UPSTREAM_UNMEDIATED_WRITE","upstream contains an unbound write")
-            before=digest(current);prospective=apply(deepcopy(current),deepcopy(self.statuses()),when)
+            before=digest(current)
+            statuses=self.statuses()
+            if validate_fresh is not None:
+                validate_fresh(deepcopy(current),when)
+            prospective=apply(deepcopy(current),deepcopy(statuses))
             prospective["nodes"].update(bootstrap_nodes)
             self._persist(catalog.all())
             for trace,upstream,source in aliases:

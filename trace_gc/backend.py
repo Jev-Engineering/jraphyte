@@ -134,11 +134,12 @@ class SQLiteReferenceBackend:
             require(previous is None or previous[0]==r["hash"],"IMMUTABLE_RECORD",r["id"])
             self.db.execute("INSERT OR IGNORE INTO trace_records VALUES(?,?,?,?)",(r["id"],r["hash"],r["kind"],dumps(r["body"])))
     def _transaction(self, *, key: str, fingerprint: str, expected_version: int, operation: dict[str,Any],
-                     catalog: Catalog, apply: Callable[[dict[str,Any],dict[str,Any],str],dict[str,Any]],
+                     catalog: Catalog, apply: Callable[[dict[str,Any],dict[str,Any]],dict[str,Any]],
                      authorization_hash: str, preflight_hash: str, upstream_head: str | None = None,
                      fault: Callable[[str],None] | None = None, at: str | None = None,
                      lineage_prefix: list[dict[str,Any]] | None = None,
-                     authority_check: Callable[[],str] | None = None) -> dict[str,Any]:
+                     authority_check: Callable[[],str] | None = None,
+                     validate_fresh: Callable[[dict[str,Any],str],None] | None = None) -> dict[str,Any]:
         require(bool(key) and type(expected_version) is int and expected_version>=0,"TRANSACTION_INPUT","explicit version/key required")
         with (self._phase_guard() if self._phase_guard is not None else nullcontext()):
             return self._transaction_locked(key=key, fingerprint=fingerprint,
@@ -146,11 +147,11 @@ class SQLiteReferenceBackend:
                 apply=apply, authorization_hash=authorization_hash,
                 preflight_hash=preflight_hash, upstream_head=upstream_head,
                 fault=fault, at=at, lineage_prefix=lineage_prefix,
-                authority_check=authority_check)
+                authority_check=authority_check, validate_fresh=validate_fresh)
 
     def _transaction_locked(self, *, key, fingerprint, expected_version, operation,
                             catalog, apply, authorization_hash, preflight_hash,
-                            upstream_head, fault, at, lineage_prefix, authority_check):
+                            upstream_head, fault, at, lineage_prefix, authority_check, validate_fresh=None):
         def checkpoint(name: str) -> None:
             if fault is not None:fault(name)
         with self._lock:
@@ -168,7 +169,10 @@ class SQLiteReferenceBackend:
                 state=self.state();statuses=self.statuses()
                 require(state["graph_version"]==expected_version,"STALE_GRAPH_VERSION","optimistic version mismatch")
                 before=digest(state)
-                resulting=apply(deepcopy(state),deepcopy(statuses),when)
+                # Fresh validation uses the journal timestamp after receipt lookup.
+                if validate_fresh is not None:
+                    validate_fresh(deepcopy(state),when)
+                resulting=apply(deepcopy(state),deepcopy(statuses))
                 require(resulting["graph_version"]==expected_version,"TRANSACTION_INPUT","apply may not forge graph version")
                 resulting["graph_version"]+=1
                 resulting["source_epochs"]={ref:s["epoch"] for ref,s in self.statuses().items()}
@@ -212,7 +216,7 @@ class SQLiteReferenceBackend:
                 "SOURCE_STATUS", "expected graph version must be a nonnegative integer")
         action={"action":"ADMIT","source_hashes":{ref:catalog.hash(ref) for ref in sorted(source_ids)},
                 "security_scope":security_scope,"execution_mode":execution_mode,"expected_version":expected_version}
-        def apply(state,statuses,_accepted_at):
+        def apply(state,statuses):
             issuer=trust.verify(authorization,"SOURCE_STATUS",at=at)
             require("SOURCE_ADMIT" in issuer.operations and digest(authorization["payload"])==digest(action),"SOURCE_AUTHORITY","source admission scope")
             for ref in source_ids:
@@ -238,7 +242,7 @@ class SQLiteReferenceBackend:
         action={"action":"ERASE" if tombstone else "STATUS_CHANGE","source_id":source_id,"source_hash":catalog.hash(source_id),
                 "active":active,"permission":permission,"expected_epoch":expected_epoch,"expected_version":expected_version,
                 "security_scope":source["security_scope"],"reason":reason,"tombstone":tombstone}
-        def apply(state,statuses,_accepted_at):
+        def apply(state,statuses):
             issuer=trust.verify(authorization,"SOURCE_STATUS",at=at)
             required="SOURCE_ERASE" if tombstone else "SOURCE_WITHDRAW" if not active else "SOURCE_PERMISSION"
             require(required in issuer.operations and digest(authorization["payload"])==digest(action),"SOURCE_AUTHORITY","status authority/scope mismatch")
@@ -477,13 +481,13 @@ class CompilerService:
             verify_request(at or now())
         operation={"action":"PUBLISH_PLAN","plan_id":plan_id,"plan_hash":plan_hash,"policy_version":self.policy_version,
                    "population":self.population,"security_scope":self.scope}
-        def apply(state,statuses,accepted_at):
-            if not domain_plan:
-                if erased_refs or "classifications" in state:
-                    # Check continuity before an ordinary write while allowing
-                    # an existing receipt to remain readable after revocation.
-                    self.backend.audit()
-                verify_request(accepted_at)
+        def validate_ordinary_fresh(state,accepted_at):
+            if erased_refs or "classifications" in state:
+                # Check continuity before an ordinary write while allowing
+                # an existing receipt to remain readable after revocation.
+                self.backend.audit()
+            verify_request(accepted_at)
+        def apply(state,statuses):
             snapshot=catalog.get(plan["snapshot_id"],"graph-snapshot")
             require(state["schema_hash"]==plan["schema_hash"] and digest(snapshot)==digest(snapshot_body(state)),"SNAPSHOT_BINDING","commit snapshot differs")
             return apply_publication_state(catalog, state, plan, statuses)
@@ -528,4 +532,6 @@ class CompilerService:
             return accepted_at
         return self.backend._transaction(key=plan["idempotency_key"],fingerprint=digest(operation),expected_version=plan["graph_version"],
                   operation=operation,catalog=catalog,apply=apply,authorization_hash=digest(authorization),preflight_hash=digest(preflight),
-                  upstream_head=computed_head,fault=fault,at=at,lineage_prefix=lineage,authority_check=verify_classification_under_lock if domain_plan else None)
+                  upstream_head=computed_head,fault=fault,at=at,lineage_prefix=lineage,
+                  authority_check=verify_classification_under_lock if domain_plan else None,
+                  validate_fresh=None if domain_plan else validate_ordinary_fresh)
