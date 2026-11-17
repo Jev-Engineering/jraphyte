@@ -361,8 +361,19 @@ class PhaseTransitionTests(PhaseFixture, unittest.TestCase):
         self.assertEqual(self.pilot.semantic_execution_context('new-compile')['pack_sha256'],
                          compiled['pack_sha256'])
         response = fixtures.fixture_response(self.catalog.get(compiled['pack_id'], 'pack'))
+        receipt = execution(self, 'new-compile', 'SEMANTIC', response)
+        before = exporter._logical(self.pilot.db)
+        with patch.object(self.authority, '_current', side_effect=ContractError('PHASE_INACTIVE')):
+            with self.assertRaises(ContractError) as caught:
+                self.pilot.semantic_execution_context('new-compile')
+            self.assertEqual(caught.exception.code, 'PHASE_INACTIVE')
+            with self.assertRaises(ContractError) as caught:
+                self.pilot.record_semantic_response('new-response', compile_id='new-compile',
+                    response=response, execution_receipt=receipt)
+            self.assertEqual(caught.exception.code, 'PHASE_INACTIVE')
+        self.assertEqual(exporter._logical(self.pilot.db), before)
         result = self.pilot.record_semantic_response('new-response', compile_id='new-compile',
-            response=response, execution_receipt=execution(self, 'new-compile', 'SEMANTIC', response))
+            response=response, execution_receipt=receipt)
         self.assertEqual(result['state'], 'WAIT_OBSERVATION_ATTESTATION')
         attestations = {ref: fixtures.attest_observation(self.signer, self.catalog.record(ref, 'observation'))
                         for ref in result['observation_ids']}
@@ -385,6 +396,40 @@ class PhaseTransitionTests(PhaseFixture, unittest.TestCase):
         self.assertEqual(self.activate(), activation)
         self.assertEqual([exporter._logical(db) for db in stores], before)
         self.assertEqual(files(self.archive), self.old_bytes)
+
+        # Restore a counter row that still meets the inherited floor, but
+        # omits completed current-phase work.
+        self.budget.db.execute('UPDATE trace_budgets SET used=? WHERE run_id=?',
+            (dumps(self.capsule['budget_snapshot']['used']), self.config['run_id']))
+        with self.assertRaises(ContractError) as caught:
+            self.activate()
+        self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+        with self.assertRaises(ContractError) as caught:
+            self.reopen_target()
+        self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+
+    def test_active_budget_holds_unreconciled_interrupted_reservation(self):
+        self.cutover(); self.restore(); self.open_target(); self.import_phase(); self.controller_open()
+        self.activate()
+        append = self.pilot._append
+
+        def lose_result(kind, value):
+            if kind == 'RESULT':
+                raise RuntimeError('authored loss after budget charge')
+            append(kind, value)
+
+        with patch.object(self.pilot, '_append', side_effect=lose_result):
+            with self.assertRaises(RuntimeError):
+                self.pilot.compile_candidates('interrupted-compile', candidates=self.candidates)
+        charged = self.budget.snapshot()
+        self.assertEqual(charged['used']['model_calls'], 2)
+        with self.assertRaises(ContractError) as caught:
+            self.pilot.compile_candidates('interrupted-compile', candidates=self.candidates)
+        self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+        self.assertEqual(self.budget.snapshot(), charged)
+        with self.assertRaises(ContractError) as caught:
+            self.reopen_target()
+        self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
 
     def test_active_budget_rejects_alias_rollback_and_missing_row(self):
         self.cutover(); self.restore(); self.open_target(); self.import_phase(); self.controller_open()
@@ -504,6 +549,11 @@ class PhaseTransitionTests(PhaseFixture, unittest.TestCase):
 
     def test_import_lost_return_is_idempotent(self):
         self.cutover(); self.restore(); self.open_target()
+        with patch('trace_gc.trust.now', return_value=self.auth['expires_at']):
+            with self.assertRaises(ContractError) as caught:
+                self.import_phase()
+            self.assertEqual(caught.exception.code, 'RECEIPT_EXPIRED')
+            self.assertEqual(self.pilot.db.execute('SELECT count(*) FROM events').fetchone()[0], 1)
         append = self.pilot._append
         def lost_return(kind, value):
             append(kind, value)
@@ -517,7 +567,8 @@ class PhaseTransitionTests(PhaseFixture, unittest.TestCase):
         self.reopen_target(controller=False)
         self.assertTrue(self.pilot._phase_imported)
         before = files(self.target)
-        self.assertEqual(self.import_phase(), result)
+        with patch('trace_gc.trust.now', return_value=self.auth['expires_at']):
+            self.assertEqual(self.import_phase(), result)
         self.assertEqual(files(self.target), before)
         for changes in ({'capsule_sha256': '0' * 64}, {'authorization': {}},
                         {'capsule_path': self.phase / 'authorization.json'}):
@@ -525,6 +576,27 @@ class PhaseTransitionTests(PhaseFixture, unittest.TestCase):
                 self.import_phase(**changes)
         self.assertEqual(self.pilot.db.execute('SELECT count(*) FROM events').fetchone()[0], 2)
         self.preserved()
+
+    def test_import_interrupted_after_append_requires_fresh_reopen(self):
+        self.cutover(); self.restore(); self.open_target()
+        apply = self.pilot._apply
+
+        def lose_projection(event):
+            if event['kind'] == 'IMPORT_PHASE':
+                raise RuntimeError('authored loss after checkpoint append')
+            apply(event)
+
+        with patch.object(self.pilot, '_apply', side_effect=lose_projection):
+            with self.assertRaises(RuntimeError):
+                self.import_phase()
+        before = exporter._logical(self.pilot.db)
+        with self.assertRaises(ContractError) as caught:
+            self.import_phase()
+        self.assertEqual(caught.exception.code, 'PHASE_IMPORT')
+        self.assertEqual(exporter._logical(self.pilot.db), before)
+        self.reopen_target(controller=False)
+        self.assertEqual(self.import_phase()['status'], 'PHASE_IMPORTED_HELD')
+        self.assertEqual(exporter._logical(self.pilot.db), before)
 
     def test_controller_interruption_resumes(self):
         self.cutover(); self.restore(); self.open_target(); self.import_phase()

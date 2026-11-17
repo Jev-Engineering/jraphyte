@@ -367,14 +367,14 @@ def _restore_target_locked(*, capsule_path: str | Path, capsule_sha256: str,
     return receipt
 
 
-def _activation_events(db):
+def _phase_events(db, error_code):
     previous = None
     events = []
     for expected, (seq, raw, hash_) in enumerate(db.execute(
             "SELECT seq,body,hash FROM events ORDER BY seq"), 1):
         event = loads(raw)
         require(seq == expected and event["previous"] == previous and digest(event) == hash_,
-                "PHASE_ACTIVATION", "phase event chain changed")
+                error_code, "phase event chain changed")
         events.append(event)
         previous = hash_
     return events, previous
@@ -415,8 +415,8 @@ def activate_imported_phase(*, pilot, controller, phase_authority,
             capsule_sha256=binding["capsule_sha256"],
             target_implementation_sha256=binding["implementation_sha256"],
             run_id=binding["run_id"], historical=True)
-        checkpoint, head = _activation_events(pilot.db)
-        journal, _ = _activation_events(controller.db)
+        checkpoint, head = _phase_events(pilot.db, "PHASE_ACTIVATION")
+        journal, _ = _phase_events(controller.db, "PHASE_ACTIVATION")
         require(len(checkpoint) >= 2 and checkpoint[0]["kind"] == "OPEN" and
                 checkpoint[1] == {"kind": "IMPORT_PHASE", "value": {
                     "capsule_sha256": binding["capsule_sha256"],
@@ -432,7 +432,7 @@ def activate_imported_phase(*, pilot, controller, phase_authority,
                 all(pilot.requests.get(id_) == row for id_, row in imported.items()),
                 "PHASE_ACTIVATION", "imported phase history changed")
         if active:
-            pilot.budget._verify_phase_floor(capsule["budget_snapshot"])
+            pilot._verify_active_budget()
         else:
             require(len(checkpoint) == len(journal) == 2 and pilot.requests == imported and
                     pilot._matches_imported_state(capsule),
