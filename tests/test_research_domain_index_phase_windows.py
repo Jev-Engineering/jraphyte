@@ -7,21 +7,21 @@ and a Linux skip is never a passed Windows qualification.
 import os
 from pathlib import Path
 import sqlite3
-import subprocess
 import tempfile
 import threading
 import unittest
 
 from trace_gc.canonical import bytes_digest, dumps
 from trace_gc.errors import ContractError
-from trace_gc.phase_authority import PhaseAuthority, binding_sha256
+from trace_gc.phase_authority import PhaseAuthority, binding_sha256, directory_dacl_sddl
 from trace_gc.retrieval.contracts import query
 from trace_gc.retrieval.domain_index import SQLiteClassificationIndex
 from trace_gc.retrieval.store import SQLiteGraphAdapter
 from trace_gc.trust import IssuerPolicy, Signer, TrustStore
 
 if os.name == "nt":
-    from src.paper_pilot_phase_cutover import NAMES, _current_sid, fence_closed_old_phase
+    from src.paper_pilot_phase_cutover import NAMES, _current_sid, _pinned_files, _write_once
+    from src.paper_pilot_phase_cutover_guarded_v2 import _canonical_trustee, _icacls
     from test_research_domain_transactions import DomainFixture
     from trace_gc.backend import SQLiteReferenceBackend
 
@@ -50,10 +50,7 @@ class IndexPhaseOwnershipNativeWindowsTests(unittest.TestCase):
                 (old / name).write_bytes(b"0")
         hashes = {name: bytes_digest((old / name).read_bytes()) for name in NAMES}
         fence = root / "control" / "fence-receipt.json"
-        fence_closed_old_phase(old_root=old, archived_root=archived, expected_file_sha256=hashes,
-                               deny_sid=self.sid, receipt_path=fence)
-        self.addCleanup(lambda: subprocess.run(["icacls.exe", str(old.parent), "/remove:d", "*" + self.sid],
-                                               capture_output=True, text=True, timeout=30))
+        self.create_fence_fixture(old, archived, fence, hashes)
         lock = root / "control" / "phase.lock"
         lock.write_bytes(b"0")
         for name in ("capsule.json", "authorization.json"):
@@ -96,6 +93,37 @@ class IndexPhaseOwnershipNativeWindowsTests(unittest.TestCase):
         self.backend = self.f.backend
         self.f.migrate()
         self.f.publish(self.f.assignment_plan(self.f.assign()))
+
+    def create_fence_fixture(self, old, archived, receipt_path, hashes):
+        # Use the actual trustee spelling emitted by Windows, including LA for
+        # the local Administrator. This fixture supplies the v1 consumer receipt.
+        trustee = _canonical_trustee(self.sid)
+        deny = f"(D;;LC;;;{trustee})"
+        self.assertNotIn(deny, directory_dacl_sddl(old.parent))
+        _pinned_files(old, hashes)
+        self.addCleanup(self.remove_fence_acl, old.parent, deny)
+        _icacls(old.parent, "/deny", "*" + self.sid + ":(AD)")
+        sddl = directory_dacl_sddl(old.parent)
+        self.assertIn(deny, sddl)
+        os.rename(old, archived)
+        _pinned_files(archived, hashes)
+        self.assertFalse(old.exists())
+        with self.assertRaises(PermissionError):
+            old.mkdir()
+        _write_once(receipt_path, {
+            "version": "paper-pilot-phase-namespace-fence-v1",
+            "old_root_path": str(old),
+            "archived_root_path": str(archived),
+            "old_parent_dacl_sha256": bytes_digest(sddl.encode("utf-8")),
+            "archived_files_sha256": hashes,
+            "deny_sid": trustee,
+            "status": "OLD_PATH_FENCED_NEW_PHASE_ALLOWED",
+        })
+
+    def remove_fence_acl(self, parent, deny):
+        if deny in directory_dacl_sddl(parent):
+            _icacls(parent, "/remove:d", "*" + self.sid)
+            self.assertNotIn(deny, directory_dacl_sddl(parent))
 
     def dump(self):
         return list(self.backend.db.iterdump())
@@ -142,8 +170,7 @@ class IndexPhaseOwnershipNativeWindowsTests(unittest.TestCase):
     def test_fence_removal_denies_index_writes(self):
         adapter = SQLiteGraphAdapter(self.backend, audit_trust=self.f.trust)
         old_parent = Path(self.authority.binding["old_root_path"]).parent
-        subprocess.run(["icacls.exe", str(old_parent), "/remove:d", "*" + self.sid],
-                       capture_output=True, text=True, timeout=30, check=True)
+        _icacls(old_parent, "/remove:d", "*" + self.sid)
         before = self.dump()
         with self.assertRaises(ContractError) as caught:
             adapter.rebuild_classification_index(self.request())
