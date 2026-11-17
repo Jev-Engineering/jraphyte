@@ -350,7 +350,7 @@ class AggregateTests(unittest.TestCase):
                 code, result = self.cli("preflight", "--data-root", directory, "--bundle", filename,
                     "--bundle-sha256", descriptor["sha256"], "--preregistration-sha256", prereg["sha256"], "--output", output)
                 self.assertEqual(code, 2)
-                self.assertEqual(result["status"], "NOT_READY")
+                self.assertEqual(result["status"], "PRECHECK_BLOCKED")
                 self.assertFalse(result["checks"]["bundle" if filename == "missing.json" else "output_available"])
 
     def test_ready_checks_bound_preregistration_without_opening_sources(self):
@@ -373,14 +373,14 @@ class AggregateTests(unittest.TestCase):
                     patch("src.paper_qualification_report_v1.evaluator_identity", return_value={}), \
                     patch("src.paper_qualification_report_v1.importlib.util.find_spec", return_value=object()), \
                     patch.object(Path, "read_bytes", guarded):
-                self.assertEqual(preflight(args)["status"], "READY")
+                self.assertEqual(preflight(args)["status"], "PRECHECK_PASSED")
                 protocol_file = root / "prereg" / "protocol.md"
                 protocol_bytes = b"Authored fixture for preflight."
                 protocol_file.write_bytes(b"Changed protocol.")
                 self.assertFalse(preflight(args)["checks"]["preregistration"])
                 protocol_file.write_bytes(protocol_bytes)
                 args.output = "missing/directory/new.json"
-                self.assertEqual(preflight(args)["status"], "READY")
+                self.assertEqual(preflight(args)["status"], "PRECHECK_PASSED")
                 (root/"ancestor").write_bytes(b"not a directory")
                 args.output = "ancestor/nested/new.json"
                 self.assertFalse(preflight(args)["checks"]["output_available"])
@@ -423,7 +423,7 @@ class AggregateTests(unittest.TestCase):
                     result = preflight(args)
                     self.assertTrue(result["checks"]["bundle"])
                     self.assertFalse(result["checks"]["preregistration"])
-                    self.assertEqual(result["status"], "NOT_READY")
+                    self.assertEqual(result["status"], "PRECHECK_BLOCKED")
                 exposure_path = root/"prereg/metadata-inventory/exposure-registry.jsonl"
                 valid_exposure = exposure_path.read_bytes()
                 exposure_path.write_bytes(b"invalid authored exposure JSONL")
@@ -449,7 +449,7 @@ class AggregateTests(unittest.TestCase):
                     args.preregistration_sha256 = updated["sha256"]
                     args.bundle_sha256 = save(root, descriptor["relative"],
                         {**body, "preregistration": updated, "sources": selected})["sha256"]
-                    self.assertEqual(preflight(args)["status"], "READY")
+                    self.assertEqual(preflight(args)["status"], "PRECHECK_PASSED")
                     with_extra["frames"]["recent"] = {"identity_projection_relative": "selected-source-canary.json",
                                                        "sha256": selected["sha256"]}
                     updated = save(root, prereg["relative"], with_extra)
@@ -457,6 +457,18 @@ class AggregateTests(unittest.TestCase):
                     args.bundle_sha256 = save(root, descriptor["relative"],
                         {**body, "preregistration": updated, "sources": selected})["sha256"]
                     self.assertFalse(preflight(args)["checks"]["preregistration"])
+
+                updated = save(root, prereg["relative"], pointer)
+                args.preregistration_sha256 = updated["sha256"]
+                args.bundle_sha256 = save(root, descriptor["relative"],
+                    {**body, "preregistration": updated, "sources": updated})["sha256"]
+                with patch("src.paper_qualification_report_v1.read_preregistration",
+                           side_effect=AssertionError("preregistration pointer was opened")) as reader:
+                    self.assertFalse(preflight(args)["checks"]["preregistration"])
+                    reader.assert_not_called()
+                args.bundle_sha256 = save(root, descriptor["relative"],
+                    {**body, "preregistration": updated, "execution_mode": "REAL_LOCAL"})["sha256"]
+                self.assertFalse(preflight(args)["checks"]["preregistration"])
 
                 (root/"unseen-must-not-open.pdf").write_bytes(b"%PDF synthetic canary")
                 args.bundle, args.bundle_sha256 = "unseen-must-not-open.pdf", "0"*64

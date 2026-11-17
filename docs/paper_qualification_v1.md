@@ -337,9 +337,9 @@ STUDY=validation_v3_private/qualification-UNIQUE
      --output "$STUDY/evaluation-run"
    ```
 
-   Exit 0 and `READY` mean the bundle and preregistration pointer passed those
-   checks. Converter readiness, review signatures and selected artifacts are
-   checked by the full evaluator. On a host
+   Exit 0 and `PRECHECK_PASSED` record the checks shown in the result.
+   The full evaluator verifies the additional registered artifacts, converter
+   readiness, review signatures, exposure reconciliation and selected sources. On a host
    whose interpreter does not match `runtime-windows-py312.lock.json`, the
    `runtime_receipt` check is false, as the evaluator would also be. Pass
    `--runtime-lock` only for a separately approved lock.

@@ -934,6 +934,7 @@ def _evaluate(root, bundle_descriptor, *, expected_preregistration_sha256, trust
             if item.get("doi"):
                 frame_dois[sid] = item["doi"].strip().lower()
     exposure = read_exposure_registry(store, documents[EXPOSURE_REGISTRY])
+    require(bundle["execution_mode"] != "REAL_LOCAL" or bool(exposure), "prior_exposure_registry_required")
     known = reconcile_exposure(store.json(selection["exposure_snapshot"]), exposure, selection)
     verify_identity_exclusions(store, selection["identity_exclusions"], known=known,
         frame_dois=frame_dois, frame_versions=frame_versions, cohort_frozen=times["cohort_frozen"])

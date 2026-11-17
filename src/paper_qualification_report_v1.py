@@ -260,7 +260,7 @@ def write_report(data_root, output_relative, evaluation_descriptor, *, execution
     return {"relative": output_relative, "sha256": write_once(output, report)}
 
 
-def _validate_preregistration_descriptors(store, pointer_relative, pointer, excluded):
+def _validate_preregistration_descriptors(store, pointer_relative, pointer, excluded, *, execution_mode):
     directory = child(store.root, Path(pointer_relative).parent.as_posix())
 
     def validate(relative, sha256):
@@ -285,7 +285,8 @@ def _validate_preregistration_descriptors(store, pointer_relative, pointer, excl
     instant(protocol["registered_utc"])
     require(store.json(descriptors["amendment-04/evaluator-clarification.json"]) == CLARIFICATION,
             "approved_preselection_identity_and_audit_rules_required")
-    read_exposure_registry(store, store.bytes(descriptors[EXPOSURE_REGISTRY]))
+    exposure = read_exposure_registry(store, store.bytes(descriptors[EXPOSURE_REGISTRY]))
+    require(execution_mode != "REAL_LOCAL" or bool(exposure), "prior_exposure_registry_required")
     frames = pointer.get("frames")
     exact(frames, {"recent", "historical"}, "frozen_preregistration_pointer_required")
     frame_ids = set()
@@ -298,14 +299,17 @@ def _validate_preregistration_descriptors(store, pointer_relative, pointer, excl
                     row["version_id"] and (row.get("doi") is None or type(row["doi"]) is str),
                     "frozen_frame_projection_required")
             work_id = normalize_work_id(row["work_id"])
-            require(work_id not in frame_ids, "frozen_frame_projection_required")
+            doi = row.get("doi")
+            require(normalize_work_id(row["version_id"]) == work_id and work_id not in frame_ids and
+                    (not doi or (doi.strip().startswith("10.") and "/" in doi)),
+                    "frozen_frame_projection_required")
             frame_ids.add(work_id)
 
 
 def _report_output_path(root, relative):
     output = child(root, relative)
     path_components = (*Path(relative).parts, *output.relative_to(root).parts)
-    require(not any(component.casefold() in RESERVED_PUBLICATION_PATHS for component in path_components),
+    require(not any(component.rstrip(" .").casefold() in RESERVED_PUBLICATION_PATHS for component in path_components),
             "publication_invalidated_or_not_evaluation")
     return output
 
@@ -346,9 +350,11 @@ def preflight(args):
     def load_preregistration():
         if bundle is None:
             return False
-        require(json_path(bundle["preregistration"]["relative"]), "frozen_preregistration_pointer_required")
+        relative = bundle["preregistration"]["relative"]
+        require(json_path(relative) and child(store.root, relative) not in excluded,
+                "frozen_preregistration_pointer_required")
         pointer = read_preregistration(store, bundle, args.preregistration_sha256)
-        _validate_preregistration_descriptors(store, bundle["preregistration"]["relative"], pointer, excluded)
+        _validate_preregistration_descriptors(store, relative, pointer, excluded, execution_mode=bundle["execution_mode"])
         store.recheck()
     check("bundle", load_bundle)
     check("preregistration", load_preregistration)
@@ -364,7 +370,7 @@ def preflight(args):
         require(Path(lock).resolve() not in excluded, "artifact_descriptor_required")
         return runtime_receipt(lock)
     check("runtime_receipt", check_runtime)
-    return {"status": "READY" if all(checks.values()) else "NOT_READY", "checks": checks,
+    return {"status": "PRECHECK_PASSED" if all(checks.values()) else "PRECHECK_BLOCKED", "checks": checks,
         "evaluator_code_sha256": identity}
 
 
@@ -388,7 +394,7 @@ def main(argv=None):
     try:
         if args.command == "preflight":
             result = preflight(args)
-            code = 0 if result["status"] == "READY" else 2
+            code = 0 if result["status"] == "PRECHECK_PASSED" else 2
         else:
             require(bool(args.execution) == bool(args.execution_sha256), "execution_descriptor_required")
             execution = {"relative": args.execution, "sha256": args.execution_sha256} if args.execution else None
@@ -399,7 +405,7 @@ def main(argv=None):
                 runtime_lock=Path(args.runtime_lock) if args.runtime_lock else DEFAULT_RUNTIME_LOCK)
             result = {"sha256": written["sha256"]}
             code = 0
-    except (ValueError, OSError, KeyError, TypeError, AttributeError, OverflowError) as error:
+    except (ValueError, OSError, RuntimeError, KeyError, TypeError, AttributeError, OverflowError) as error:
         result = {"status": "BLOCKED", "reason_code": reason_code(str(error)) if isinstance(error, EvidenceError)
             else "missing_or_invalid_input"}
         code = 2
