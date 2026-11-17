@@ -19,6 +19,7 @@ STAGES={"source":"SOURCE","claim":"CLAIM","evidence":"EVIDENCE","candidate":"CAN
 from .retrieval.contracts import KINDS as RETRIEVAL_KINDS
 STAGES.update({kind: "RETRIEVAL" for kind in RETRIEVAL_KINDS})
 STAGES["image-evidence-v1"] = "SOURCE"
+STAGES.update({"research-domain-taxonomy": "DOMAIN_TAXONOMY", "classification-assignment": "CLASSIFICATION"})
 
 def references(record: dict[str,Any]) -> list[tuple[str,str]]:
     """Every record-ID-bearing field is enumerated; hashes are validated separately."""
@@ -60,6 +61,8 @@ def references(record: dict[str,Any]) -> list[tuple[str,str]]:
             if "evidence_ids" in op:add(op["evidence_ids"],"evidence")
     from .retrieval.integration import references as retrieval_references
     refs.extend(retrieval_references(kind, b))
+    from .domains import references as domain_references
+    refs.extend(domain_references(kind, b))
     return list(dict.fromkeys(refs))
 
 def causal_references(record: dict[str,Any], catalog: Catalog | None=None) -> set[str]:

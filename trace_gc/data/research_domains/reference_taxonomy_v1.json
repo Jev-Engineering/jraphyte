@@ -1,0 +1,81 @@
+{
+  "id": "research-domain-taxonomy:195c08914552cc75922cf4cf8c8c3c26cf4440d0614ae3e3fee116d4bc378d1e",
+  "hash": "195c08914552cc75922cf4cf8c8c3c26cf4440d0614ae3e3fee116d4bc378d1e",
+  "kind": "research-domain-taxonomy",
+  "body": {
+    "contract_version": 1,
+    "taxonomy_key": "trace-gc-reference-research",
+    "version": 1,
+    "domains": [
+      {
+        "id": "research:biology",
+        "label": "Biology",
+        "definition": "Research on living organisms and biological systems.",
+        "parent_ids": [],
+        "status": "ACTIVE"
+      },
+      {
+        "id": "research:chemistry",
+        "label": "Chemistry",
+        "definition": "Research on substances, their properties, composition and transformations.",
+        "parent_ids": [],
+        "status": "ACTIVE"
+      },
+      {
+        "id": "research:computer-science",
+        "label": "Computer science",
+        "definition": "Research on computation, information processing and computing systems.",
+        "parent_ids": [],
+        "status": "ACTIVE"
+      },
+      {
+        "id": "research:earth-science",
+        "label": "Earth science",
+        "definition": "Research on Earth systems, geology, climate and environmental processes.",
+        "parent_ids": [],
+        "status": "ACTIVE"
+      },
+      {
+        "id": "research:mathematics",
+        "label": "Mathematics",
+        "definition": "Research on mathematical structures, quantities, spaces and formal reasoning.",
+        "parent_ids": [],
+        "status": "ACTIVE"
+      },
+      {
+        "id": "research:medicine",
+        "label": "Medicine",
+        "definition": "Research on human health, disease, diagnosis, prevention and treatment.",
+        "parent_ids": [],
+        "status": "ACTIVE"
+      },
+      {
+        "id": "research:physics",
+        "label": "Physics",
+        "definition": "Research on matter, energy and their fundamental interactions.",
+        "parent_ids": [],
+        "status": "ACTIVE"
+      },
+      {
+        "id": "research:social-science",
+        "label": "Social science",
+        "definition": "Research on human behavior, institutions and societies.",
+        "parent_ids": [],
+        "status": "ACTIVE"
+      }
+    ],
+    "supersedes": null,
+    "supersedes_hash": null,
+    "provenance": {
+      "method": "CURATED",
+      "method_version": "reference-taxonomy-v1",
+      "basis": "Authored reference taxonomy for conformance. Not an exhaustive scientific ontology or a deployment-approved classification standard."
+    },
+    "review": {
+      "status": "PROPOSED",
+      "reviewer_id": null,
+      "reviewed_at": null,
+      "rationale": "Requires an identified taxonomy owner and trusted review before deployment enrollment."
+    }
+  }
+}
