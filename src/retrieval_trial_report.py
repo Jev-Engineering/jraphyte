@@ -137,8 +137,16 @@ def _read_regular(path, error):
 
 
 def _json_object(raw, error):
+    def unique_object(pairs):
+        fields = {}
+        for key, value in pairs:
+            if key in fields:
+                raise ValueError(error)
+            fields[key] = value
+        return fields
+
     try:
-        value = json.loads(raw)
+        value = json.loads(raw, object_pairs_hook=unique_object)
     except (ValueError, UnicodeError):
         raise ValueError(error) from None
     if type(value) is not dict:
@@ -225,6 +233,18 @@ def _permutation_check(arm, base, rotated, queries, recorded):
     except (KeyError, TypeError, UnicodeError, ValueError):
         raise ValueError(error) from None
     return 'PASS'
+
+
+def _check_ablation(base, variant, removed):
+    error = 'trial_ablation_channel_mismatch'
+    if (base['ranking_inputs_sha256'] != variant['ranking_inputs_sha256'] or
+            (removed != 'specter2' and base['dense_cache_sha256'] != variant['dense_cache_sha256'])):
+        raise ValueError(error)
+    retained = [channel + '_topk' for channel in CHANNELS[:-1] if channel != removed]
+    original, ablated = base['candidates'], variant['candidates']
+    if (set(original) != set(ablated) or any(
+            original[qid][key] != ablated[qid][key] for qid in original for key in retained)):
+        raise ValueError(error)
 
 
 def _manifest(receipt):
@@ -314,6 +334,13 @@ def aggregate(trial_dir: Path) -> dict:
         arm: _permutation_check(arm, results[arm + '.json'], results[_permutation_file(arm)], queries, checks[arm])
         for arm in arms
     }
+    for base, variant, removed in (
+        ('primary', 'without_page', 'bm25_page'),
+        ('primary', 'without_dense', 'specter2'),
+        ('historical_fields', 'historical_fields_without_page', 'bm25_page'),
+    ):
+        if variant in arms:
+            _check_ablation(results[base + '.json'], results[variant + '.json'], removed)
     return dict(schema_version='retrieval-trial-sanitized-metrics-v1',
         trial_receipt_sha256=hashlib.sha256(raw).hexdigest(), protocol_sha256=sha(receipt.get('protocol_sha256')),
         **numeric({k: receipt.get(k) for k in ('document_count', 'query_count',
