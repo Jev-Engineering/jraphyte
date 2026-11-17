@@ -353,6 +353,34 @@ class AggregateTests(unittest.TestCase):
                 self.assertEqual(result["status"], "PRECHECK_BLOCKED")
                 self.assertFalse(result["checks"]["bundle" if filename == "missing.json" else "output_available"])
 
+    def test_preflight_runtime_override_is_an_external_lock(self):
+        from argparse import Namespace
+
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as outside:
+            root = Path(directory)
+            descriptor, prereg = bundle(root)
+            internal = root / "private.lock.json"
+            internal.write_bytes(b"authored private study data")
+            external = Path(outside) / "approved.lock.json"
+            external.write_bytes(b"{}")
+            source = Path(outside) / "source.pdf"
+            source.write_bytes(b"authored PDF sentinel")
+            args = Namespace(data_root=directory, bundle=descriptor["relative"],
+                bundle_sha256=descriptor["sha256"], preregistration_sha256=prereg["sha256"],
+                output="new.json", runtime_lock=internal)
+            with patch("src.paper_qualification_report_v1.runtime_receipt", return_value={}) as runtime, \
+                    patch("src.paper_qualification_report_v1.evaluator_identity", return_value={}):
+                self.assertFalse(preflight(args)["checks"]["runtime_receipt"])
+                args.runtime_lock = source
+                self.assertFalse(preflight(args)["checks"]["runtime_receipt"])
+                args.runtime_lock = external
+                args.preregistration_sha256 = "0" * 64
+                self.assertFalse(preflight(args)["checks"]["runtime_receipt"])
+                runtime.assert_not_called()
+                args.preregistration_sha256 = prereg["sha256"]
+                self.assertTrue(preflight(args)["checks"]["runtime_receipt"])
+                runtime.assert_called_once_with(external.resolve())
+
     def test_ready_checks_bound_preregistration_without_opening_sources(self):
         from argparse import Namespace
         with tempfile.TemporaryDirectory() as directory:

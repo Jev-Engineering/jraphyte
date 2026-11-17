@@ -342,7 +342,9 @@ STUDY=validation_v3_private/qualification-UNIQUE
    readiness, review signatures, exposure reconciliation and selected sources. On a host
    whose interpreter does not match `runtime-windows-py312.lock.json`, the
    `runtime_receipt` check is false, as the evaluator would also be. Pass
-   `--runtime-lock` only for a separately approved lock.
+   `--runtime-lock` for a separately approved regular `.lock.json` file
+   outside the private data root. Preflight reads the override after successful
+   preregistration checks.
 2. **Evaluate and publish** from the application that owns the review
    `TrustStore`, using the `evaluate` and `publish` snippet above with
    `fresh_output_relative="$STUDY/evaluation-run"`.

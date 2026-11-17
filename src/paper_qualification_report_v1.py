@@ -366,8 +366,15 @@ def preflight(args):
         identity = digest_value(evaluator_identity())
     check("evaluator_identity", identify)
     def check_runtime():
-        lock = args.runtime_lock or DEFAULT_RUNTIME_LOCK
-        require(Path(lock).resolve() not in excluded, "artifact_descriptor_required")
+        if args.runtime_lock is None:
+            return runtime_receipt(DEFAULT_RUNTIME_LOCK)
+        if not checks["preregistration"]:
+            return False
+        supplied = Path(args.runtime_lock).expanduser()
+        lock = supplied.resolve(strict=True)
+        require(supplied.name.lower().endswith(".lock.json") and lock.name.lower().endswith(".lock.json") and
+                not supplied.is_symlink() and lock.is_file() and not lock.is_relative_to(store.root),
+                "artifact_descriptor_required")
         return runtime_receipt(lock)
     check("runtime_receipt", check_runtime)
     return {"status": "PRECHECK_PASSED" if all(checks.values()) else "PRECHECK_BLOCKED", "checks": checks,
