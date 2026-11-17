@@ -297,6 +297,7 @@ def aggregate(trial_dir: Path) -> dict:
     if {arm for name, arm in permutations.items() if name in manifest} != measured:
         raise ValueError('trial_result_manifest_incomplete')
     queries = None
+    historical = None
     for name, expected in manifest.items():
         arm = known_arms.get(name) or permutations.get(name)
         error = 'trial_result_hash_mismatch:' + name if arm else 'trial_result_hash_mismatch'
@@ -322,6 +323,14 @@ def aggregate(trial_dir: Path) -> dict:
                 arms[arm] = metrics
         elif name == 'queries-permuted.json':
             queries = _permuted_queries(data, query_count)
+        elif name == 'historical-fields.json':
+            artifact = _json_object(data, 'trial_historical_fields_mismatch')
+            historical = artifact.get('fields')
+            if (set(artifact) != {'fields'} or type(historical) is not list or
+                    len(historical) != document_count or any(
+                        type(row) is not dict or type(row.get('id')) is not str or not row['id']
+                        for row in historical)):
+                raise ValueError('trial_historical_fields_mismatch')
     primary = results['primary.json']
     for arm in arms:
         result = results[arm + '.json']
@@ -334,6 +343,19 @@ def aggregate(trial_dir: Path) -> dict:
         arm: _permutation_check(arm, results[arm + '.json'], results[_permutation_file(arm)], queries, checks[arm])
         for arm in arms
     }
+    observed_ids = {row['target_id'] for result in results.values() for row in result['details']}
+    observed_ids.update(doc for result in results.values()
+                        for candidate in result['candidates'].values() for doc in candidate['pool'])
+    if len(observed_ids) > document_count:
+        raise ValueError('trial_document_count_mismatch')
+    if historical is not None:
+        historical_ids = {row['id'] for row in historical}
+        if len(historical_ids) != document_count or not observed_ids.issubset(historical_ids):
+            raise ValueError('trial_historical_fields_mismatch')
+        expected_fields = _canonical_hash(historical)
+        if any(result.get('fields_sha256') != expected_fields for name, result in results.items()
+               if name.startswith('historical_fields')):
+            raise ValueError('trial_historical_fields_mismatch')
     for base, variant, removed in (
         ('primary', 'without_page', 'bm25_page'),
         ('primary', 'without_dense', 'specter2'),

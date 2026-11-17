@@ -131,6 +131,12 @@ class TrialReportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'trial_receipt_invalid_counts'):
             aggregate(self.root)
 
+    def test_report_rejects_more_observed_documents_than_declared(self):
+        self.receipt['document_count'] = 1
+        self.write_receipt()
+        with self.assertRaisesRegex(ValueError, '^trial_document_count_mismatch$'):
+            aggregate(self.root)
+
     def test_rank_pool_and_candidate_stage_contradictions(self):
         for mutate in (
             lambda result: result['details'][0].update(candidate_present=False),
