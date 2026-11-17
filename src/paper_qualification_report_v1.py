@@ -2,17 +2,18 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import importlib.util
 import json
 import math
 from pathlib import Path
 import re
 
-from src.paper_qualification_v1 import (Artifacts, EvidenceError, METHODS, QUOTAS,
-    REVIEW_POLICY, VERSION as EVALUATION_VERSION, evaluator_identity, exact, require, summarize)
+from src.paper_qualification_v1 import (Artifacts, EvidenceError, METHODS, PHASES, QUOTAS,
+    REVIEW_POLICY, VERSION as EVALUATION_VERSION, evaluator_identity, exact, read_preregistration,
+    read_study_bundle, require, summarize, verify_published)
 from src.parallel_source_v4.common import child, data_root as authorized_root, write_once
 from src.parallel_source_v4.runtime import DEFAULT_RUNTIME_LOCK, runtime_receipt
+from trace_gc.cli import read_trust
 from trace_gc.pdf_source_parallel_v4 import digest_value
 
 VERSION = "paper-qualification-aggregate-report-v1"
@@ -190,31 +191,28 @@ def assert_redacted(report):
     walk(report)
 
 
-def write_report(data_root, output_relative, evaluation_descriptor, *, execution_descriptor=None):
+def write_report(data_root, output_relative, evaluation_descriptor, *, execution_descriptor=None,
+                 expected_preregistration_sha256=None, trust=None, runtime_lock=DEFAULT_RUNTIME_LOCK):
     root = authorized_root(data_root)
     output = child(root, output_relative)
     require(not output.exists(), "report_output_exists")
     store = Artifacts(root)
     evaluation = store.json(evaluation_descriptor)
-    # Only a completed, non-invalidated publication is reportable. This is not
-    # verify_published: the operator must run that full readback with trust first.
     folder = child(root, evaluation_descriptor["relative"]).parent
-    require(Path(evaluation_descriptor["relative"]).name == "evaluation.json"
-        and not (folder/"publication-invalidated.json").exists(), "publication_invalidated_or_not_evaluation")
-    marker_relative = (folder/"publication-complete.json").relative_to(root).as_posix()
-    marker_raw = child(root, marker_relative).read_bytes()
-    marker = store.parse(marker_raw)
-    store.seen[marker_relative] = hashlib.sha256(marker_raw).hexdigest()
-    require(isinstance(marker, dict) and marker.get("version") == "paper-evaluation-publication-v1"
-        and marker.get("evaluation_sha256") == evaluation_descriptor["sha256"]
-        and marker.get("status") == evaluation.get("status")
-        and marker.get("qualification_pass") is evaluation.get("qualification_pass"), "publication_completion_required")
+    require(Path(evaluation_descriptor["relative"]).name == "evaluation.json",
+            "publication_invalidated_or_not_evaluation")
+    verify_published(root, evaluation_descriptor, expected_preregistration_sha256=expected_preregistration_sha256,
+        trust=trust, runtime_lock=runtime_lock, qualification_only=False)
     execution = None
-    if execution_descriptor is not None:
-        exact(execution_descriptor, {"relative", "sha256"}, "artifact_descriptor_required")
-        require(evaluation.get("input_hashes", {}).get(execution_descriptor["relative"])
-            == execution_descriptor["sha256"], "execution_not_bound_to_evaluation")
-        execution = store.json(execution_descriptor)
+    if "input_hashes" in evaluation:
+        bundle = read_study_bundle(store, evaluation["invocation"]["bundle_descriptor"])
+        bound = bundle["execution"]
+        require((execution_descriptor is None or execution_descriptor == bound)
+            and evaluation["input_hashes"].get(bound["relative"]) == bound["sha256"],
+            "execution_not_bound_to_evaluation")
+        execution = store.json(bound)
+    else:
+        require(execution_descriptor is None, "execution_not_bound_to_evaluation")
     report = build_report(evaluation, execution=execution)
     report["source_evaluation_sha256"] = evaluation_descriptor["sha256"]
     assert_redacted(report)
@@ -231,9 +229,29 @@ def preflight(args):
         except Exception:
             checks[name] = False
     check("data_root", lambda: authorized_root(args.data_root))
-    check("bundle", lambda: Artifacts(authorized_root(args.data_root)).verify(
-        {"relative": args.bundle, "sha256": args.bundle_sha256}))
-    check("preregistration_sha256", lambda: bool(SHA.fullmatch(args.preregistration_sha256)))
+    store, bundle = None, None
+    def json_path(relative):
+        return child(store.root, relative).suffix.lower() == ".json"
+    def load_bundle():
+        nonlocal store, bundle
+        store = Artifacts(authorized_root(args.data_root))
+        require(json_path(args.bundle), "study_bundle_contract_required")
+        candidate = read_study_bundle(store, {"relative": args.bundle, "sha256": args.bundle_sha256})
+        require(set(candidate["roles"]) == {"custodian", "source_reviewer", "adjudicator",
+            "candidate_reviewer", "operator"} and len(candidate["phases"]) == len(PHASES),
+            "study_bundle_contract_required")
+        bundle = candidate
+    def load_preregistration():
+        if bundle is None:
+            return False
+        require(json_path(bundle["preregistration"]["relative"]), "frozen_preregistration_pointer_required")
+        pointer = read_preregistration(store, bundle, args.preregistration_sha256)
+        require(isinstance(pointer.get("base_protocol_and_additive_amendments"), dict)
+            and isinstance(pointer.get("frames"), dict)
+            and set(pointer["frames"]) == {"recent", "historical"}, "frozen_preregistration_pointer_required")
+        store.recheck()
+    check("bundle", load_bundle)
+    check("preregistration", load_preregistration)
     check("output_available", lambda: not child(authorized_root(args.data_root), args.output).exists())
     for name in ("fitz", "PIL"):
         check(name, lambda name=name: importlib.util.find_spec(name) is not None)
@@ -256,10 +274,12 @@ def main(argv=None):
         if name == "report":
             for flag in ("evaluation", "evaluation-sha256", "execution", "execution-sha256"):
                 command.add_argument("--"+flag, required=flag.startswith("evaluation"))
+            command.add_argument("--preregistration-sha256")
+            command.add_argument("--trust", type=Path, help="application-owned public issuer configuration")
         else:
             for flag in ("bundle", "bundle-sha256", "preregistration-sha256"):
                 command.add_argument("--"+flag, required=True)
-            command.add_argument("--runtime-lock", help="defaults to the evaluator's DEFAULT_RUNTIME_LOCK")
+        command.add_argument("--runtime-lock", help="defaults to the evaluator's DEFAULT_RUNTIME_LOCK")
     args = parser.parse_args(argv)
     try:
         if args.command == "preflight":
@@ -268,8 +288,12 @@ def main(argv=None):
         else:
             require(bool(args.execution) == bool(args.execution_sha256), "execution_descriptor_required")
             execution = {"relative": args.execution, "sha256": args.execution_sha256} if args.execution else None
-            result = write_report(args.data_root, args.output,
-                {"relative": args.evaluation, "sha256": args.evaluation_sha256}, execution_descriptor=execution)
+            written = write_report(args.data_root, args.output,
+                {"relative": args.evaluation, "sha256": args.evaluation_sha256}, execution_descriptor=execution,
+                expected_preregistration_sha256=args.preregistration_sha256,
+                trust=read_trust(args.trust) if args.trust else None,
+                runtime_lock=Path(args.runtime_lock) if args.runtime_lock else DEFAULT_RUNTIME_LOCK)
+            result = {"sha256": written["sha256"]}
             code = 0
     except (ValueError, OSError, KeyError, TypeError, AttributeError, OverflowError) as error:
         result = {"status": "BLOCKED", "reason_code": reason_code(str(error)) if isinstance(error, EvidenceError)

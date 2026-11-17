@@ -1,7 +1,6 @@
 """Synthetic aggregate mechanics, never empirical qualification evidence."""
 from copy import deepcopy
 import hashlib
-import importlib.util
 import json
 from pathlib import Path
 import subprocess
@@ -11,9 +10,11 @@ import unittest
 from unittest.mock import patch
 
 from src.paper_qualification_v1 import (EvidenceError, METHODS, QUOTAS, REVIEW_POLICY,
-    VERSION, lower_bound, statistical_gates, summarize)
+    VERSION, _public_summary, lower_bound, publish, statistical_gates, summarize)
 from src.paper_qualification_report_v1 import (STAGES, aggregate_metrics, assert_redacted,
     build_report, preflight, write_report)
+
+from trace_gc.trust import TrustStore
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -56,13 +57,36 @@ def save(root, name, value):
 
 
 def published(root, value, folder="pub"):
-    """Authored stand-in for a completed publish() directory; not a verified publication."""
+    """Authored publication shape. Replay independently checks this fixture."""
     descriptor = save(root, folder+"/evaluation.json", value)
+    summary = save(root, folder+"/public-summary.json", _public_summary(value, descriptor["sha256"]))
     save(root, folder+"/publication-complete.json", {"version": "paper-evaluation-publication-v1",
-        "evaluation_sha256": descriptor["sha256"], "public_summary_sha256": "0"*64,
+        "evaluation_sha256": descriptor["sha256"], "public_summary_sha256": summary["sha256"],
         "status": value["status"], "qualification_pass": value["qualification_pass"],
         "graph_qualification_registered": False})
     return descriptor
+
+
+def bundle(root, *, selected=None):
+    prereg = save(root, "prereg.json", {"schema_version": "qualification-preregistration-current-v1",
+        "numeric_targets_unchanged": True, "reference_review_occurred": False,
+        "base_protocol_and_additive_amendments": {"protocol.json": "a"*64},
+        "frames": {"recent": {}, "historical": {}}})
+    missing = {"relative": "unseen-must-not-open.pdf", "sha256": "f"*64}
+    data = {"version": VERSION, "study_id": "authored", "execution_mode": "AUTHORED_CONTRACT_TEST",
+        "roles": {role: {} for role in ("custodian", "source_reviewer", "adjudicator",
+            "candidate_reviewer", "operator")}, "phases": [{}, {}, {}, {}], "preregistration": prereg,
+        **{k: missing for k in ("configuration", "regression", "source_map", "access", "sampling",
+            "screening", "sources", "references", "execution")}}
+    if selected:
+        data["execution"] = selected
+    return save(root, "bundle.json", data), prereg
+
+
+def early_block():
+    return {"version": VERSION, "status": "BLOCKED", "qualification_pass": False,
+        "graph_qualification_registered": False, "independent_human_qualification": False,
+        "graph_writes": 0, "paid_calls": 0, "reason": "missing_or_invalid_bound_study_evidence"}
 
 
 class AggregateTests(unittest.TestCase):
@@ -172,35 +196,48 @@ class AggregateTests(unittest.TestCase):
             mutate(bad)
             with self.assertRaises(EvidenceError): build_report(evaluation(), execution=bad)
 
-    def test_write(self):
+    def test_write_requires_replay_and_uses_only_the_bundle_execution(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             ex = save(root, "execution.json", execution())
+            wrong_ex = save(root, "other-execution.json", execution())
+            bundle_descriptor, prereg = bundle(root, selected=ex)
             value = evaluation()
+            value.update(graph_qualification_registered=False, evaluated_at="2026-01-02T00:00:00Z",
+                invocation={"bundle_descriptor": bundle_descriptor, "expected_preregistration_sha256": prereg["sha256"]},
+                input_hashes={item["relative"]: item["sha256"] for item in (ex, wrong_ex, bundle_descriptor)})
             ev = published(root, value)
-            with self.assertRaisesRegex(EvidenceError, "execution_not_bound"):
-                write_report(root, "report.json", ev, execution_descriptor=ex)
-            value["input_hashes"][ex["relative"]] = ex["sha256"]
-            bare = save(root, "bare/evaluation.json", value)
-            with self.assertRaises(OSError): write_report(root, "report.json", bare)
-            ev = published(root, value)
-            result = write_report(root, "report.json", ev, execution_descriptor=ex)
-            self.assertEqual(result["sha256"], hashlib.sha256((root/"report.json").read_bytes()).hexdigest())
-            report = json.loads((root/"report.json").read_text())
-            self.assertEqual(report["source_evaluation_sha256"], ev["sha256"])
-            self.assertNotIn("CANARY", json.dumps(report))
-            with self.assertRaises(EvidenceError): write_report(root, "report.json", ev)
-            with self.assertRaises(EvidenceError):
-                write_report(root, "other.json", {**ev, "sha256": "0"*64})
-            (root/"pub/publication-invalidated.json").write_text("{}")
-            with self.assertRaisesRegex(EvidenceError, "publication_invalidated"):
-                write_report(root, "other.json", ev)
-            stale = published(root, {**value, "status": "FAIL", "qualification_pass": False}, "stale")
-            (root/"stale/evaluation.json").write_text(json.dumps(value))
-            with self.assertRaises(EvidenceError):
-                write_report(root, "other.json", {**stale, "sha256": hashlib.sha256(
-                    (root/"stale/evaluation.json").read_bytes()).hexdigest()})
-            self.assertFalse((root/"other.json").exists())
+            anchors = {"expected_preregistration_sha256": prereg["sha256"], "trust": TrustStore()}
+            with self.assertRaisesRegex(EvidenceError, "external_publication_trust"):
+                write_report(root, "report.json", ev)
+            with self.assertRaisesRegex(EvidenceError, "qualification_evidence_changed"):
+                write_report(root, "report.json", ev, **anchors)
+            self.assertFalse((root/"report.json").exists())
+            for status in ("PASS", "FAIL", "BLOCKED", "AUTHORED_CONTRACT_PASS_NOT_QUALIFICATION"):
+                current = {**value, "status": status, "qualification_pass": status == "PASS"}
+                ev = published(root, current, status)
+                output = status+".json"
+                with patch("src.paper_qualification_v1.evaluate", return_value=current):
+                    with self.assertRaisesRegex(EvidenceError, "execution_not_bound"):
+                        write_report(root, output, ev, execution_descriptor=wrong_ex, **anchors)
+                    result = write_report(root, output, ev, **anchors)
+                    self.assertEqual(result["sha256"], hashlib.sha256((root/output).read_bytes()).hexdigest())
+                    report = json.loads((root/output).read_text())
+                    self.assertEqual(report["source_evaluation_sha256"], ev["sha256"])
+                    self.assertEqual(report["status"], status)
+                    self.assertTrue(report["execution_bound"])
+                    self.assertEqual(report["failure_totals"], {"failures": 6, "retries": 12})
+                    self.assertNotIn("CANARY", json.dumps(report))
+                    with self.assertRaises(EvidenceError): write_report(root, output, ev, **anchors)
+                    with self.assertRaisesRegex(EvidenceError, "artifact_bytes_changed"):
+                        write_report(root, "new.json", {**ev, "sha256": "0"*64}, **anchors)
+                (root/status/"publication-invalidated.json").write_text("{}")
+                with self.assertRaisesRegex(EvidenceError, "publication_invalidated"):
+                    write_report(root, "new.json", ev, **anchors)
+            bare = save(root, "bare/evaluation.json", early_block())
+            with self.assertRaisesRegex(EvidenceError, "publication_completion_required"):
+                write_report(root, "new.json", bare)
+            self.assertFalse((root/"new.json").exists())
 
     def cli(self, *args):
         result = subprocess.run([sys.executable, "-m", "src.paper_qualification_report_v1", *args],
@@ -210,38 +247,50 @@ class AggregateTests(unittest.TestCase):
     def test_cli(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            ev = published(root, evaluation())
-            code, result = self.cli("report", "--data-root", directory, "--evaluation", ev["relative"],
-                "--evaluation-sha256", ev["sha256"], "--output", "report.json")
+            receipt = publish(root, "pub", early_block())
+            code, result = self.cli("report", "--data-root", directory, "--evaluation", "pub/evaluation.json",
+                "--evaluation-sha256", receipt["private_evaluation_sha256"], "--output", "canary-output.json")
             self.assertEqual(code, 0)
-            self.assertNotIn("CANARY", json.dumps(result))
-            self.assertNotIn("CANARY", (root/"report.json").read_text())
-            for bundle, output in (("missing.json", "new.json"), (ev["relative"], "report.json")):
-                code, result = self.cli("preflight", "--data-root", directory, "--bundle", bundle,
-                    "--bundle-sha256", ev["sha256"], "--preregistration-sha256", "0"*64, "--output", output)
+            self.assertEqual(set(result), {"sha256"})
+            report = json.loads((root/"canary-output.json").read_bytes())
+            self.assertEqual(report["status"], "BLOCKED")
+            self.assertNotIn("overall", report)
+            descriptor, prereg = bundle(root)
+            for filename, output in (("missing.json", "new.json"), (descriptor["relative"], "canary-output.json")):
+                code, result = self.cli("preflight", "--data-root", directory, "--bundle", filename,
+                    "--bundle-sha256", descriptor["sha256"], "--preregistration-sha256", prereg["sha256"], "--output", output)
                 self.assertEqual(code, 2)
                 self.assertEqual(result["status"], "NOT_READY")
-                self.assertFalse(result["checks"]["bundle" if bundle == "missing.json" else "output_available"])
-            code, result = self.cli("preflight", "--data-root", directory, "--bundle", ev["relative"],
-                "--bundle-sha256", ev["sha256"], "--preregistration-sha256", "0"*64, "--output", "new.json")
-            available = all(result["checks"].values())
-            self.assertEqual(code, 0 if available else 2)
-            self.assertEqual(result["status"], "READY" if available else "NOT_READY")
-            if not (importlib.util.find_spec("fitz") and importlib.util.find_spec("PIL")):
-                self.assertEqual(result["status"], "NOT_READY")
+                self.assertFalse(result["checks"]["bundle" if filename == "missing.json" else "output_available"])
 
-    def test_ready_mechanics_without_opening_sources(self):
+    def test_ready_checks_bound_preregistration_without_opening_sources(self):
         from argparse import Namespace
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            descriptor = save(root, "bundle.json", {"selected_source": "/never/open/CANARY"})
+            descriptor, prereg = bundle(root)
             args = Namespace(data_root=directory, bundle=descriptor["relative"],
-                bundle_sha256=descriptor["sha256"], preregistration_sha256="0"*64, output="new.json",
+                bundle_sha256=descriptor["sha256"], preregistration_sha256=prereg["sha256"], output="new.json",
                 runtime_lock=None)
+            original = Path.read_bytes
+            def guarded(path):
+                self.assertIn(path.name, ("bundle.json", "prereg.json", "unrelated.json"))
+                return original(path)
             with patch("src.paper_qualification_report_v1.runtime_receipt", return_value={}), \
                     patch("src.paper_qualification_report_v1.evaluator_identity", return_value={}), \
-                    patch("src.paper_qualification_report_v1.importlib.util.find_spec", return_value=object()):
+                    patch("src.paper_qualification_report_v1.importlib.util.find_spec", return_value=object()), \
+                    patch.object(Path, "read_bytes", guarded):
                 self.assertEqual(preflight(args)["status"], "READY")
+                args.preregistration_sha256 = "0"*64
+                self.assertFalse(preflight(args)["checks"]["preregistration"])
+                args.preregistration_sha256 = prereg["sha256"]
+                (root/"prereg.json").write_text("{}")
+                self.assertFalse(preflight(args)["checks"]["preregistration"])
+                (root/"unseen-must-not-open.pdf").write_bytes(b"%PDF synthetic canary")
+                args.bundle, args.bundle_sha256 = "unseen-must-not-open.pdf", "0"*64
+                self.assertFalse(preflight(args)["checks"]["bundle"])
+                unrelated = save(root, "unrelated.json", {"selected_source": "/never/open/CANARY"})
+                args.bundle, args.bundle_sha256 = unrelated["relative"], unrelated["sha256"]
+                self.assertFalse(preflight(args)["checks"]["bundle"])
             self.assertFalse((root/"new.json").exists())
 
 

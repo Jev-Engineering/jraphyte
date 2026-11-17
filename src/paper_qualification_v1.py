@@ -762,23 +762,42 @@ def replay_converters(store, case, *, predictions, source_identity, native, page
         require(rebuilt == predictions[method], "assessment_not_derived_from_recorded_converter_output")
 
 
-def _evaluate(root, bundle_descriptor, *, expected_preregistration_sha256, trust, at, runtime_lock):
-    from src.parallel_source_v4.image_ocr import code_identity
-    store = Artifacts(root)
-    bundle = store.json(bundle_descriptor)
-    base_bundle_keys = {"version", "study_id", "execution_mode", "preregistration", "configuration", "regression",
-        "source_map", "access", "sampling", "screening", "sources", "references", "execution", "roles", "phases"}
-    source_policy_present = "regression_policy" in bundle
-    exact(bundle, base_bundle_keys | ({"regression_policy"} if source_policy_present else set()),
+def read_study_bundle(store, descriptor):
+    """Read the bundle and validate descriptor shape without opening its inputs."""
+    bundle = store.json(descriptor)
+    descriptors = {"preregistration", "configuration", "regression", "source_map", "access",
+        "sampling", "screening", "sources", "references", "execution"}
+    if isinstance(bundle, dict) and "regression_policy" in bundle:
+        descriptors.add("regression_policy")
+    exact(bundle, descriptors | {"version", "study_id", "execution_mode", "roles", "phases"},
         "study_bundle_contract_required")
     require(bundle["version"] == VERSION and isinstance(bundle["study_id"], str) and bundle["study_id"], "study_identity_required")
     require(bundle["execution_mode"] in {"REAL_LOCAL", "AUTHORED_CONTRACT_TEST"}, "explicit_study_mode_required")
-    require(bundle["preregistration"]["sha256"] == expected_preregistration_sha256,
-            "externally_pinned_preregistration_required")
+    require(isinstance(bundle["roles"], dict) and isinstance(bundle["phases"], list), "study_bundle_contract_required")
+    for key in descriptors:
+        item = bundle[key]
+        exact(item, {"relative", "sha256"}, "artifact_descriptor_required")
+        require(isinstance(item["relative"], str) and item["relative"]
+            and isinstance(item["sha256"], str) and SHA.fullmatch(item["sha256"]), "artifact_descriptor_required")
+        require(child(store.root, item["relative"]) != store.root, "artifact_descriptor_required")
+    return bundle
+
+
+def read_preregistration(store, bundle, expected_sha256):
+    require(bundle["preregistration"]["sha256"] == expected_sha256, "externally_pinned_preregistration_required")
     pointer = store.json(bundle["preregistration"])
-    require(pointer.get("schema_version") == "qualification-preregistration-current-v1"
+    require(isinstance(pointer, dict) and pointer.get("schema_version") == "qualification-preregistration-current-v1"
         and pointer.get("numeric_targets_unchanged") is True and pointer.get("reference_review_occurred") is False,
         "frozen_preregistration_pointer_required")
+    return pointer
+
+
+def _evaluate(root, bundle_descriptor, *, expected_preregistration_sha256, trust, at, runtime_lock):
+    from src.parallel_source_v4.image_ocr import code_identity
+    store = Artifacts(root)
+    bundle = read_study_bundle(store, bundle_descriptor)
+    source_policy_present = "regression_policy" in bundle
+    pointer = read_preregistration(store, bundle, expected_preregistration_sha256)
     base = str(Path(bundle["preregistration"]["relative"]).parent).replace("\\", "/")
     documents = {}
     for relative, sha in pointer["base_protocol_and_additive_amendments"].items():
@@ -1114,6 +1133,15 @@ def _public_summary(result, private_hash):
     return public
 
 
+def validate_early_block(result):
+    exact(result, {"version", "status", "reason", "qualification_pass", "independent_human_qualification",
+        "graph_qualification_registered", "graph_writes", "paid_calls"}, "unverified_publication_result_rejected")
+    require(result["status"] == "BLOCKED" and result["qualification_pass"] is False
+        and result["independent_human_qualification"] is False and result["graph_writes"] == 0 and result["paid_calls"] == 0
+        and isinstance(result["reason"], str) and re.fullmatch(r"[a-z0-9_]+", result["reason"]),
+        "unverified_publication_result_rejected")
+
+
 def publish(root, output_relative, result, *, expected_preregistration_sha256=None, trust=None,
             runtime_lock=DEFAULT_RUNTIME_LOCK):
     """Recompute under external trust before publishing any evidence-bearing claim."""
@@ -1126,12 +1154,7 @@ def publish(root, output_relative, result, *, expected_preregistration_sha256=No
             "paper_evaluation_result_required")
     store = None
     if "input_hashes" not in result:
-        exact(result, {"version", "status", "reason", "qualification_pass", "independent_human_qualification",
-            "graph_qualification_registered", "graph_writes", "paid_calls"}, "unverified_publication_result_rejected")
-        require(result["status"] == "BLOCKED" and result["qualification_pass"] is False
-            and result["independent_human_qualification"] is False and result["graph_writes"] == 0 and result["paid_calls"] == 0
-            and isinstance(result["reason"], str) and re.fullmatch(r"[a-z0-9_]+", result["reason"]),
-            "unverified_publication_result_rejected")
+        validate_early_block(result)
     else:
         require(isinstance(trust, TrustStore) and isinstance(expected_preregistration_sha256, str)
             and SHA.fullmatch(expected_preregistration_sha256), "external_publication_trust_anchors_required")
@@ -1192,16 +1215,21 @@ def publish(root, output_relative, result, *, expected_preregistration_sha256=No
 
 
 def verify_published(root, receipt_descriptor, *, expected_preregistration_sha256, trust,
-                     runtime_lock=DEFAULT_RUNTIME_LOCK):
-    """Recompute the complete study before trusting a privately pinned PASS."""
+                     runtime_lock=DEFAULT_RUNTIME_LOCK, qualification_only=True):
+    """Replay a published evaluation. By default require a qualifying PASS."""
     receipt_descriptor = deepcopy(receipt_descriptor)
-    trust_identity = _trust_identity(trust)
+    trust_identity = None if not qualification_only and trust is None else _trust_identity(trust)
     store = Artifacts(root)
     directory = child(store.root, receipt_descriptor["relative"]).parent
     require(not (directory/"publication-invalidated.json").exists(), "publication_invalidated")
     recorded = store.json(receipt_descriptor)
-    require(recorded.get("status") == "PASS" and recorded.get("qualification_pass") is True,
+    status = recorded.get("status")
+    passed = status == "PASS"
+    require(not qualification_only or passed and recorded.get("qualification_pass") is True,
             "nonpassing_or_authored_study_cannot_qualify")
+    require(status in {"PASS", "FAIL", "BLOCKED", "AUTHORED_CONTRACT_PASS_NOT_QUALIFICATION"}
+        and recorded.get("qualification_pass") is passed and recorded.get("graph_qualification_registered") is False,
+        "paper_evaluation_result_required")
     marker_relative = (directory/"publication-complete.json").relative_to(store.root).as_posix()
     marker_path = child(store.root, marker_relative)
     require(marker_path.is_file(), "publication_completion_required")
@@ -1211,20 +1239,26 @@ def verify_published(root, receipt_descriptor, *, expected_preregistration_sha25
     exact(marker, {"version", "evaluation_sha256", "public_summary_sha256", "status", "qualification_pass",
         "graph_qualification_registered"}, "publication_completion_contract_required")
     require(marker["version"] == "paper-evaluation-publication-v1"
-        and marker["evaluation_sha256"] == receipt_descriptor["sha256"] and marker["status"] == "PASS"
-        and marker["qualification_pass"] is True and marker["graph_qualification_registered"] is False,
+        and marker["evaluation_sha256"] == receipt_descriptor["sha256"] and marker["status"] == status
+        and marker["qualification_pass"] is passed and marker["graph_qualification_registered"] is False,
         "publication_completion_identity_mismatch")
     public = store.json({"relative": (directory/"public-summary.json").relative_to(store.root).as_posix(),
         "sha256": marker["public_summary_sha256"]})
     require(digest_value(public) == digest_value(_public_summary(recorded, receipt_descriptor["sha256"])),
             "public_summary_does_not_match_private_evaluation")
-    invocation = recorded["invocation"]
-    require(invocation["expected_preregistration_sha256"] == expected_preregistration_sha256,
-            "preregistration_trust_anchor_mismatch")
-    current = evaluate(root, **invocation, trust=trust, at=recorded["evaluated_at"], runtime_lock=runtime_lock)
-    require(digest_value(current) == digest_value(recorded), "qualification_evidence_changed_after_publication")
+    if status == "BLOCKED" and "input_hashes" not in recorded:
+        validate_early_block(recorded)
+    else:
+        require(trust_identity is not None and isinstance(expected_preregistration_sha256, str)
+            and SHA.fullmatch(expected_preregistration_sha256), "external_publication_trust_anchors_required")
+        invocation = recorded["invocation"]
+        require(invocation["expected_preregistration_sha256"] == expected_preregistration_sha256,
+                "preregistration_trust_anchor_mismatch")
+        current = evaluate(root, **invocation, trust=trust, at=recorded["evaluated_at"], runtime_lock=runtime_lock)
+        require(digest_value(current) == digest_value(recorded), "qualification_evidence_changed_after_publication")
     store.recheck()
-    require(_trust_identity(trust) == trust_identity, "review_trust_changed_during_verification")
+    if trust_identity is not None:
+        require(_trust_identity(trust) == trust_identity, "review_trust_changed_during_verification")
     require(not (directory/"publication-invalidated.json").exists(), "publication_invalidated")
-    return {"status": "PASS", "qualification_pass": True, "evaluation_sha256": receipt_descriptor["sha256"],
+    return {"status": status, "qualification_pass": passed, "evaluation_sha256": receipt_descriptor["sha256"],
         "review_policy": REVIEW_POLICY, "independent_human_qualification": False, "graph_qualification_registered": False}

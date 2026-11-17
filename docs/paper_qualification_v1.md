@@ -320,7 +320,8 @@ STUDY=validation_v3_private/qualification-UNIQUE
 ```
 
 1. **Read-only preflight.** Opens no selected source. It checks the data root is
-   outside the repository, the bundle hash, that the output path is fresh, that
+   outside the repository, the bundle hash and descriptor shape, the bound
+   preregistration pointer and externally supplied hash, that the output path is fresh, that
    the optional PDF/image dependencies are importable, and that the evaluator
    identity and runtime receipt compute under the runtime lock.
 
@@ -332,31 +333,36 @@ STUDY=validation_v3_private/qualification-UNIQUE
      --output "$STUDY/evaluation-run"
    ```
 
-   Exit 0 and `READY` mean only that the inputs and tools are present. On a host
+   Exit 0 and `READY` mean the bundle and preregistration pointer passed those
+   checks. Converter readiness, review signatures and selected artifacts are
+   checked by the full evaluator. On a host
    whose interpreter does not match `runtime-windows-py312.lock.json`, the
    `runtime_receipt` check is false, as the evaluator would also be. Pass
    `--runtime-lock` only for a separately approved lock.
 2. **Evaluate and publish** from the application that owns the review
    `TrustStore`, using the `evaluate` and `publish` snippet above with
-   `fresh_output_relative="$STUDY/evaluation-run"`. Then run `verify_published` on
-   the returned private receipt descriptor.
-3. **Redacted aggregate report.** Run this only after `verify_published` passes.
-   The execution descriptor must be the exact `execution` artifact the evaluation
-   consumed, so its hash must appear in the evaluation's `input_hashes`:
+   `fresh_output_relative="$STUDY/evaluation-run"`.
+3. **Redacted aggregate report.** Supply the application-owned public issuer
+   configuration and the external preregistration hash. The reporter replays
+   the published evaluation under that trust, preserves its status, and reads
+   the exact `execution` descriptor from the verified study bundle. If supplied
+   explicitly, `--execution` and `--execution-sha256` must match that descriptor.
 
    ```sh
    python -m src.paper_qualification_report_v1 report \
      --data-root "$TRACE_GC_TEST_DATA_ROOT" \
      --evaluation "$STUDY/evaluation-run/evaluation.json" \
      --evaluation-sha256 "$EVALUATION_SHA256" \
-     --execution "$STUDY/execution.json" --execution-sha256 "$EXECUTION_SHA256" \
+     --preregistration-sha256 "$PREREGISTRATION_SHA256" --trust "$REVIEW_TRUST_FILE" \
      --output "$STUDY/aggregate-report.json"
    ```
 
 The report (`paper-qualification-aggregate-report-v1`) requires a sibling
 `publication-complete.json` for that evaluation hash and rejects an invalidated
-publication. This is a guard, not a replacement for `verify_published`. It is
-built from an allowlist and contains:
+publication. The replay uses `verify_published(..., qualification_only=False)`
+to verify the recorded outcome, including failure and authored results. Callers
+requiring a qualifying PASS use the default strict mode. The report is built
+from an allowlist and contains:
 
 - status;
 - overall primary and per-stratum challenge counts, exact bounds and 95%
@@ -373,8 +379,9 @@ identity, source text and review audit membership cannot be emitted. Partial or
 absent accepts appear only as a count. A completed evaluation with missing
 representation retains its aggregate measurements under `BLOCKED`. An early
 evidence failure reports a fixed diagnostic code or a generic redaction code
-and has no execution descriptor. The write is once-only. Exit 2 with `BLOCKED` reports invalid input
-without echoing it. The report inherits the evaluation's scope: first-page
+and can be reported without a trust file or execution descriptor. The write is
+once-only, and stdout contains just its SHA-256. Exit 2 with `BLOCKED` reports
+invalid input without echoing it. The report inherits the evaluation's scope: first-page
 abstract extraction only, internally attributed review, no independent human
 validation.
 
