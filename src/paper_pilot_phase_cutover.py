@@ -14,10 +14,12 @@ import os
 from pathlib import Path
 import subprocess
 from subprocess import SubprocessError
+from tempfile import TemporaryDirectory
 
 from trace_gc.canonical import bytes_digest, dumps, loads
 from trace_gc.errors import require
-from trace_gc.phase_authority import (_plain_absolute_path, dacl_has_ace, dacl_has_deny_trustee,
+from trace_gc.phase_authority import (_plain_absolute_path, canonical_dacl_ace, dacl_has_ace,
+                                      dacl_has_deny_trustee,
                                       directory_dacl_sddl)
 
 NAMES = {"checkpoint.sqlite3", "graph.sqlite3", "budget.sqlite3",
@@ -63,15 +65,15 @@ def _denial_problem(parent: Path) -> str | None:
     return TOKEN_NOT_REFUSED
 
 
-def _restore_parent_dacl(parent: Path, deny_sid: str, original: str) -> str | None:
-    """Remove the deny this call added and verify exact restoration."""
+def _restore_parent_dacl(parent: Path, backup: Path, original: str) -> str | None:
+    """Restore the saved DACL, including grants altered by the deny command."""
     try:
-        removed = subprocess.run(["icacls.exe", str(parent), "/remove:d", "*" + deny_sid],
-                                 capture_output=True, timeout=30)
+        restored = subprocess.run(["icacls.exe", str(parent.parent), "/restore", str(backup)],
+                                  capture_output=True, timeout=30)
     except (OSError, SubprocessError):
-        return "removal could not run"
-    if removed.returncode != 0:
-        return "icacls exit %d" % removed.returncode
+        return "restoration could not run"
+    if restored.returncode != 0:
+        return "icacls exit %d" % restored.returncode
     try:
         restored = directory_dacl_sddl(parent)
     except Exception:
@@ -79,6 +81,55 @@ def _restore_parent_dacl(parent: Path, deny_sid: str, original: str) -> str | No
     if restored != original:
         return "DACL differs from its pre-state"
     return None
+
+
+def _install_parent_deny(parent: Path, deny_sid: str, original: str) -> str:
+    deny = canonical_dacl_ace(DENY_PARENT_ACE.format(sid=deny_sid))
+    with TemporaryDirectory(prefix="paper-pilot-dacl-") as directory:
+        backup = Path(directory) / "original.acl"
+        try:
+            saved = subprocess.run(["icacls.exe", parent.name, "/save", str(backup)],
+                                   cwd=parent.parent, capture_output=True, timeout=30)
+            saved_ok = saved.returncode == 0 and backup.stat().st_size > 0
+        except (OSError, SubprocessError):
+            saved_ok = False
+        require(saved_ok, "PHASE_FENCE", "original parent DACL could not be saved")
+
+        try:
+            updated = subprocess.run(["icacls.exe", str(parent), "/deny", "*" + deny_sid + ":(AD)"],
+                                     capture_output=True, timeout=30)
+        except (OSError, SubprocessError):
+            problem = "could not deny old state recreation"
+        else:
+            if updated.returncode != 0:
+                problem = "could not deny old state recreation"
+            else:
+                try:
+                    current = directory_dacl_sddl(parent)
+                    exact_deny = dacl_has_ace(current, DENY_PARENT_ACE, deny_sid)
+                    # Remove exactly one serialized deny from the candidate. All
+                    # control flags and every original ACE must compare exactly.
+                    unchanged = any(ace in current and current.replace(ace, "", 1) == original
+                                    for ace in (deny, DENY_PARENT_ACE.format(sid=deny_sid)))
+                except Exception:
+                    problem = DACL_UNVERIFIED
+                else:
+                    if not exact_deny:
+                        problem = "old parent lacks exact deny-create ACE"
+                    elif not unchanged:
+                        problem = "old parent DACL changed beyond the exact deny-create ACE"
+                    else:
+                        try:
+                            problem = _denial_problem(parent)
+                        except Exception:
+                            problem = DENIAL_UNVERIFIED
+                    if problem is None:
+                        return current
+
+        why = _restore_parent_dacl(parent, backup, original)
+        if why is not None:
+            problem += "; original parent DACL restoration could not be verified (" + why + ")"
+        require(False, "PHASE_FENCE", problem)
 
 
 def _pinned_files(root: Path, expected: dict[str, str]) -> None:
@@ -148,22 +199,8 @@ def fence_closed_old_phase(*, old_root: str | Path, archived_root: str | Path,
         require(old.exists(), "PHASE_FENCE", "archive moved without durable parent deny")
         require(not dacl_has_deny_trustee(sddl, deny_sid), "PHASE_FENCE",
                 "old parent already carries another deny for the fence SID")
-        restore_sddl = sddl
-        command = subprocess.run(["icacls.exe", str(old.parent), "/deny", "*" + deny_sid + ":(AD)"],
-                                 capture_output=True, timeout=30)
-        require(command.returncode == 0, "PHASE_FENCE", "could not deny old state recreation")
-        try:
-            sddl = directory_dacl_sddl(old.parent)
-            exact_deny = dacl_has_ace(sddl, DENY_PARENT_ACE, deny_sid)
-        except Exception:
-            problem = DACL_UNVERIFIED
-        else:
-            problem = (_denial_problem(old.parent) if exact_deny else
-                       "old parent lacks exact deny-create ACE")
-        if problem is not None:
-            why = _restore_parent_dacl(old.parent, deny_sid, restore_sddl)
-            if why is not None:
-                problem += "; the added deny could not be removed and verified (" + why + ")"
+        sddl = _install_parent_deny(old.parent, deny_sid, sddl)
+        problem = None
     else:
         problem = _denial_problem(old.parent)
     require(problem is None, "PHASE_FENCE", problem or "")

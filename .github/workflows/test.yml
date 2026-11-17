@@ -94,13 +94,13 @@ jobs:
           python -m unittest discover -s tests -p "test_paper_pilot_phase_cutover_guarded_v4.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-phase-v4.log"
           grep -Eq '^Ran 9 tests in ' "$RUNNER_TEMP/windows-phase-v4.log"
           grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-phase-v4.log"
-      - name: Run the twenty-one modeled v1/v4 trustee and token-gate cases (labelled model, not native evidence)
+      - name: Run the twenty-three modeled v1/v4 trustee and token-gate cases (labelled model, not native evidence)
         if: always()
         shell: bash
         run: |
           set -o pipefail
           python -m unittest discover -s tests -p "test_paper_pilot_phase_trustees_model.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-phase-trustees-model.log"
-          grep -Eq '^Ran 21 tests in ' "$RUNNER_TEMP/windows-phase-trustees-model.log"
+          grep -Eq '^Ran 23 tests in ' "$RUNNER_TEMP/windows-phase-trustees-model.log"
           grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-phase-trustees-model.log"
       - name: Sanitized Windows trustee serialization diagnostics
         if: always()
