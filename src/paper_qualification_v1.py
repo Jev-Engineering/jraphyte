@@ -52,6 +52,11 @@ REFERENCE_REVIEW = {"candidate_review_separate_from_reference_context": True,
     "external_independent_human_claim": False, "fixed_reference_audit_fraction": .1,
     "kind": "internal_assistant", "reviewer_identities": None,
     "source_before_prediction": True, "unresolved_and_disagreements_preserved": True}
+FRAME_SIZE = 2000
+POPULATION_SCOPE = "Bounded returned recent OAI frame; historical hep-th challenge is descriptive and separate."
+CONFIDENCE_SCOPE = "Two one-sided 97.5% exact bounds; at least 95% joint coverage under the preregistered binomial model."
+EXTRACTION_SCOPE = "first_page_abstract_extraction_only"
+EXPOSURE_REGISTRY = "metadata-inventory/exposure-registry.jsonl"
 PHASES = ("configuration_frozen", "cohort_frozen", "references_frozen", "predictions_frozen")
 CLARIFICATION = {"version": "paper-evaluator-preselection-clarification-v1",
     "normalized_rank_identity": "lowercase_versionless_arxiv_colon_work_id",
@@ -189,8 +194,7 @@ def statistical_gates(primary, challenges, strata):
         reports[name] = values
     return {"status": "BLOCKED" if missing else "FAIL" if not all(checks.values()) else "PASS",
         "primary": p, "challenge": reports, "checks": checks, "missing_representation": missing,
-        "primary_confidence_claim": "Two one-sided 97.5% exact bounds; at least 95% joint coverage under the preregistered binomial model.",
-        "population_scope": "Bounded returned recent OAI frame; historical hep-th challenge is descriptive and separate."}
+        "primary_confidence_claim": CONFIDENCE_SCOPE, "population_scope": POPULATION_SCOPE}
 
 
 class Artifacts:
@@ -286,7 +290,7 @@ def validate_selection(value):
     exact(value, {"recent_frame", "historical_frame", "exposed_work_ids", "identity_exclusions",
         "primary", "recent_screen", "historical_screen", "screen", "challenge", "reconciled_at", "exposure_snapshot"}, "selection_contract_required")
     recent, historical = value["recent_frame"], value["historical_frame"]
-    require(len(recent) == 2000 and len(historical) == 2000, "both_frozen_2000_work_frames_required")
+    require(len(recent) == FRAME_SIZE and len(historical) == FRAME_SIZE, "both_frozen_2000_work_frames_required")
     rank(recent, "primary"); rank(historical, "historical-screen")
     require(not set(recent) & set(historical), "frame_work_overlap")
     exposed = value["exposed_work_ids"]
@@ -325,6 +329,22 @@ def validate_selection(value):
     for name in QUOTAS:
         memberships[name] = sorted(sid for sid in selected if name in value["screen"][sid]["strata"])
     return set(value["primary"]) | selected, screened, memberships
+
+
+def read_exposure_registry(store, raw):
+    entries = []
+    for line in raw.splitlines():
+        if not line:
+            continue
+        entry = store.parse(line)
+        require(type(entry) is dict and "work_id" in entry, "invalid_pinned_exposure_registry")
+        normalize_work_id(entry["work_id"])
+        for key in ("source_sha256", "page_sha256"):
+            values = entry.get(key)
+            require(type(values) is list and all(type(value) is str and SHA.fullmatch(value) for value in values),
+                    "invalid_pinned_exposure_registry")
+        entries.append(entry)
+    return entries
 
 
 def reconcile_exposure(snapshot, prior, selection):
@@ -762,31 +782,53 @@ def replay_converters(store, case, *, predictions, source_identity, native, page
         require(rebuilt == predictions[method], "assessment_not_derived_from_recorded_converter_output")
 
 
-def _evaluate(root, bundle_descriptor, *, expected_preregistration_sha256, trust, at, runtime_lock):
-    from src.parallel_source_v4.image_ocr import code_identity
-    store = Artifacts(root)
-    bundle = store.json(bundle_descriptor)
-    base_bundle_keys = {"version", "study_id", "execution_mode", "preregistration", "configuration", "regression",
-        "source_map", "access", "sampling", "screening", "sources", "references", "execution", "roles", "phases"}
-    source_policy_present = "regression_policy" in bundle
-    exact(bundle, base_bundle_keys | ({"regression_policy"} if source_policy_present else set()),
+def read_study_bundle(store, descriptor):
+    """Read the bundle and validate descriptor shape without opening its inputs."""
+    bundle = store.json(descriptor)
+    descriptors = {"preregistration", "configuration", "regression", "source_map", "access",
+        "sampling", "screening", "sources", "references", "execution"}
+    if isinstance(bundle, dict) and "regression_policy" in bundle:
+        descriptors.add("regression_policy")
+    exact(bundle, descriptors | {"version", "study_id", "execution_mode", "roles", "phases"},
         "study_bundle_contract_required")
     require(bundle["version"] == VERSION and isinstance(bundle["study_id"], str) and bundle["study_id"], "study_identity_required")
     require(bundle["execution_mode"] in {"REAL_LOCAL", "AUTHORED_CONTRACT_TEST"}, "explicit_study_mode_required")
-    require(bundle["preregistration"]["sha256"] == expected_preregistration_sha256,
-            "externally_pinned_preregistration_required")
+    require(isinstance(bundle["roles"], dict) and isinstance(bundle["phases"], list), "study_bundle_contract_required")
+    for key in descriptors:
+        item = bundle[key]
+        exact(item, {"relative", "sha256"}, "artifact_descriptor_required")
+        require(isinstance(item["relative"], str) and item["relative"]
+            and isinstance(item["sha256"], str) and SHA.fullmatch(item["sha256"]), "artifact_descriptor_required")
+        require(child(store.root, item["relative"]) != store.root, "artifact_descriptor_required")
+    return bundle
+
+
+REQUIRED_PREREGISTRATION_DOCUMENTS = {"protocol.json", "protocol.md", "amendment-02/protocol-amendment.md",
+    "amendment-03/protocol-amendment.md", "amendment-04/evaluator-clarification.json",
+    "metadata-inventory/exposure-registry.jsonl"}
+
+
+def read_preregistration(store, bundle, expected_sha256):
+    require(bundle["preregistration"]["sha256"] == expected_sha256, "externally_pinned_preregistration_required")
     pointer = store.json(bundle["preregistration"])
-    require(pointer.get("schema_version") == "qualification-preregistration-current-v1"
+    require(isinstance(pointer, dict) and pointer.get("schema_version") == "qualification-preregistration-current-v1"
         and pointer.get("numeric_targets_unchanged") is True and pointer.get("reference_review_occurred") is False,
         "frozen_preregistration_pointer_required")
+    return pointer
+
+
+def _evaluate(root, bundle_descriptor, *, expected_preregistration_sha256, trust, at, runtime_lock):
+    from src.parallel_source_v4.image_ocr import code_identity
+    store = Artifacts(root)
+    bundle = read_study_bundle(store, bundle_descriptor)
+    source_policy_present = "regression_policy" in bundle
+    pointer = read_preregistration(store, bundle, expected_preregistration_sha256)
     base = str(Path(bundle["preregistration"]["relative"]).parent).replace("\\", "/")
     documents = {}
     for relative, sha in pointer["base_protocol_and_additive_amendments"].items():
         descriptor = {"relative": base+"/"+relative, "sha256": sha}
         documents[relative] = store.bytes(descriptor)
-    required = {"protocol.json", "protocol.md", "amendment-02/protocol-amendment.md",
-        "amendment-03/protocol-amendment.md", "amendment-04/evaluator-clarification.json", "metadata-inventory/exposure-registry.jsonl"}
-    require(required <= set(documents), "base_protocol_and_both_frame_amendments_required")
+    require(REQUIRED_PREREGISTRATION_DOCUMENTS <= set(documents), "base_protocol_and_both_frame_amendments_required")
     protocol = store.json({"relative": base+"/protocol.json", "sha256": pointer["base_protocol_and_additive_amendments"]["protocol.json"]})
     validate_protocol(protocol)
     require(store.json({"relative": base+"/amendment-04/evaluator-clarification.json",
@@ -891,7 +933,8 @@ def _evaluate(root, bundle_descriptor, *, expected_preregistration_sha256, trust
             frame_versions[sid] = item["version_id"]
             if item.get("doi"):
                 frame_dois[sid] = item["doi"].strip().lower()
-    exposure = [store.parse(line) for line in documents["metadata-inventory/exposure-registry.jsonl"].splitlines() if line]
+    exposure = read_exposure_registry(store, documents[EXPOSURE_REGISTRY])
+    require(bundle["execution_mode"] != "REAL_LOCAL" or bool(exposure), "prior_exposure_registry_required")
     known = reconcile_exposure(store.json(selection["exposure_snapshot"]), exposure, selection)
     verify_identity_exclusions(store, selection["identity_exclusions"], known=known,
         frame_dois=frame_dois, frame_versions=frame_versions, cohort_frozen=times["cohort_frozen"])
@@ -934,8 +977,10 @@ def _evaluate(root, bundle_descriptor, *, expected_preregistration_sha256, trust
     require(times["references_frozen"] < instant(execution["started_at"]) <= instant(execution["completed_at"])
         <= times["predictions_frozen"] <= instant(at), "predictions_precede_reference_seal")
     require(set(execution["cases"]) == evaluated_ids, "all_sampled_predictions_required")
-    require(execution["costs"].get("paid_calls") == 0 and execution["costs"].get("paid_spend_usd") == 0
-        and execution["costs"].get("graph_writes") == 0, "unauthorized_paid_or_graph_execution")
+    costs = execution["costs"]
+    require(type(costs) is dict and all(type(costs.get(k)) is int and costs[k] == 0
+        for k in ("paid_calls", "graph_writes")) and type(costs.get("paid_spend_usd")) in (int, float)
+        and costs["paid_spend_usd"] == 0, "unauthorized_paid_or_graph_execution")
     require(isinstance(execution["stage_reports"], list) and execution["stage_reports"], "timing_failure_and_review_reports_required")
     stage_names = set()
     for stage in execution["stage_reports"]:
@@ -1053,7 +1098,7 @@ def _evaluate(root, bundle_descriptor, *, expected_preregistration_sha256, trust
     require(evaluator_identity() == code and code_identity() == image_code and runtime_receipt(runtime_lock) == runtime,
             "code_or_runtime_changed_during_evaluation")
     authored = bundle["execution_mode"] == "AUTHORED_CONTRACT_TEST"
-    return {**report, "version": VERSION, "study_id": bundle["study_id"],
+    return {**report, "version": VERSION, "study_id": bundle["study_id"], "execution_mode": bundle["execution_mode"],
         "qualification_pass": report["status"] == "PASS" and not authored,
         "status": "AUTHORED_CONTRACT_PASS_NOT_QUALIFICATION" if report["status"] == "PASS" and authored else report["status"],
         "review_policy": REVIEW_POLICY, "independent_human_qualification": False, "graph_qualification_registered": False,
@@ -1103,15 +1148,52 @@ def evaluate(root, bundle_descriptor, *, expected_preregistration_sha256, trust:
             "graph_writes": 0, "paid_calls": 0}
 
 
+PUBLIC_REASONS = frozenset({"unrecognized_reason_redacted", "missing_evidence",
+    "missing_or_invalid_bound_study_evidence", "external_review_trust_required", "artifact_bytes_changed",
+    "regression_prerequisite_changed_during_qualification", "code_or_runtime_changed_during_evaluation",
+    "execution_descriptor_required", "execution_not_bound_to_evaluation", "report_output_exists",
+    "publication_invalidated_or_not_evaluation", "publication_completion_required"})
+
+
+def public_reason_code(value):
+    return value if type(value) is str and value in PUBLIC_REASONS else "unrecognized_reason_redacted"
+
+
 def _public_summary(result, private_hash):
     """Deterministic redaction; the public claim is derived from the pinned result."""
     excluded = {"input_hashes", "cases", "review_audit_ids", "study_id", "invocation"}
-    public = {key: value for key, value in result.items() if key not in excluded}
-    if "measured_arms" in public:
-        public["measured_arms"] = {method: {key: value for key, value in arm.items() if key != "cases"}
-            for method, arm in public["measured_arms"].items()}
+    def redact(value):
+        if type(value) is list:
+            return [redact(item) for item in value]
+        if type(value) is not dict:
+            return value
+        summary = {}
+        for key, item in value.items():
+            if key in excluded:
+                continue
+            if key == "rejected_partial_or_absent_accepts":
+                summary["rejected_partial_or_absent_accepts_count"] = len(item)
+            elif key == "reason":
+                summary[key] = public_reason_code(item)
+            else:
+                summary[key] = redact(item)
+        return summary
+
+    public = redact(result)
     public["private_evaluation_sha256"] = private_hash
+    public["execution_mode"] = result.get("execution_mode", "UNVERIFIED")
+    public["scope"] = EXTRACTION_SCOPE
     return public
+
+
+def validate_early_block(result):
+    exact(result, {"version", "status", "reason", "qualification_pass", "independent_human_qualification",
+        "graph_qualification_registered", "graph_writes", "paid_calls"}, "unverified_publication_result_rejected")
+    require(result["version"] == VERSION and result["status"] == "BLOCKED" and result["qualification_pass"] is False
+        and result["independent_human_qualification"] is False and result["graph_qualification_registered"] is False
+        and all(type(result[key]) is int and result[key] == 0 for key in ("graph_writes", "paid_calls"))
+        and isinstance(result["reason"], str) and re.fullmatch(r"[a-z0-9_]+", result["reason"]),
+        "unverified_publication_result_rejected")
 
 
 def publish(root, output_relative, result, *, expected_preregistration_sha256=None, trust=None,
@@ -1126,12 +1208,7 @@ def publish(root, output_relative, result, *, expected_preregistration_sha256=No
             "paper_evaluation_result_required")
     store = None
     if "input_hashes" not in result:
-        exact(result, {"version", "status", "reason", "qualification_pass", "independent_human_qualification",
-            "graph_qualification_registered", "graph_writes", "paid_calls"}, "unverified_publication_result_rejected")
-        require(result["status"] == "BLOCKED" and result["qualification_pass"] is False
-            and result["independent_human_qualification"] is False and result["graph_writes"] == 0 and result["paid_calls"] == 0
-            and isinstance(result["reason"], str) and re.fullmatch(r"[a-z0-9_]+", result["reason"]),
-            "unverified_publication_result_rejected")
+        validate_early_block(result)
     else:
         require(isinstance(trust, TrustStore) and isinstance(expected_preregistration_sha256, str)
             and SHA.fullmatch(expected_preregistration_sha256), "external_publication_trust_anchors_required")
@@ -1192,16 +1269,21 @@ def publish(root, output_relative, result, *, expected_preregistration_sha256=No
 
 
 def verify_published(root, receipt_descriptor, *, expected_preregistration_sha256, trust,
-                     runtime_lock=DEFAULT_RUNTIME_LOCK):
-    """Recompute the complete study before trusting a privately pinned PASS."""
+                     runtime_lock=DEFAULT_RUNTIME_LOCK, qualification_only=True):
+    """Replay a published evaluation. By default require a qualifying PASS."""
     receipt_descriptor = deepcopy(receipt_descriptor)
-    trust_identity = _trust_identity(trust)
+    trust_identity = None if not qualification_only and trust is None else _trust_identity(trust)
     store = Artifacts(root)
     directory = child(store.root, receipt_descriptor["relative"]).parent
     require(not (directory/"publication-invalidated.json").exists(), "publication_invalidated")
     recorded = store.json(receipt_descriptor)
-    require(recorded.get("status") == "PASS" and recorded.get("qualification_pass") is True,
+    status = recorded.get("status")
+    passed = status == "PASS"
+    require(not qualification_only or passed and recorded.get("qualification_pass") is True,
             "nonpassing_or_authored_study_cannot_qualify")
+    require(status in {"PASS", "FAIL", "BLOCKED", "AUTHORED_CONTRACT_PASS_NOT_QUALIFICATION"}
+        and recorded.get("qualification_pass") is passed and recorded.get("graph_qualification_registered") is False,
+        "paper_evaluation_result_required")
     marker_relative = (directory/"publication-complete.json").relative_to(store.root).as_posix()
     marker_path = child(store.root, marker_relative)
     require(marker_path.is_file(), "publication_completion_required")
@@ -1211,20 +1293,26 @@ def verify_published(root, receipt_descriptor, *, expected_preregistration_sha25
     exact(marker, {"version", "evaluation_sha256", "public_summary_sha256", "status", "qualification_pass",
         "graph_qualification_registered"}, "publication_completion_contract_required")
     require(marker["version"] == "paper-evaluation-publication-v1"
-        and marker["evaluation_sha256"] == receipt_descriptor["sha256"] and marker["status"] == "PASS"
-        and marker["qualification_pass"] is True and marker["graph_qualification_registered"] is False,
+        and marker["evaluation_sha256"] == receipt_descriptor["sha256"] and marker["status"] == status
+        and marker["qualification_pass"] is passed and marker["graph_qualification_registered"] is False,
         "publication_completion_identity_mismatch")
     public = store.json({"relative": (directory/"public-summary.json").relative_to(store.root).as_posix(),
         "sha256": marker["public_summary_sha256"]})
     require(digest_value(public) == digest_value(_public_summary(recorded, receipt_descriptor["sha256"])),
             "public_summary_does_not_match_private_evaluation")
-    invocation = recorded["invocation"]
-    require(invocation["expected_preregistration_sha256"] == expected_preregistration_sha256,
-            "preregistration_trust_anchor_mismatch")
-    current = evaluate(root, **invocation, trust=trust, at=recorded["evaluated_at"], runtime_lock=runtime_lock)
-    require(digest_value(current) == digest_value(recorded), "qualification_evidence_changed_after_publication")
+    if status == "BLOCKED" and "input_hashes" not in recorded:
+        validate_early_block(recorded)
+    else:
+        require(trust_identity is not None and isinstance(expected_preregistration_sha256, str)
+            and SHA.fullmatch(expected_preregistration_sha256), "external_publication_trust_anchors_required")
+        invocation = recorded["invocation"]
+        require(invocation["expected_preregistration_sha256"] == expected_preregistration_sha256,
+                "preregistration_trust_anchor_mismatch")
+        current = evaluate(root, **invocation, trust=trust, at=recorded["evaluated_at"], runtime_lock=runtime_lock)
+        require(digest_value(current) == digest_value(recorded), "qualification_evidence_changed_after_publication")
     store.recheck()
-    require(_trust_identity(trust) == trust_identity, "review_trust_changed_during_verification")
+    if trust_identity is not None:
+        require(_trust_identity(trust) == trust_identity, "review_trust_changed_during_verification")
     require(not (directory/"publication-invalidated.json").exists(), "publication_invalidated")
-    return {"status": "PASS", "qualification_pass": True, "evaluation_sha256": receipt_descriptor["sha256"],
+    return {"status": status, "qualification_pass": passed, "evaluation_sha256": receipt_descriptor["sha256"],
         "review_policy": REVIEW_POLICY, "independent_human_qualification": False, "graph_qualification_registered": False}

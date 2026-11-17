@@ -5,8 +5,9 @@ download papers, run converters, issue review signatures, enroll trusted keys,
 or register a graph qualification. `trace_gc.qualification.evaluate_labels` and
 `QualificationRegistry` retain their existing contracts.
 
-No real qualification is supplied by this change. The current development #19
-receipts fail preservation and source fidelity. No prospective paper, image or
+No real qualification is supplied by this change. When this evaluator was first
+implemented, the development #19 receipts failed preservation and source fidelity;
+see "Present limits" below for the current state. No prospective paper, image or
 prediction was opened to implement or test this evaluator. Its tests use authored
 protocol records, ephemeral test keys and source-rendered fixtures; fabricated
 converter/OCR outputs are clearly identified as test data.
@@ -272,29 +273,133 @@ graph qualification, changes extraction defaults or admits evidence to a graph.
 
 ## Present limits and required integration
 
-No prospective signed review records, selected cohort, genuine four-converter
-execution package or passing #19 prerequisite exists in this implementation.
-The study therefore remains blocked. The new producer/access contracts must be
-emitted by the genuine local execution controller; authored fixtures cannot fill
-that role. Native manual-closure reseals are currently rejected by this evaluator
-unless a separately reviewed prospective adapter is implemented and frozen;
-only exact native selection or the checked typed image route is supported.
-Prospective image title-page closure is likewise blocked until a page-two witness
-adapter is implemented; the supported image closure has an actual following
-section transition. This limitation cannot be recast as a successful title-page
-candidate or omitted from the challenge denominator.
+Status as of the current main branch (refreshed for issue #20; repository and
+GitHub issue state only, no private artifact was reread for this update):
 
-Identity replacement is also deliberately blocked until its actual alias proof
-adapter is implemented. The frozen protocol permits verified identity-only
-replacements before review; this evaluator does not accept an arbitrary exclusion
-reason as proof. A duplicate or unavailable source cannot trigger a silent cohort
-change. These remaining adapters require a new implementation freeze before any
-prospective source access; no current code or unit test closes issue #20.
+- **#19 regression prerequisite.** Issues #17, #18 and #19 are closed. The issue
+  #20 thread reports a privately pinned source-verified 200-paper gate PASS for
+  delivered runtime `d908283`, with the legacy v1 audit FAIL preserved alongside
+  it. That receipt is not in this repository. The evaluator accepts it only
+  through the `regression_policy` path (`src.paper_selector_acceptance_v2.verify`)
+  and reverifies it at evaluation time under the exact current code and runtime.
+  Whether it still verifies after later code changes is not established here.
+- **Implemented adapters.** The typed identity-alias proof
+  (`paper-identity-alias-proof-v1`, `verify_identity_exclusions`) and the
+  title-page page-two witness (`reviewed_title_page_end`,
+  `verify_title_page_source_extent`) are implemented and covered by authored
+  tests. See `docs/paper-qualification-alias-title-page-v1.md`. Neither has run on
+  a prospective cohort.
+- **Evaluator identity.** PR #112 (refs #97) binds the evaluator's static local
+  import closure. Earlier code maps and receipts stay historical and are not
+  rebound. A prospective run needs access and execution artifacts that carry the
+  current code hash.
+- **Still unsupported.** Native manual-closure reseals are rejected. Only exact
+  native selection (`native_or_hold`) or the checked typed image route
+  (`image_review`) is accepted. Arbitrary exclusion reasons are never accepted as
+  identity proof. A duplicate or unavailable source cannot silently change the
+  cohort.
+
+These pieces are still missing and cannot be produced offline:
+
+- a selected unseen cohort, with eligible versioned PDFs and DOI alias enrichment
+  (the issue #20 thread reports that the exposure snapshot records no DOIs);
+- the genuine local four-converter execution package and Windows image OCR,
+  emitted by the real execution controller (authored fixtures cannot fill this
+  role);
+- signed, attributed, blinded internal source-first reference review with
+  adjudication.
+
+The study therefore remains `BLOCKED`. No current code or unit test closes issue
+#20, and this limitation cannot be recast as a successful candidate or dropped
+from any denominator.
+
+## Running the qualification once the cohort exists
+
+Set these on the authorized host. All paths are relative to the external data
+root; nothing private belongs in the repository.
+
+```sh
+export TRACE_GC_TEST_DATA_ROOT=/authorized/TRACE-GC_RealPaper_Test
+STUDY=validation_v3_private/qualification-UNIQUE
+```
+
+1. **Read-only preflight.** Opens no selected source. It checks the data root is
+   outside the repository, the bundle hash and descriptor shape, the bound
+   preregistration pointer, its externally supplied hash and the required protocol
+   and frame descriptors, numeric protocol and evaluator clarification, and
+   the frame projections' 2,000 identities each and the pinned exposure
+   inventory. It reads required preregistration metadata and rejects paths
+   designated for selected study artifacts. It also checks that the output path is fresh and has
+   directory ancestors, the optional PDF/image dependencies are discoverable, and the evaluator
+   identity and runtime receipt compute under the runtime lock.
+
+   ```sh
+   python -m src.paper_qualification_report_v1 preflight \
+     --data-root "$TRACE_GC_TEST_DATA_ROOT" \
+     --bundle "$STUDY/bundle.json" --bundle-sha256 "$BUNDLE_SHA256" \
+     --preregistration-sha256 "$PREREGISTRATION_SHA256" \
+     --output "$STUDY/evaluation-run"
+   ```
+
+   Exit 0 and `PRECHECK_PASSED` record the checks shown in the result.
+   The full evaluator verifies the additional registered artifacts, converter
+   readiness, review signatures, exposure reconciliation and selected sources. On a host
+   whose interpreter does not match `runtime-windows-py312.lock.json`, the
+   `runtime_receipt` check is false, as the evaluator would also be. Pass
+   `--runtime-lock` for a separately approved regular `.lock.json` file
+   outside the private data root. Preflight reads the override after successful
+   preregistration checks.
+2. **Evaluate and publish** from the application that owns the review
+   `TrustStore`, using the `evaluate` and `publish` snippet above with
+   `fresh_output_relative="$STUDY/evaluation-run"`.
+3. **Redacted aggregate report.** Supply the application-owned public issuer
+   configuration and the external preregistration hash. The reporter replays
+   the published evaluation under that trust, preserves its status, and reads
+   the exact `execution` descriptor from the verified study bundle. If supplied
+   explicitly, `--execution` and `--execution-sha256` must match that descriptor.
+
+   ```sh
+   python -m src.paper_qualification_report_v1 report \
+     --data-root "$TRACE_GC_TEST_DATA_ROOT" \
+     --evaluation "$STUDY/evaluation-run/evaluation.json" \
+     --evaluation-sha256 "$EVALUATION_SHA256" \
+     --preregistration-sha256 "$PREREGISTRATION_SHA256" --trust "$REVIEW_TRUST_FILE" \
+     --output "$STUDY/aggregate-report.json"
+   ```
+
+The report (`paper-qualification-aggregate-report-v1`) requires a sibling
+`publication-complete.json` for that evaluation hash and rejects an invalidated
+publication. The replay uses `verify_published(..., qualification_only=False)`
+to verify the recorded outcome, including failure and authored results. Callers
+requiring a qualifying PASS use the default strict mode. The report is built
+from an allowlist and contains:
+
+- status;
+- overall primary and per-stratum challenge counts, exact bounds and 95%
+  intervals;
+- per-arm summaries with counts of error and truncated assessments;
+- reference-status and route counts;
+- image counts;
+- the execution receipt's recorded per-stage calls, failures, retries, review
+  counts and timings (null when unavailable);
+- spend and graph writes, both of which must be zero.
+
+Every string must belong to a fixed vocabulary, so work IDs, paths, study
+identity, source text and review audit membership cannot be emitted. Partial or
+absent accepts appear only as a count. A completed evaluation with missing
+representation retains its aggregate measurements under `BLOCKED`. An early
+evidence failure reports a fixed diagnostic code or a generic redaction code
+and can be reported without a trust file or execution descriptor. The write is
+once-only, and stdout contains just its SHA-256. Exit 2 with `BLOCKED` reports
+invalid input without echoing it. The report inherits the evaluation's scope: first-page
+abstract extraction only, internally attributed review, no independent human
+validation.
 
 Run authored checks with:
 
 ```powershell
 python -m unittest tests.test_paper_qualification_v1 -v
+python -m unittest tests.test_paper_qualification_report_v1 -v
 python tools/run_validation.py
 ```
 
@@ -306,3 +411,6 @@ authored driver fixture exercises 400 primary cases, 80 challenge cases, all
 external source/regression/converter/image ports. It can meet the numerical
 contract without qualifying, and mode-only relabeling is rejected. Separate
 tests exercise actual fixture source/image readback and converter-assessment replay.
+The aggregate-report tests use synthetic rows with planted canary text and
+identifiers. They test redaction and arithmetic only and are not empirical
+evidence.
