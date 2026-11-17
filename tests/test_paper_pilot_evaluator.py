@@ -227,6 +227,19 @@ class AggregateEvaluatorTests(unittest.TestCase):
                              str(root / "protocol.json"), "--output", str(root / "report2.json")])
             self.assertEqual(code, 1)
             self.assertEqual(json.loads(err.getvalue())["code"], "EVALUATOR_INPUT")
+
+            (root / "receipts.json").write_text(json.dumps(receipts()))
+            for field, malformed in (("required_source_ids", [[]]), ("expectation", [])):
+                with self.subTest(field=field):
+                    bad_protocol = protocol()
+                    bad_protocol["questions"][0][field] = malformed
+                    (root / "protocol.json").write_text(json.dumps(bad_protocol))
+                    err = io.StringIO()
+                    with redirect_stderr(err):
+                        code = main(["paper-pilot", "evaluate", str(root / "receipts.json"), "--protocol",
+                                     str(root / "protocol.json"), "--output", str(root / "report2.json")])
+                    self.assertEqual(code, 1)
+                    self.assertEqual(json.loads(err.getvalue())["code"], "EVALUATOR_INPUT")
             self.assertFalse((root / "report2.json").exists())
 
 

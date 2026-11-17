@@ -24,10 +24,10 @@ from .pdf_image_evidence import REPRESENTATION as IMAGE
 VERSION = "paper-pilot-aggregate-evaluator-v1"
 RECEIPTS_VERSION = "paper-pilot-receipts-v1"
 PROTOCOL_VERSION = "paper-pilot-evaluation-protocol-v1"
-EXPECTATIONS = {"SUPPORTED", "ABSTAIN"}
-RECOVERY_STATUSES = {"PASS", "FAIL", "HOLD"}
+EXPECTATIONS = ("SUPPORTED", "ABSTAIN")
+RECOVERY_STATUSES = ("PASS", "FAIL", "HOLD")
 REPRESENTATIONS = {NATIVE, IMAGE}
-RECOVERY_EVIDENCE = {"AUTHORED_SYNTHETIC", "REAL_RUN"}
+RECOVERY_EVIDENCE = ("AUTHORED_SYNTHETIC", "REAL_RUN")
 ROW_STATUSES = ("PASS", "FAIL", "HOLD", "NOT_RUN", "INVALIDATED")
 _HEX = re.compile(r"[0-9a-f]{64}")
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._/-]{0,199}")
@@ -64,10 +64,11 @@ def _opt(value, check, path):
 
 
 def _ids(values, path, *, nonempty=False):
-    require(type(values) is list and (bool(values) or not nonempty) and len(values) == len(set(values)),
-            "EVALUATOR_INPUT", "unique identifier list", path=path)
+    require(type(values) is list and (bool(values) or not nonempty),
+            "EVALUATOR_INPUT", "identifier list required", path=path)
     for i, value in enumerate(values):
         _ident(value, f"{path}[{i}]")
+    require(len(values) == len(set(values)), "EVALUATOR_INPUT", "duplicate identifier", path=path)
 
 
 def _bool(value, path, *, nullable=False):
@@ -233,7 +234,7 @@ def _validate_protocol(protocol):
 def _validate_receipts(receipts):
     _keys(receipts, {"version", "run_id", "execution_mode", "checkpoint_head", "graph", "source_reviews",
                      "assertions", "evidence", "answers", "provider_calls_by_exporter"}, "receipts")
-    require(receipts["version"] == RECEIPTS_VERSION and receipts["execution_mode"] in {"LIVE", "SYNTHETIC"} and
+    require(receipts["version"] == RECEIPTS_VERSION and receipts["execution_mode"] in ("LIVE", "SYNTHETIC") and
             receipts["provider_calls_by_exporter"] == 0, "EVALUATOR_INPUT", "receipt header", path="receipts")
     _ident(receipts["run_id"], "receipts.run_id")
     _sha(receipts["checkpoint_head"], "receipts.checkpoint_head")
@@ -254,7 +255,7 @@ def _validate_receipts(receipts):
             _ident(r[field], f"{path}.{field}")
         require(r["representation"] in REPRESENTATIONS, "EVALUATOR_INPUT",
                 "unsupported evidence representation", path=path)
-        require(r["reviewer_kind"] in {"assistant", "human"} and r["independent_review"] is False,
+        require(r["reviewer_kind"] in ("assistant", "human") and r["independent_review"] is False,
                 "EVALUATOR_INPUT", "attributed non-independent review", path=path)
         _bool(r["all_checks_passed"], path)
     for i, a in enumerate(receipts["assertions"]):
@@ -301,7 +302,7 @@ def _validate_receipts(receipts):
                 a["abstention_reason"] == _ABSTAIN.get(state),
                 "EVALUATOR_INPUT", "answer state and abstention reason", path=path)
         _sha(a["question_sha256"], path + ".question_sha256")
-        require(a["reviewer_kind"] in {None, "assistant", "human"} and
+        require(a["reviewer_kind"] in (None, "assistant", "human") and
                 (a["answer_graph_version"] is None or type(a["answer_graph_version"]) is int),
                 "EVALUATOR_INPUT", "answer review/version", path=path)
         _bool(a["graph_version_current"], path)
