@@ -491,6 +491,107 @@
               "operation"
             ],
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "operation": {
+                "const": "SET_SOURCE_CLASSIFICATION"
+              },
+              "risk_class": {
+                "const": "R1"
+              },
+              "assignment_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "assignment_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "source_snapshot_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "taxonomy_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "taxonomy_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "expected_assignment_id": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "expected_assignment_hash": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "operation",
+              "risk_class",
+              "assignment_id",
+              "assignment_hash",
+              "source_snapshot_id",
+              "source_hash",
+              "taxonomy_id",
+              "taxonomy_hash",
+              "expected_assignment_id",
+              "expected_assignment_hash"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "operation": {
+                "const": "INITIALIZE_RESEARCH_DOMAINS"
+              },
+              "risk_class": {
+                "const": "R1"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "id",
+              "operation",
+              "risk_class",
+              "reason"
+            ],
+            "additionalProperties": false
           }
         ]
       },
@@ -629,6 +730,10 @@
     "created_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "classification_revision": {
+      "type": "integer",
+      "minimum": 1
     }
   },
   "required": [

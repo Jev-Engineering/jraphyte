@@ -33,6 +33,7 @@ def references(record: dict[str,Any]) -> list[tuple[str,str]]:
     elif kind=="graph-snapshot":
         add([b["schema_id"]],"schema");add(b["source_epochs"],"source")
         for fact in b["assertions"].values():add(fact["evidence_ids"],"evidence")
+        add(b.get("classifications",{}).get("assignments",{}).values(),"classification-assignment")
     elif kind=="pack":
         add([b["snapshot_id"]],"graph-snapshot");add(b["candidate_ids"],"candidate");add(b["prior_observation_ids"],"observation")
         for q in b["questions"]:
@@ -56,7 +57,8 @@ def references(record: dict[str,Any]) -> list[tuple[str,str]]:
         add([b["snapshot_id"]],"graph-snapshot");add(b["source_hashes"],"source");add(b["qualification_ids"],"qualification")
         for op in b["operations"]:
             for field,expected in (("candidate_id","candidate"),("resolution_id","resolution"),("evaluation_id","evaluation"),
-                                   ("component_certificate_id","resolution-batch"),("target_schema_id","schema")):
+                                   ("component_certificate_id","resolution-batch"),("target_schema_id","schema"),
+                                   ("assignment_id","classification-assignment"),("taxonomy_id","research-domain-taxonomy")):
                 if field in op:add([op[field]],expected)
             if "evidence_ids" in op:add(op["evidence_ids"],"evidence")
     from .retrieval.integration import references as retrieval_references
