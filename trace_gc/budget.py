@@ -111,6 +111,7 @@ class RunBudget:
                 all(type(used[key]) is int and 0 <= floor[key] <= used[key] <= limits[key]
                     for key in RESOURCES),
                 "PHASE_BUDGET", "current budget differs from its inherited allocation or counters")
+        return current
 
     def close(self) -> None:
         self.db.close()

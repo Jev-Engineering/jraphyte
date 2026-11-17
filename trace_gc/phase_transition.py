@@ -439,7 +439,10 @@ def activate_imported_phase(*, pilot, controller, phase_authority,
                     "PHASE_ACTIVATION", "inactive imported state changed")
         pilot._verify_imported_blobs(capsule)
         controller._check_actions()
-        pilot.backend.audit()
+        if active:
+            pilot._verify_active_graph()
+        else:
+            pilot.backend.audit()
         if not active:
             temporary = pointer.parent / ("." + pointer.name + "." + uuid.uuid4().hex + ".tmp")
             with temporary.open("xb") as stream:

@@ -196,10 +196,13 @@ class PaperPilot:
                 self._append("OPEN", expected)
             if self.phase_import is not None:
                 if active_phase:
-                    self._verify_active_budget()
+                    self._verify_active_budget(opening=True)
                 backend.bind_phase_guard(phase_authority.write)
                 budget.bind_phase_guard(phase_authority.write)
-            backend.audit()
+            if self.phase_import is not None and active_phase:
+                self._verify_active_graph()
+            else:
+                backend.audit()
             for record in backend.load_catalog().all():
                 if record["id"] in catalog:
                     require(catalog.record(record["id"]) == record, "PILOT_RECORD_CHANGED", "checkpoint differs from graph record")
@@ -289,6 +292,7 @@ class PaperPilot:
             self.requests.update(imported)
             self._historical_request_ids = frozenset(imported)
             self._phase_budget_floor = capsule["budget_snapshot"]
+            self._phase_graph_origin = self._inherited_graph_origin(capsule)
             self._phase_imported = True
         else:
             require(False, "PILOT_CHECKPOINT", "unknown event")
@@ -325,15 +329,72 @@ class PaperPilot:
         for sha in capsule["blobs"]:
             self._read_blob(sha)
 
+    def _inherited_graph_origin(self, capsule):
+        from .phase_transition import _read_once
+        graph = capsule["graph_state"]
+        backup = Path(self.phase_import["capsule_path"]).parent / "graph.sqlite3"
+        expected = capsule["database_backup_sha256"]["graph"]
+        _read_once(backup, expected)
+        connection = sqlite3.connect(backup.as_uri() + "?mode=ro&immutable=1", uri=True)
+        try:
+            tip = connection.execute("SELECT version,hash FROM trace_journal ORDER BY version DESC LIMIT 1").fetchone()
+        finally:
+            connection.close()
+        _read_once(backup, expected)
+        version, head = tip if tip is not None else (0, None)
+        require(version == graph["graph_version"], "PHASE_GRAPH", "signed graph backup version differs")
+        return version, head, digest(graph), digest(capsule["source_statuses"])
+
+    def _verify_active_graph(self):
+        version, head, graph_hash, status_hash = self._phase_graph_origin
+        with self.backend._lock:
+            audit = self.backend.audit()
+            require(audit["events"] >= version, "PHASE_GRAPH", "active graph predates the signed capsule")
+            if version:
+                row = self.backend.db.execute("SELECT body,hash FROM trace_journal WHERE version=?", (version,)).fetchone()
+                require(row is not None and row[1] == head, "PHASE_GRAPH", "active graph lost the signed prefix")
+                inherited = loads(row[0])
+                graph, statuses = inherited["state_after"], inherited["source_status"]
+            else:
+                metadata = self.backend.db.execute("SELECT body FROM trace_meta WHERE id=1").fetchone()
+                graph, statuses = loads(metadata[0])["genesis_state"], {}
+            require(digest(graph) == graph_hash and digest(statuses) == status_hash,
+                    "PHASE_GRAPH", "inherited graph or source statuses differ")
+            for request in self.requests.values():
+                result = request.get("result")
+                if request["kind"] not in {"ADMIT", "PUBLISH"} or result is None:
+                    continue
+                receipt = result["receipt"]
+                row = self.backend.db.execute("SELECT body FROM trace_journal WHERE version=?",
+                                              (receipt["version"],)).fetchone()
+                require(row is not None and loads(row[0])["transaction_receipt"] == receipt,
+                        "PHASE_GRAPH", "completed checkpoint transaction differs from active graph")
+
     def _verify_active_budget_floor(self):
         require(self._phase_imported, "PHASE_INACTIVE", "historical phase import incomplete")
-        self.budget._verify_phase_floor(self._phase_budget_floor)
+        return self.budget._verify_phase_floor(self._phase_budget_floor)
 
-    def _verify_active_budget(self):
-        self._verify_active_budget_floor()
-        require(all(id_ in self._historical_request_ids or "result" in row or
-                    row["kind"] not in _BUDGET_CHARGING_STAGES for id_, row in self.requests.items()),
-                "PHASE_BUDGET", "interrupted stage has unreconciled budget usage")
+    def _verify_active_budget(self, *, opening=False, recovering_id=None):
+        used = self._verify_active_budget_floor()["used"]
+        floor = self._phase_budget_floor["used"]
+        pending = [row for id_, row in self.requests.items() if id_ not in self._historical_request_ids
+                   and "result" not in row and row["kind"] in _BUDGET_CHARGING_STAGES]
+        if not pending or used == floor:
+            return
+        if (opening or recovering_id is not None) and used == {**floor, "review_actions": floor["review_actions"] + 1}:
+            proven = []
+            for row in pending:
+                if row["kind"] != "PUBLISH" or row.get("budget_used_before") != floor:
+                    continue
+                recovered = self._committed_publication(**row["args"])
+                if (recovered and recovered["receipt"]["version"] == row["graph_version_before"] + 1 and
+                        timestamp(recovered["receipt"]["committed_at"]) >= timestamp(row["created_at"])):
+                    proven.append(row["id"])
+            # A matching authoritative commit makes this one charge attributable.
+            # Resume only that request; all unrelated charged interruptions hold.
+            if len(proven) == 1 and (opening or recovering_id == proven[0]):
+                return
+        require(False, "PHASE_BUDGET", "interrupted stage has unreconciled budget usage")
 
     def _step(self, id_, kind, args, action):
         with self._mutex, (self._phase_authority.write() if self._phase_authority is not None else nullcontext()):
@@ -356,15 +417,17 @@ class PaperPilot:
             if not existing:
                 if self.phase_import is not None:
                     self._verify_active_budget()
-                self._append("INTENT", {"id": id_, "kind": kind, "args": args, "created_at": now()})
+                initial = {"id": id_, "kind": kind, "args": args, "created_at": now()}
+                if self._phase_imported and kind == "PUBLISH":
+                    initial.update(graph_version_before=self.backend.state()["graph_version"],
+                                   budget_used_before=self.budget.snapshot()["used"])
+                self._append("INTENT", initial)
             intent = self.requests[id_]
             require(intent["kind"] == kind and intent["args"] == args,
                     "PILOT_IDEMPOTENCY_CONFLICT", "same request ID has different immutable input")
             if "result" not in intent:
                 if self.phase_import is not None and existing:
-                    self._verify_active_budget()
-                require(not (self._phase_imported and existing and kind in _BUDGET_CHARGING_STAGES),
-                        "PHASE_BUDGET", "interrupted stage has unreconciled budget usage")
+                    self._verify_active_budget(recovering_id=id_ if kind == "PUBLISH" else None)
                 result = action(intent["created_at"])
                 require(implementation_identity() == self._identity, "PILOT_CODE_CHANGED", "implementation changed during stage")
                 completed = {"id": id_, "result": result, "records": self.catalog.all()}
@@ -949,27 +1012,31 @@ class PaperPilot:
             return {"state": "WAIT_AUTHORIZATION", "preflight": receipt, "resolve_id": resolve_id}
         return self._step(id_, "PREFLIGHT", {"resolve_id": resolve_id}, preflight)
 
-    @boundary
-    def publish_plan(self, id_, *, preflight_id, authorization, after_commit=None):
+    def _committed_publication(self, *, preflight_id, authorization):
         preflight = self._result(preflight_id, "PREFLIGHT")
         resolved = self._result(preflight["resolve_id"], "RESOLVE")
-        plan_id = resolved["plan_id"]
-        plan = self.catalog.get(plan_id, "plan")
+        plan = self.catalog.get(resolved["plan_id"], "plan")
+        return self._committed(plan["idempotency_key"], authorization=authorization,
+            plan_hash=self.catalog.hash(resolved["plan_id"]), preflight_hash=digest(preflight["preflight"]))
+
+    @boundary
+    def publish_plan(self, id_, *, preflight_id, authorization, after_commit=None):
+        args = {"preflight_id": preflight_id, "authorization": authorization}
+        preflight = self._result(preflight_id, "PREFLIGHT")
+        resolved = self._result(preflight["resolve_id"], "RESOLVE")
         def publish(_):
-            recovered = self._committed(plan["idempotency_key"], authorization=authorization,
-                plan_hash=self.catalog.hash(plan_id), preflight_hash=digest(preflight["preflight"]))
+            recovered = self._committed_publication(**args)
             if recovered:
                 return recovered
             self.resolve_plan(preflight["resolve_id"], **self.requests[preflight["resolve_id"]]["args"])
             self._pack_fresh(resolved["compile_id"])
             self.budget.consume("review_actions")
-            result = self.service.publish(self.catalog, plan_id, authorization=authorization, preflight=preflight["preflight"])
+            result = self.service.publish(self.catalog, resolved["plan_id"], authorization=authorization, preflight=preflight["preflight"])
             if after_commit is not None:
                 after_commit()
             return {"state": "TRANSACTION_RECORDED", "receipt": result["receipt"], "historical_receipt_only": True}
-        result = self._step(id_, "PUBLISH", {"preflight_id": preflight_id, "authorization": authorization}, publish)
-        require(result == self._committed(plan["idempotency_key"], authorization=authorization,
-                plan_hash=self.catalog.hash(plan_id), preflight_hash=digest(preflight["preflight"])),
+        result = self._step(id_, "PUBLISH", args, publish)
+        require(result == self._committed_publication(**args),
                 "PILOT_TRANSACTION", "checkpoint receipt differs from authoritative graph journal")
         return result
 

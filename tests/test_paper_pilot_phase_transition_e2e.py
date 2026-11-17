@@ -381,8 +381,25 @@ class PhaseTransitionTests(PhaseFixture, unittest.TestCase):
         self.pilot.preflight_plan('new-preflight', resolve_id='new-resolve')
         authorization = fixtures.authorize_plan(self.signer, self.catalog.get(resolved['plan_id'], 'plan'),
             self.catalog.hash(resolved['plan_id']), reviewed_by='authored-test-reviewer')
-        self.pilot.publish_plan('new-publish', preflight_id='new-preflight', authorization=authorization)
+        def lose_publish_result():
+            raise RuntimeError('authored process loss after commit')
+
+        before_publish = self.budget.snapshot()
+        graph_before_publish = self.backend.state()
+        publish_args = {'preflight_id': 'new-preflight', 'authorization': authorization}
+        with self.assertRaisesRegex(RuntimeError, 'process loss after commit'):
+            self.pilot.publish_plan('new-publish', **publish_args, after_commit=lose_publish_result)
         state, budget = self.backend.state(), self.budget.snapshot()
+        self.assertEqual(budget['used']['review_actions'], before_publish['used']['review_actions'] + 1)
+        self.assertNotIn('result', self.pilot.requests['new-publish'])
+        self.reopen_target()
+        with self.assertRaises(ContractError) as caught:
+            self.pilot.compile_candidates('unrelated-while-publication-pending', candidates=self.candidates)
+        self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+        publication = self.pilot.publish_plan('new-publish', **publish_args)
+        self.assertEqual(self.pilot.publish_plan('new-publish', **publish_args), publication)
+        self.assertEqual(self.backend.state(), state)
+        self.assertEqual(self.budget.snapshot(), budget)
         self.assertGreater(state['graph_version'], self.capsule['graph_state']['graph_version'])
         self.assertEqual(budget['used']['model_calls'], 2)
         self.reopen_target()
@@ -396,6 +413,21 @@ class PhaseTransitionTests(PhaseFixture, unittest.TestCase):
         self.assertEqual(self.activate(), activation)
         self.assertEqual([exporter._logical(db) for db in stores], before)
         self.assertEqual(files(self.archive), self.old_bytes)
+
+        # The internally consistent pre-publication graph lacks a completed
+        # checkpoint transaction. Active verification must detect the rollback.
+        version = state['graph_version']
+        row = self.backend.db.execute('SELECT * FROM trace_journal WHERE version=?', (version,)).fetchone()
+        self.backend.db.execute('DELETE FROM trace_journal WHERE version=?', (version,))
+        self.backend.db.execute('UPDATE trace_state SET body=? WHERE id=1', (dumps(graph_before_publish),))
+        try:
+            self.assertEqual(self.backend.audit()['events'], version - 1)
+            with self.assertRaises(ContractError) as caught:
+                self.activate()
+            self.assertEqual(caught.exception.code, 'PHASE_GRAPH')
+        finally:
+            self.backend.db.execute('INSERT INTO trace_journal VALUES(?,?,?,?,?)', row)
+            self.backend.db.execute('UPDATE trace_state SET body=? WHERE id=1', (dumps(state),))
 
         # Restore a counter row that still meets the inherited floor, but
         # omits completed current-phase work.
@@ -453,6 +485,23 @@ class PhaseTransitionTests(PhaseFixture, unittest.TestCase):
         with self.assertRaises(ContractError) as caught:
             self.reopen_target()
         self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+
+    def test_active_budget_allows_reopen_after_uncharged_validation_failure(self):
+        self.cutover(); self.restore(); self.open_target(); self.import_phase(); self.controller_open()
+        self.activate()
+        before = self.budget.snapshot()
+        for _ in range(2):
+            with self.assertRaises(ContractError) as caught:
+                self.pilot.compile_candidates('invalid-compile', candidates=[{}])
+            self.assertEqual(caught.exception.code, 'PILOT_CANDIDATE')
+        self.assertEqual(self.budget.snapshot(), before)
+        self.assertNotIn('result', self.pilot.requests['invalid-compile'])
+        self.reopen_target()
+        result = self.pilot.compile_candidates('valid-compile', candidates=self.candidates)
+        self.assertEqual(result['state'], 'WAIT_SEMANTIC_RESPONSE')
+        self.assertEqual(self.budget.snapshot()['used']['model_calls'], before['used']['model_calls'] + 1)
+        self.reopen_target()
+        self.assertEqual(self.pilot.requests['valid-compile']['result'], result)
 
     def test_active_budget_rejects_alias_rollback_and_missing_row(self):
         self.cutover(); self.restore(); self.open_target(); self.import_phase(); self.controller_open()
