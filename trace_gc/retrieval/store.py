@@ -91,6 +91,8 @@ class SQLiteGraphAdapter:
         self.backend, self.working_catalog = backend, catalog
 
     def read(self, query: dict[str, Any]) -> GraphReadView:
+        from ..domain_publication import snapshot_body
+
         backend = self.backend
         with backend._lock:
             own = not backend.db.in_transaction
@@ -116,8 +118,7 @@ class SQLiteGraphAdapter:
                     for record in self.working_catalog.all():
                         catalog.add(record)
                     available |= {r["id"] for r in self.working_catalog.all()}
-                body = {k: state[k] for k in ("graph_version", "schema_id", "schema_hash", "nodes", "assertions", "source_epochs")}
-                snapshot_id = catalog.put("graph-snapshot", body)
+                snapshot_id = catalog.put("graph-snapshot", snapshot_body(state))
                 available.add(snapshot_id)
                 result = GraphReadView(catalog, snapshot_id, backend.statuses(), available, history, self.version)
                 if own:

@@ -6,6 +6,10 @@ from .catalog import Catalog
 from .compiler import validate_pack,timestamp
 from .adapter import validate_observation
 from .constraints import validate_schema_contract,validate_graph
+from .domain_publication import (
+    OPERATIONS as DOMAIN_OPERATIONS, receipt_projection, verify_preflight_payload, verify_projection,
+    verify_review_attribution,
+)
 from .errors import boundary,require
 from .ledger import references,validate_ledger
 from .plans import validate_plan
@@ -50,6 +54,7 @@ def validate_bundle(bundle: dict[str,Any], *, trust: TrustStore | None=None,at: 
         elif kind=="evidence":catalog.verify_evidence(r["id"])
         elif kind=="schema":validate_schema_contract(b["relations"])
         elif kind=="graph-snapshot":
+            verify_projection(catalog, b)
             require(catalog.hash(b["schema_id"])==b["schema_hash"],"SCHEMA_HASH",r["id"])
             validate_graph(b["nodes"],b["assertions"],catalog.get(b["schema_id"],"schema")["relations"])
         elif kind=="candidate":
@@ -91,17 +96,33 @@ def validate_bundle(bundle: dict[str,Any], *, trust: TrustStore | None=None,at: 
         require(len(plans)==1,"TRANSACTION_PLAN_BINDING","transaction does not bind an included plan")
         receipts={digest(r["body"]):r["body"] for r in catalog.all("receipt")}
         require(tx["authorization_hash"] in receipts and tx["preflight_hash"] in receipts,"TRANSACTION_RECEIPT_MISSING","authorization/preflight lineage missing")
+        require(tx["idempotency_key"] == plans[0]["body"]["idempotency_key"], "TRANSACTION_PLAN_BINDING",
+                "transaction idempotency key differs from the signed plan")
         require(tx["version"]==plans[0]["body"]["graph_version"]+1,"TRANSACTION_VERSION","transaction version differs")
         require(m["graph_version"]==tx["version"],"TRANSACTION_VERSION","published manifest is not the committed version")
         require(trust is not None,"CHECKPOINT_UNTRUSTED","published verification requires application trust")
         from .trust import verify_authorization
         from .plans import REQUIRED_CHECKS
         plan=plans[0]["body"]
-        verify_authorization(trust,receipts[tx["authorization_hash"]],plan,plans[0]["hash"],at=tx["committed_at"])
+        authorization=receipts[tx["authorization_hash"]]
+        reviewed=verify_authorization(trust,authorization,plan,plans[0]["hash"],at=tx["committed_at"])
         trusted_preflight=receipts[tx["preflight_hash"]]
         trust.verify(trusted_preflight,"PREFLIGHT",at=tx["committed_at"])
         require(trusted_preflight["payload"]["plan_hash"]==plans[0]["hash"] and
                 trusted_preflight["payload"]["checks"]=={x:True for x in sorted(REQUIRED_CHECKS)},"PREFLIGHT_FAILED","published check receipt differs")
+        snapshot = catalog.get(plan["snapshot_id"], "graph-snapshot")
+        domain_plan = any(op["operation"] in DOMAIN_OPERATIONS for op in plan["operations"])
+        if domain_plan:
+            verify_preflight_payload(trusted_preflight, plan, plans[0]["hash"], policy_version=policy["version"],
+                                     population=policy["population"], reviewed=reviewed)
+            verify_review_attribution(catalog, plan, authorization["payload"]["reviewed_by"], at=tx["committed_at"],
+                                      approval_issued_at=authorization["issued_at"])
+        projection = {}
+        if domain_plan or "classifications" in snapshot:
+            prospective = validate_plan(catalog, plan, source_status=m["source_status"])
+            projection = receipt_projection(prospective)
+        require(digest({key: tx[key] for key in ("classification_revision", "classification_hash") if key in tx}) == digest(projection),
+                "TRANSACTION_PLAN_BINDING", "transaction classification differs from the exact plan")
         require(tx["upstream_head"] is not None and tx["upstream_head"] in {e["hash"] for e in bundle["ledger"]},"LEDGER_BINDING","atomic journal's provenance anchor is absent")
         anchor_index=next(i for i,e in enumerate(bundle["ledger"]) if e["hash"]==tx["upstream_head"])
         transaction_index=next((i for i,e in enumerate(bundle["ledger"]) if m["transaction_id"] in e["record_ids"]),-1)

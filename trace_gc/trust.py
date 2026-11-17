@@ -99,7 +99,7 @@ def verify_authorization(trust: TrustStore, receipt: dict[str,Any], plan: dict[s
             "AUTHORIZATION_PERMISSION","issuer lacks operation/risk permission")
     reviewed=p["reviewed_by"] is not None
     if reviewed:require(issuer.can_review and p["reviewed_by"]==issuer.principal,"REVIEW_AUTHORITY","review attribution must match a trusted reviewer")
-    if any(op["operation"] in {"RETRACT_ASSERTION","APPLY_SCHEMA_MIGRATION","PROPOSE_SCHEMA_MIGRATION"} or op["risk_class"]=="R5" for op in plan["operations"]):
+    if any(op["operation"] in {"RETRACT_ASSERTION","APPLY_SCHEMA_MIGRATION","PROPOSE_SCHEMA_MIGRATION","INITIALIZE_RESEARCH_DOMAINS","SET_SOURCE_CLASSIFICATION"} or op["risk_class"]=="R5" for op in plan["operations"]):
         require(reviewed,"REVIEW_REQUIRED","consequential maintenance and R5 require review")
     if plan["execution_mode"]=="SYNTHETIC":
         require(sandbox and reviewed,"SYNTHETIC_PUBLICATION_FORBIDDEN","synthetic input can only exercise an explicitly isolated reviewed test store")

@@ -67,6 +67,11 @@ def references(record: dict[str,Any]) -> list[tuple[str,str]]:
     refs.extend(domain_references(kind, b))
     return list(dict.fromkeys(refs))
 
+def receipt_bound_hash_field(purpose: str) -> str | None:
+    return {"AUTHORIZATION": "plan_hash", "PREFLIGHT": "plan_hash",
+            "QUALIFICATION": "qualification_hash", "OBSERVATION": "observation_hash"}.get(purpose)
+
+
 def causal_references(record: dict[str,Any], catalog: Catalog | None=None) -> set[str]:
     refs={ref for ref,_ in references(record)}
     kind,b=record["kind"],record["body"]
@@ -76,10 +81,12 @@ def causal_references(record: dict[str,Any], catalog: Catalog | None=None) -> se
         receipts={digest(r["body"]):r["id"] for r in catalog.all("receipt")}
         if kind=="receipt":
             p=b["payload"]
-            field={"AUTHORIZATION":"plan_hash","PREFLIGHT":"plan_hash","QUALIFICATION":"qualification_hash","OBSERVATION":"observation_hash"}.get(b["purpose"])
-            if field:
-                require(field in p and p[field] in hashes,"MISSING_REFERENCE","receipt's bound record is absent")
-                refs.add(hashes[p[field]])
+            field = receipt_bound_hash_field(b["purpose"])
+            if field is not None:
+                bound_hash = p.get(field)
+                require(type(bound_hash) is str and bound_hash in hashes,
+                        "MISSING_REFERENCE", "receipt's bound record is absent")
+                refs.add(hashes[bound_hash])
             if b["purpose"]=="SOURCE_STATUS":
                 refs.update(p.get("source_hashes",{}))
                 if "source_id" in p:refs.add(p["source_id"])
@@ -94,10 +101,20 @@ def causal_references(record: dict[str,Any], catalog: Catalog | None=None) -> se
     return refs
 
 def build_ledger(catalog: Catalog, *, run_id: str, execution_mode: str, created_at: str | None = None,
-                 prefix: list[dict[str,Any]] | None = None) -> list[dict[str,Any]]:
+                 prefix: list[dict[str,Any]] | None = None,
+                 erased_snapshot_refs: frozenset[str] = frozenset(),
+                 erased_plan_links: frozenset[tuple[str, str]] = frozenset()) -> list[dict[str,Any]]:
     from .references import topological_order
     records={r["id"]:r for r in catalog.all()}
     dependencies={ref:causal_references(record,catalog) for ref,record in records.items()}
+    # A journaled snapshot still includes tombstoned source epochs and inactive
+    # facts. Only the backend can supply its committed erasure identifiers.
+    omitted = erased_snapshot_refs - records.keys()
+    for ref, record in records.items():
+        if record["kind"] == "graph-snapshot":
+            dependencies[ref] -= omitted
+    for plan_id, snapshot_id in erased_plan_links:
+        dependencies[plan_id].discard(snapshot_id)
     events=deepcopy(prefix or []);record_events={};previous=None;seen=set()
     for i,e in enumerate(events,1):
         require(e["sequence"]==i and e["previous_hash"]==previous and e["id"] not in seen,"LEDGER_CHAIN","invalid append prefix")

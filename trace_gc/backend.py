@@ -21,9 +21,19 @@ from .errors import ContractError,require
 from .plans import validate_plan,deactivate,REQUIRED_CHECKS,Lifecycle
 from .qualification import QualificationRegistry,context_for,evaluate_policy
 from .trust import TrustStore,Signer,verify_authorization,verify_observation_attestation
+from .domain_publication import (
+    OPERATIONS as DOMAIN_OPERATIONS,
+    apply_publication_state, audit_history, has_classification_operations, receipt_projection, snapshot_body, verify_preflight_payload,
+    verify_review_attribution,
+    verify_transaction_receipt,
+)
 
 class SQLiteReferenceBackend:
     """Single-host inspectable reference backend. No external graph connection."""
+    # Subclasses that do not call __init__ (the pinned legacy bridge) are never phase-bound.
+    _phase_authority = None
+    _phase_guard = None
+
     def __init__(self,path: str | Path, *, catalog: Catalog, schema_id: str, nodes: dict[str,str],
                  sandbox: bool=False, phase_authority=None):
         self.path,self.sandbox=str(path),sandbox
@@ -110,7 +120,7 @@ class SQLiteReferenceBackend:
                 state=self.state();schema_row=self.db.execute("SELECT id,hash,kind,body FROM trace_records WHERE id=?",(state["schema_id"],)).fetchone()
                 require(schema_row is not None,"REPLAY_CONTENT_UNAVAILABLE","schema record missing")
                 catalog.add({"id":schema_row[0],"hash":schema_row[1],"kind":schema_row[2],"body":loads(schema_row[3])})
-                body={k:state[k] for k in ("graph_version","schema_id","schema_hash","nodes","assertions","source_epochs")}
+                body=snapshot_body(state)
                 result=catalog.put("graph-snapshot",body)
                 if own:self.db.execute("COMMIT")
                 return result
@@ -127,24 +137,29 @@ class SQLiteReferenceBackend:
                      catalog: Catalog, apply: Callable[[dict[str,Any],dict[str,Any]],dict[str,Any]],
                      authorization_hash: str, preflight_hash: str, upstream_head: str | None = None,
                      fault: Callable[[str],None] | None = None, at: str | None = None,
-                     lineage_prefix: list[dict[str,Any]] | None = None) -> dict[str,Any]:
+                     lineage_prefix: list[dict[str,Any]] | None = None,
+                     authority_check: Callable[[],str] | None = None) -> dict[str,Any]:
         require(bool(key) and type(expected_version) is int and expected_version>=0,"TRANSACTION_INPUT","explicit version/key required")
         with (self._phase_guard() if self._phase_guard is not None else nullcontext()):
             return self._transaction_locked(key=key, fingerprint=fingerprint,
                 expected_version=expected_version, operation=operation, catalog=catalog,
                 apply=apply, authorization_hash=authorization_hash,
                 preflight_hash=preflight_hash, upstream_head=upstream_head,
-                fault=fault, at=at, lineage_prefix=lineage_prefix)
+                fault=fault, at=at, lineage_prefix=lineage_prefix,
+                authority_check=authority_check)
 
     def _transaction_locked(self, *, key, fingerprint, expected_version, operation,
                             catalog, apply, authorization_hash, preflight_hash,
-                            upstream_head, fault, at, lineage_prefix):
-        when=at or now()
+                            upstream_head, fault, at, lineage_prefix, authority_check):
         def checkpoint(name: str) -> None:
             if fault is not None:fault(name)
         with self._lock:
             self.db.execute("BEGIN IMMEDIATE")
             try:
+                # Revalidate the existing authority after acquiring the SQL write
+                # transaction, including before an idempotent receipt is returned.
+                # This callback comes from the trusted service, never a plan/model.
+                when=authority_check() if authority_check is not None else (at or now())
                 previous=self.db.execute("SELECT fingerprint,body FROM trace_journal WHERE key=?",(key,)).fetchone()
                 if previous:
                     require(previous[0]==fingerprint,"IDEMPOTENCY_CONFLICT","same key, different immutable action")
@@ -174,6 +189,7 @@ class SQLiteReferenceBackend:
                          "previous_hash":previous_hash,"event_hash":event_hash,"operation_hash":digest(operation),
                          "authorization_hash":authorization_hash,"preflight_hash":preflight_hash,
                          "upstream_head":upstream_head,"committed_at":when}
+                receipt.update(receipt_projection(resulting))
                 rh=digest({"kind":"transaction","body":receipt})
                 receipt_record={"id":f"transaction:{rh}","hash":rh,"kind":"transaction","body":receipt}
                 self._persist([receipt_record])
@@ -192,11 +208,13 @@ class SQLiteReferenceBackend:
 
     def admit_sources(self,catalog: Catalog,source_ids: list[str], *, trust: TrustStore,authorization: dict[str,Any],
                       security_scope: str,execution_mode: str,expected_version: int,key: str,at: str | None=None) -> dict[str,Any]:
+        require(type(expected_version) is int and expected_version >= 0,
+                "SOURCE_STATUS", "expected graph version must be a nonnegative integer")
         action={"action":"ADMIT","source_hashes":{ref:catalog.hash(ref) for ref in sorted(source_ids)},
                 "security_scope":security_scope,"execution_mode":execution_mode,"expected_version":expected_version}
         def apply(state,statuses):
             issuer=trust.verify(authorization,"SOURCE_STATUS",at=at)
-            require("SOURCE_ADMIT" in issuer.operations and authorization["payload"]==action,"SOURCE_AUTHORITY","source admission scope")
+            require("SOURCE_ADMIT" in issuer.operations and digest(authorization["payload"])==digest(action),"SOURCE_AUTHORITY","source admission scope")
             for ref in source_ids:
                 source=catalog.get(ref,"source")
                 require(source["security_scope"]==security_scope,"SECURITY_SCOPE",ref)
@@ -214,6 +232,8 @@ class SQLiteReferenceBackend:
                              expected_version: int,key: str,reason: str,authorization: dict[str,Any],trust: TrustStore,
                              tombstone: bool=False,at: str | None=None) -> dict[str,Any]:
         source=catalog.get(source_id,"source")
+        require(type(expected_version) is int and expected_version >= 0 and type(expected_epoch) is int and expected_epoch >= 0,
+                "SOURCE_STATUS", "expected graph version and source epoch must be nonnegative integers")
         require(type(active) is bool and type(tombstone) is bool and permission in {"READ","DENIED"} and bool(reason),"SOURCE_STATUS","invalid change")
         action={"action":"ERASE" if tombstone else "STATUS_CHANGE","source_id":source_id,"source_hash":catalog.hash(source_id),
                 "active":active,"permission":permission,"expected_epoch":expected_epoch,"expected_version":expected_version,
@@ -221,7 +241,7 @@ class SQLiteReferenceBackend:
         def apply(state,statuses):
             issuer=trust.verify(authorization,"SOURCE_STATUS",at=at)
             required="SOURCE_ERASE" if tombstone else "SOURCE_WITHDRAW" if not active else "SOURCE_PERMISSION"
-            require(required in issuer.operations and authorization["payload"]==action,"SOURCE_AUTHORITY","status authority/scope mismatch")
+            require(required in issuer.operations and digest(authorization["payload"])==digest(action),"SOURCE_AUTHORITY","status authority/scope mismatch")
             require(source_id in statuses and statuses[source_id]["epoch"]==expected_epoch,"STALE_SOURCE_EPOCH",source_id)
             require(not statuses[source_id]["tombstone"],"TOMBSTONE_REUSE",source_id)
             require(not tombstone or (not active and permission=="DENIED"),"TOMBSTONE_STATUS","erasure must revoke use")
@@ -254,7 +274,21 @@ class SQLiteReferenceBackend:
                 status=self.statuses().get(source_id)
                 require(status is not None and status["tombstone"],"ERASURE_AUTHORITY","committed authorized tombstone required")
                 records=[{"id":i,"hash":h,"kind":k,"body":loads(b)} for i,h,k,b in self.db.execute("SELECT id,hash,kind,body FROM trace_records")]
+                from .ledger import receipt_bound_hash_field
                 lost={source_id}
+                classification_plans = {record["id"] for record in records
+                                        if record["kind"] == "plan" and has_classification_operations(record["body"])}
+                committed_plans = set()
+                if classification_plans:
+                    for (text,) in self.db.execute("SELECT body FROM trace_journal"):
+                        operation = loads(text)["operation"]
+                        if operation.get("action") == "PUBLISH_PLAN" and operation["plan_id"] in classification_plans:
+                            committed_plans.add(operation["plan_id"])
+                # Previous versions could erase a plan and retain the cached
+                # receipt that referred to its hash. Clean those orphans on
+                # an explicitly authorized repeat of the erasure operation.
+                lost_hashes = {hash_ for (hash_,) in self.db.execute("SELECT hash FROM trace_erased")}
+                lost_hashes.update(record["hash"] for record in records if record["id"] == source_id)
                 # Conservative reference closure: discard cached derived content.
                 # This is content-reference matching, not an assertion of legal erasure completeness.
                 def strings(value):
@@ -267,8 +301,23 @@ class SQLiteReferenceBackend:
                 while changed:
                     changed=False
                     for r in records:
-                        if r["id"] not in lost and set(strings(r["body"]))&lost:
-                            lost.add(r["id"]);changed=True
+                        if r["id"] in lost:
+                            continue
+                        bound_to_erasure = False
+                        if r["kind"] == "receipt":
+                            receipt = r["body"]
+                            field = receipt_bound_hash_field(receipt["purpose"])
+                            bound_hash = receipt["payload"].get(field)
+                            bound_to_erasure = type(bound_hash) is str and bound_hash in lost_hashes
+                        body = r["body"]
+                        if r["id"] in committed_plans:
+                            # Keep an unrelated signed classification proof whose
+                            # sole link to erased bytes is a journaled snapshot.
+                            body = {key: value for key, value in body.items() if key != "snapshot_id"}
+                        if bound_to_erasure or set(strings(body)) & lost:
+                            lost.add(r["id"])
+                            lost_hashes.add(r["hash"])
+                            changed=True
                 for r in records:
                     if r["id"] in lost:
                         self.db.execute("INSERT OR IGNORE INTO trace_erased VALUES(?,?,?,?,?)",(r["id"],r["hash"],r["kind"],reason,now()))
@@ -300,7 +349,20 @@ class SQLiteReferenceBackend:
                 "edges":[{"subject":s,"predicate":p,"object":o,"qualifiers":loads(q),"assertion_ids":sorted(ids)}
                          for (s,p,o,q),ids in sorted(edges.items())]}
 
-    def audit(self) -> dict[str,Any]:
+    def audit(self, *, trust: TrustStore | None=None,
+              required_sources: tuple[str, ...]=()) -> dict[str,Any]:
+        with self._lock:
+            own = not self.db.in_transaction
+            if own:
+                self.db.execute("BEGIN")
+            try:
+                return self._audit(trust=trust, required_sources=required_sources)
+            finally:
+                if own and self.db.in_transaction:
+                    self.db.execute("ROLLBACK")
+
+    def _audit(self, *, trust: TrustStore | None=None,
+               required_sources: tuple[str, ...]=()) -> dict[str,Any]:
         meta=loads(self.db.execute("SELECT body FROM trace_meta WHERE id=1").fetchone()[0])
         previous=None;after=meta["genesis_hash"];count=0;last_status={}
         require(digest(meta["genesis_state"])==after,"BACKEND_AUDIT","genesis differs")
@@ -317,19 +379,12 @@ class SQLiteReferenceBackend:
                 else:
                     erased=self.db.execute("SELECT hash FROM trace_erased WHERE id=?",(ref,)).fetchone()
                     require(erased is not None and erased[0]==expected_hash,"BACKEND_AUDIT","missing record without tombstone")
-            receipt=event["transaction_receipt"]
-            require(receipt["event_hash"]==hash_ and receipt["version"]==version and receipt["before_hash"]==event["before_hash"] and
-                    receipt["after_hash"]==event["after_hash"] and receipt["operation_hash"]==digest(event["operation"]),"BACKEND_AUDIT","receipt/journal disagreement")
-            expected_receipt={"backend":"sqlite-reference-v1","version":version,"idempotency_key":key,
-                "plan_hash":event["operation"].get("plan_hash",digest(event["operation"])),"before_hash":event["before_hash"],
-                "after_hash":event["after_hash"],"previous_hash":event["previous_hash"],"event_hash":hash_,
-                "operation_hash":digest(event["operation"]),"authorization_hash":event["authorization_hash"],
-                "preflight_hash":event["preflight_hash"],"upstream_head":event["upstream_head"],"committed_at":event["committed_at"]}
-            require(receipt==expected_receipt,"BACKEND_AUDIT","receipt was altered independently of the journal")
+            verify_transaction_receipt(event, backend="sqlite-reference-v1")
             previous,after,last_status=hash_,event["after_hash"],event["source_status"]
         state=self.state()
-        require(state["graph_version"]==count and digest(state)==after and self.statuses()==last_status,"BACKEND_AUDIT","current state/status differs from journal")
-        return {"events":count,"head_hash":previous,"state_hash":after,"sandbox":self.sandbox,
+        require(state["graph_version"]==count and digest(state)==after and digest(self.statuses())==digest(last_status),"BACKEND_AUDIT","current state/status differs from journal")
+        domain_audit=audit_history(self, trust=trust, required_sources=required_sources)
+        return {"events":count,"head_hash":previous,"state_hash":after,"sandbox":self.sandbox,**domain_audit,
                 "erased_record_count":self.db.execute("SELECT count(*) FROM trace_erased").fetchone()[0]}
 
 class CompilerService:
@@ -337,12 +392,15 @@ class CompilerService:
     def __init__(self,backend: SQLiteReferenceBackend,trust: TrustStore,validator_signer: Signer, *,
                  policy_version: str, population: str,security_scope: str,
                  qualification_registry: QualificationRegistry | None=None,
-                 policy_hash: str | None=None, publication_mode: str="ANALYSIS_ONLY"):
+                 policy_hash: str | None=None, publication_mode: str="ANALYSIS_ONLY",
+                 classification_enabled: bool=False, classification_taxonomy_hashes: frozenset[str] | None=None):
         require(publication_mode in {"ANALYSIS_ONLY","REVIEWED","QUALIFIED"},"POLICY_MODE","unsupported publication mode")
         self.backend,self.trust,self.signer=backend,trust,validator_signer
         self.policy_version,self.population,self.scope=policy_version,population,security_scope
         self.registry=qualification_registry
         self.policy_hash,self.publication_mode=policy_hash,publication_mode
+        self.classification_enabled=classification_enabled
+        self.classification_taxonomy_hashes=frozenset(classification_taxonomy_hashes or ())
 
     def _check_policy_and_provenance(self,catalog: Catalog,plan: dict[str,Any],*,reviewed: bool,at: str | None=None) -> None:
         require(plan["policy_version"]==self.policy_version and plan["security_scope"]==self.scope,"POLICY_BINDING","service configuration differs")
@@ -354,6 +412,13 @@ class CompilerService:
         if self.publication_mode=="REVIEWED":require(reviewed,"REVIEW_REQUIRED","reviewed mode requires trusted reviewer")
         attestations={r["body"]["payload"].get("observation_hash"):r["body"] for r in catalog.all("receipt") if r["body"]["purpose"]=="OBSERVATION"}
         for op in plan["operations"]:
+            if op["operation"] in DOMAIN_OPERATIONS:
+                require(self.classification_enabled,"DOMAIN_PUBLICATION_DISABLED","application has not enabled reviewed classification")
+                require(reviewed,"REVIEW_REQUIRED","classification is never automatically authorized")
+                if op["operation"]=="SET_SOURCE_CLASSIFICATION":
+                    taxonomy=catalog.get(op["taxonomy_id"],"research-domain-taxonomy")
+                    require(op["taxonomy_hash"] in self.classification_taxonomy_hashes and taxonomy["review"]["status"]=="APPROVED",
+                            "DOMAIN_TAXONOMY_UNTRUSTED","taxonomy must be explicitly reviewed and pinned by the application")
             if "evaluation_id" not in op:continue
             evaluation=catalog.get(op["evaluation_id"],"evaluation")
             expected=context_for(catalog,op["candidate_id"],evaluation["observation_ids"],evaluation["resolution_batch_id"],population=self.population,policy_version=self.policy_version)
@@ -379,7 +444,7 @@ class CompilerService:
         state=self.backend.state()
         require(state["graph_version"]==plan["graph_version"] and state["schema_hash"]==plan["schema_hash"],"STALE_GRAPH_VERSION","preflight snapshot")
         snapshot=catalog.get(plan["snapshot_id"],"graph-snapshot")
-        require(snapshot=={k:state[k] for k in snapshot},"SNAPSHOT_BINDING","snapshot must match actual backend, not caller declarations")
+        require(digest(snapshot)==digest(snapshot_body(state)),"SNAPSHOT_BINDING","snapshot must match actual backend, not caller declarations")
         validate_plan(catalog,plan,source_status=self.backend.statuses())
         self._check_policy_and_provenance(catalog,plan,reviewed=reviewed,at=at)
         payload={"plan_hash":catalog.hash(plan_id),"graph_version":plan["graph_version"],"schema_hash":plan["schema_hash"],
@@ -391,31 +456,76 @@ class CompilerService:
     def publish(self,catalog: Catalog,plan_id: str,*,authorization: dict[str,Any],preflight: dict[str,Any],
                 upstream_head: str | None=None,fault: Callable[[str],None] | None=None,at: str | None=None) -> dict[str,Any]:
         plan=catalog.get(plan_id,"plan");plan_hash=catalog.hash(plan_id)
+        domain_plan=has_classification_operations(plan)
+        def verify_request(accepted_at: str) -> None:
+            # Current capability and application policy; independent of graph
+            # state, so it is valid for first commit and idempotent retry alike.
+            # Re-run under the commit lock, where a credential may have expired
+            # or an application policy/trust root changed while this call waited.
+            reviewed=verify_authorization(self.trust,authorization,plan,plan_hash,at=accepted_at,sandbox=self.backend.sandbox)
+            self.trust.verify(preflight,"PREFLIGHT",at=accepted_at)
+            if domain_plan:
+                from .domains import validate_catalog as validate_domain_catalog
+                validate_domain_catalog(catalog)
+                verify_review_attribution(catalog,plan,authorization["payload"]["reviewed_by"],
+                                          at=accepted_at,approval_issued_at=authorization["issued_at"])
+            verify_preflight_payload(preflight,plan,plan_hash,policy_version=self.policy_version,
+                                     population=self.population,reviewed=reviewed)
+            self._check_policy_and_provenance(catalog,plan,reviewed=reviewed,at=accepted_at)
+        if domain_plan:
+            # Fail fast before waiting for the owner lock; not the authority.
+            verify_request(at or now())
         operation={"action":"PUBLISH_PLAN","plan_id":plan_id,"plan_hash":plan_hash,"policy_version":self.policy_version,
                    "population":self.population,"security_scope":self.scope}
         def apply(state,statuses):
-            reviewed=verify_authorization(self.trust,authorization,plan,plan_hash,at=at,sandbox=self.backend.sandbox)
-            self.trust.verify(preflight,"PREFLIGHT",at=at)
-            expected={"plan_hash":plan_hash,"graph_version":plan["graph_version"],"schema_hash":plan["schema_hash"],
-                      "source_epochs":plan["source_epochs"],"checks":{key:True for key in sorted(REQUIRED_CHECKS)},
-                      "run_id":plan["run_id"],"security_scope":plan["security_scope"],"execution_mode":plan["execution_mode"],
-                      "policy_version":self.policy_version,"population":self.population,"review_required":preflight["payload"].get("review_required")}
-            require(preflight["payload"]==expected and (not expected["review_required"] or reviewed),"PREFLIGHT_FAILED","invalid/missing checks or required review")
+            if not domain_plan:
+                if erased_refs or "classifications" in state:
+                    # Check continuity before an ordinary write while allowing
+                    # an existing receipt to remain readable after revocation.
+                    self.backend.audit()
+                verify_request(at or now())
             snapshot=catalog.get(plan["snapshot_id"],"graph-snapshot")
-            require(state["schema_hash"]==plan["schema_hash"] and snapshot=={k:state[k] for k in snapshot},"SNAPSHOT_BINDING","commit snapshot differs")
-            prospective=validate_plan(catalog,plan,source_status=statuses)
-            self._check_policy_and_provenance(catalog,plan,reviewed=reviewed,at=at)
-            state["nodes"],state["assertions"]=prospective["nodes"],prospective["assertions"]
-            for op in plan["operations"]:
-                if op["operation"]=="APPLY_SCHEMA_MIGRATION":state["schema_id"]=op["target_schema_id"];state["schema_hash"]=catalog.hash(op["target_schema_id"])
-                elif op["operation"]=="PROPOSE_SCHEMA_MIGRATION":state["schema_proposals"][op["id"]]=deepcopy(op)
-                elif op["operation"]=="ATTACH_CANDIDATE_METADATA":state["metadata"].setdefault(op["candidate_id"],{})[op["id"]]=deepcopy(op["metadata"])
-            return state
+            require(state["schema_hash"]==plan["schema_hash"] and digest(snapshot)==digest(snapshot_body(state)),"SNAPSHOT_BINDING","commit snapshot differs")
+            return apply_publication_state(catalog, state, plan, statuses)
         catalog.put("receipt",authorization);catalog.put("receipt",preflight)
-        from .ledger import build_ledger
-        lineage=build_ledger(catalog,run_id=plan["run_id"],execution_mode=plan["execution_mode"],created_at=plan["created_at"])
+        from .ledger import build_ledger, references
+        missing_snapshot_refs = {ref for record in catalog.all("graph-snapshot")
+                                 for ref, _ in references(record) if ref not in catalog}
+        retained_plans = {record["id"]: record for record in catalog.all("plan")
+                          if has_classification_operations(record["body"]) and record["body"]["snapshot_id"] not in catalog}
+        missing_snapshot_refs.update(record["body"]["snapshot_id"] for record in retained_plans.values())
+        erased_refs = set()
+        erased_plan_links = set()
+        if missing_snapshot_refs:
+            with self.backend._lock:
+                tombstones = {ref: hash_ for ref, hash_ in self.backend.db.execute("SELECT id,hash FROM trace_erased")
+                              if ref in missing_snapshot_refs}
+                if tombstones:
+                    for (body,) in self.backend.db.execute("SELECT body FROM trace_journal"):
+                        event = loads(body)
+                        erased_refs.update(ref for ref, hash_ in event["record_hashes"].items()
+                                           if tombstones.get(ref) == hash_)
+                        historical_id = event["operation"].get("plan_id")
+                        record = retained_plans.get(historical_id)
+                        if record is None or event["operation"].get("plan_hash") != record["hash"]:
+                            continue
+                        snapshot_id = record["body"]["snapshot_id"]
+                        if (event["operation"].get("action") == "PUBLISH_PLAN" and
+                                snapshot_id in tombstones and
+                                event["record_hashes"].get(snapshot_id) == tombstones[snapshot_id]):
+                            erased_plan_links.add((historical_id, snapshot_id))
+        lineage=build_ledger(catalog,run_id=plan["run_id"],execution_mode=plan["execution_mode"],
+                             created_at=plan["created_at"],erased_snapshot_refs=frozenset(erased_refs),
+                             erased_plan_links=frozenset(erased_plan_links))
         computed_head=lineage[-1]["hash"] if lineage else None
         require(upstream_head is None or upstream_head==computed_head,"LEDGER_BINDING","supplied head differs from verified lineage")
+        def verify_classification_under_lock() -> str:
+            audit=self.backend.audit(trust=self.trust, required_sources=tuple(plan["source_epochs"]))
+            require(audit["classification_replay"]=="PASS","REPLAY_CONTENT_UNAVAILABLE",
+                    "classification publication requires replayable classification history")
+            accepted_at = at or now()
+            verify_request(accepted_at)
+            return accepted_at
         return self.backend._transaction(key=plan["idempotency_key"],fingerprint=digest(operation),expected_version=plan["graph_version"],
                   operation=operation,catalog=catalog,apply=apply,authorization_hash=digest(authorization),preflight_hash=digest(preflight),
-                  upstream_head=computed_head,fault=fault,at=at,lineage_prefix=lineage)
+                  upstream_head=computed_head,fault=fault,at=at,lineage_prefix=lineage,authority_check=verify_classification_under_lock if domain_plan else None)
