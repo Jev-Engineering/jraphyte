@@ -478,6 +478,12 @@ class CompilerService:
         operation={"action":"PUBLISH_PLAN","plan_id":plan_id,"plan_hash":plan_hash,"policy_version":self.policy_version,
                    "population":self.population,"security_scope":self.scope}
         def apply(state,statuses):
+            if not domain_plan:
+                if erased_refs or "classifications" in state:
+                    # Check continuity before an ordinary write while allowing
+                    # an existing receipt to remain readable after revocation.
+                    self.backend.audit()
+                verify_request(at or now())
             snapshot=catalog.get(plan["snapshot_id"],"graph-snapshot")
             require(state["schema_hash"]==plan["schema_hash"] and digest(snapshot)==digest(snapshot_body(state)),"SNAPSHOT_BINDING","commit snapshot differs")
             return apply_publication_state(catalog, state, plan, statuses)
@@ -513,18 +519,13 @@ class CompilerService:
                              erased_plan_links=frozenset(erased_plan_links))
         computed_head=lineage[-1]["hash"] if lineage else None
         require(upstream_head is None or upstream_head==computed_head,"LEDGER_BINDING","supplied head differs from verified lineage")
-        def verify_authority_under_lock() -> str:
-            if domain_plan:
-                audit=self.backend.audit(trust=self.trust, required_sources=tuple(plan["source_epochs"]))
-                require(audit["classification_replay"]=="PASS","REPLAY_CONTENT_UNAVAILABLE",
-                        "classification publication requires replayable classification history")
-            elif erased_refs or "classifications" in self.backend.state():
-                # Ordinary writes preserve the projection. Check historical integrity
-                # without requiring current authority from historical classification issuers.
-                self.backend.audit()
+        def verify_classification_under_lock() -> str:
+            audit=self.backend.audit(trust=self.trust, required_sources=tuple(plan["source_epochs"]))
+            require(audit["classification_replay"]=="PASS","REPLAY_CONTENT_UNAVAILABLE",
+                    "classification publication requires replayable classification history")
             accepted_at = at or now()
             verify_request(accepted_at)
             return accepted_at
         return self.backend._transaction(key=plan["idempotency_key"],fingerprint=digest(operation),expected_version=plan["graph_version"],
                   operation=operation,catalog=catalog,apply=apply,authorization_hash=digest(authorization),preflight_hash=digest(preflight),
-                  upstream_head=computed_head,fault=fault,at=at,lineage_prefix=lineage,authority_check=verify_authority_under_lock)
+                  upstream_head=computed_head,fault=fault,at=at,lineage_prefix=lineage,authority_check=verify_classification_under_lock if domain_plan else None)

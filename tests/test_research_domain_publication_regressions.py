@@ -79,6 +79,20 @@ class PublicationRegressions:
         self.assertEqual(again["receipt"], first["receipt"])
         self.assertEqual(first["receipt"]["classification_revision"], 1)
 
+    def test_ordinary_receipt_replays_after_issuer_revocation(self):
+        self.f.migrate()
+        plan = self.ordinary_plan()
+        approvals = self.ordinary_approvals(plan)
+        first = self.f.publish(plan, approvals=approvals)
+        next_plan = self.ordinary_plan()
+        next_approvals = self.ordinary_approvals(next_plan)
+        self.f.trust.revoke(self.ordinary.issuer)
+        repeated = self.f.publish(plan, approvals=approvals)
+        self.assertTrue(repeated["replayed"])
+        self.assertEqual(repeated["receipt"], first["receipt"])
+        with self.assertRaisesRegex(ContractError, "UNTRUSTED_ISSUER"):
+            self.f.publish(next_plan, approvals=next_approvals)
+
     def test_repeat_erasure_cleans_legacy_receipts_linked_by_hash(self):
         plan = self.ordinary_plan()
         approvals = self.ordinary_approvals(plan)
