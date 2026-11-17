@@ -94,6 +94,37 @@ class PublicationRegressions:
         self.f.migrate()
         self.assertTrue(self.b.audit(trust=self.f.trust)["classification_authority_verified"])
 
+    def test_erasure_of_unclassified_source_preserves_unrelated_classification_authority(self):
+        catalog = self.f.catalog
+        other = catalog.source("authored-unclassified", "1", "Authored erasure fixture.", scope="test")
+        evidence = catalog.evidence(other)
+        version = self.b.state()["graph_version"]
+        action = {"action": "ADMIT", "source_hashes": {other: catalog.hash(other)}, "security_scope": "test",
+                  "execution_mode": "SYNTHETIC", "expected_version": version}
+        self.b.admit_sources(catalog, [other], trust=self.f.trust, security_scope="test", execution_mode="SYNTHETIC",
+                             expected_version=version, key="admit-other",
+                             authorization=self.f.source_admin.issue("SOURCE_STATUS", action))
+        migration = self.f.migrate()
+        assignment = self.f.assign()
+        classified_plan = self.f.assignment_plan(assignment)
+        prior_snapshot = catalog.get(classified_plan, "plan")["snapshot_id"]
+        self.f.publish(classified_plan)
+        self.f.status_change(source=other, permission="DENIED", tombstone=True)
+        erased = set(self.b.erase_cached_content(other, reason="Authored case")["erased_ids"])
+        self.assertTrue({other, evidence, prior_snapshot} <= erased)
+        self.assertNotIn(migration["event"]["operation"]["plan_id"], erased)
+        self.assertNotIn(classified_plan, erased)
+        self.f.catalog = Catalog(record for record in catalog.all() if record["id"] not in erased)
+        audit = self.b.audit(trust=self.f.trust)
+        self.assertEqual(audit["classification_replay"], "PASS")
+        self.assertTrue(audit["classification_authority_verified"])
+        successor = self.f.assign(previous=assignment)
+        self.f.publish(self.f.assignment_plan(successor))
+        self.assertEqual(self.b.state()["classifications"]["assignments"], {self.f.source: successor})
+        self.assertTrue(self.b.audit(trust=self.f.trust)["classification_authority_verified"])
+        self.assertEqual(self.b.db.execute("SELECT id FROM trace_records WHERE id IN (?,?,?)",
+                                            (other, evidence, prior_snapshot)).fetchall(), [])
+
     def test_erased_classification_proof_leaves_ordinary_writes_and_retry_available(self):
         self.f.migrate()
         classification = self.f.assignment_plan(self.f.assign())
