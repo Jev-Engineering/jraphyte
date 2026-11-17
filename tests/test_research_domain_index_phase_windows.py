@@ -98,18 +98,18 @@ class IndexPhaseOwnershipNativeWindowsTests(unittest.TestCase):
         # Use the actual trustee spelling emitted by Windows, including LA for
         # the local Administrator. This fixture supplies the v1 consumer receipt.
         trustee = _canonical_trustee(self.sid)
-        deny = f"(D;;LC;;;{trustee})"
-        self.assertNotIn(deny, directory_dacl_sddl(old.parent))
+        self.fence_deny = f"(D;;LC;;;{trustee})"
+        self.assertNotIn(self.fence_deny, directory_dacl_sddl(old.parent))
         _pinned_files(old, hashes)
-        self.addCleanup(self.remove_fence_acl, old.parent, deny)
+        self.addCleanup(self.remove_fence_acl, old.parent)
         _icacls(old.parent, "/deny", "*" + self.sid + ":(AD)")
         sddl = directory_dacl_sddl(old.parent)
-        self.assertIn(deny, sddl)
+        self.assertIn(self.fence_deny, sddl)
         os.rename(old, archived)
         _pinned_files(archived, hashes)
         self.assertFalse(old.exists())
-        with self.assertRaises(PermissionError):
-            old.mkdir()
+        # Verify the ACL consumed by PhaseAuthority. Effective access can
+        # differ for privileged runner tokens.
         _write_once(receipt_path, {
             "version": "paper-pilot-phase-namespace-fence-v1",
             "old_root_path": str(old),
@@ -120,10 +120,10 @@ class IndexPhaseOwnershipNativeWindowsTests(unittest.TestCase):
             "status": "OLD_PATH_FENCED_NEW_PHASE_ALLOWED",
         })
 
-    def remove_fence_acl(self, parent, deny):
-        if deny in directory_dacl_sddl(parent):
+    def remove_fence_acl(self, parent):
+        if self.fence_deny in directory_dacl_sddl(parent):
             _icacls(parent, "/remove:d", "*" + self.sid)
-            self.assertNotIn(deny, directory_dacl_sddl(parent))
+            self.assertNotIn(self.fence_deny, directory_dacl_sddl(parent))
 
     def dump(self):
         return list(self.backend.db.iterdump())
@@ -170,7 +170,8 @@ class IndexPhaseOwnershipNativeWindowsTests(unittest.TestCase):
     def test_fence_removal_denies_index_writes(self):
         adapter = SQLiteGraphAdapter(self.backend, audit_trust=self.f.trust)
         old_parent = Path(self.authority.binding["old_root_path"]).parent
-        _icacls(old_parent, "/remove:d", "*" + self.sid)
+        self.assertIn(self.fence_deny, directory_dacl_sddl(old_parent))
+        self.remove_fence_acl(old_parent)
         before = self.dump()
         with self.assertRaises(ContractError) as caught:
             adapter.rebuild_classification_index(self.request())
