@@ -80,7 +80,7 @@ class TransactionTests(FixtureCase):
         self.f.publish()
         # Invoke the transaction gate with a changed immutable fingerprint: no new state can be written.
         self.rejects(lambda:self.f.backend._transaction(key="publish-demo",fingerprint="a"*64,expected_version=1,operation={},
-            catalog=self.f.catalog,apply=lambda s,t:s,authorization_hash="b"*64,preflight_hash="c"*64),"IDEMPOTENCY_CONFLICT")
+            catalog=self.f.catalog,apply=lambda state,statuses,accepted_at:state,authorization_hash="b"*64,preflight_hash="c"*64),"IDEMPOTENCY_CONFLICT")
     def test_sandbox_cannot_be_reopened_as_production(self):
         self.rejects(lambda:SQLiteReferenceBackend(self.f.root/"graph.sqlite3",catalog=self.f.catalog,schema_id=self.f.schema_id,
                                                    nodes={},sandbox=False),"BACKEND_MODE")

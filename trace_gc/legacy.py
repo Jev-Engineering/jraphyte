@@ -195,7 +195,7 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
             current=self.state()
             require(current["graph_version"]==expected_version,"STALE_GRAPH_VERSION","upstream CAS mismatch")
             require(self.db.execute("SELECT COUNT(*) FROM trace_journal").fetchone()[0]==expected_version,"UPSTREAM_UNMEDIATED_WRITE","upstream contains an unbound write")
-            before=digest(current);prospective=apply(deepcopy(current),deepcopy(self.statuses()))
+            before=digest(current);prospective=apply(deepcopy(current),deepcopy(self.statuses()),when)
             prospective["nodes"].update(bootstrap_nodes)
             self._persist(catalog.all())
             for trace,upstream,source in aliases:

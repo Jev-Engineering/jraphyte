@@ -134,7 +134,7 @@ class SQLiteReferenceBackend:
             require(previous is None or previous[0]==r["hash"],"IMMUTABLE_RECORD",r["id"])
             self.db.execute("INSERT OR IGNORE INTO trace_records VALUES(?,?,?,?)",(r["id"],r["hash"],r["kind"],dumps(r["body"])))
     def _transaction(self, *, key: str, fingerprint: str, expected_version: int, operation: dict[str,Any],
-                     catalog: Catalog, apply: Callable[[dict[str,Any],dict[str,Any]],dict[str,Any]],
+                     catalog: Catalog, apply: Callable[[dict[str,Any],dict[str,Any],str],dict[str,Any]],
                      authorization_hash: str, preflight_hash: str, upstream_head: str | None = None,
                      fault: Callable[[str],None] | None = None, at: str | None = None,
                      lineage_prefix: list[dict[str,Any]] | None = None,
@@ -168,7 +168,7 @@ class SQLiteReferenceBackend:
                 state=self.state();statuses=self.statuses()
                 require(state["graph_version"]==expected_version,"STALE_GRAPH_VERSION","optimistic version mismatch")
                 before=digest(state)
-                resulting=apply(deepcopy(state),deepcopy(statuses))
+                resulting=apply(deepcopy(state),deepcopy(statuses),when)
                 require(resulting["graph_version"]==expected_version,"TRANSACTION_INPUT","apply may not forge graph version")
                 resulting["graph_version"]+=1
                 resulting["source_epochs"]={ref:s["epoch"] for ref,s in self.statuses().items()}
@@ -212,7 +212,7 @@ class SQLiteReferenceBackend:
                 "SOURCE_STATUS", "expected graph version must be a nonnegative integer")
         action={"action":"ADMIT","source_hashes":{ref:catalog.hash(ref) for ref in sorted(source_ids)},
                 "security_scope":security_scope,"execution_mode":execution_mode,"expected_version":expected_version}
-        def apply(state,statuses):
+        def apply(state,statuses,_accepted_at):
             issuer=trust.verify(authorization,"SOURCE_STATUS",at=at)
             require("SOURCE_ADMIT" in issuer.operations and digest(authorization["payload"])==digest(action),"SOURCE_AUTHORITY","source admission scope")
             for ref in source_ids:
@@ -238,7 +238,7 @@ class SQLiteReferenceBackend:
         action={"action":"ERASE" if tombstone else "STATUS_CHANGE","source_id":source_id,"source_hash":catalog.hash(source_id),
                 "active":active,"permission":permission,"expected_epoch":expected_epoch,"expected_version":expected_version,
                 "security_scope":source["security_scope"],"reason":reason,"tombstone":tombstone}
-        def apply(state,statuses):
+        def apply(state,statuses,_accepted_at):
             issuer=trust.verify(authorization,"SOURCE_STATUS",at=at)
             required="SOURCE_ERASE" if tombstone else "SOURCE_WITHDRAW" if not active else "SOURCE_PERMISSION"
             require(required in issuer.operations and digest(authorization["payload"])==digest(action),"SOURCE_AUTHORITY","status authority/scope mismatch")
@@ -477,13 +477,13 @@ class CompilerService:
             verify_request(at or now())
         operation={"action":"PUBLISH_PLAN","plan_id":plan_id,"plan_hash":plan_hash,"policy_version":self.policy_version,
                    "population":self.population,"security_scope":self.scope}
-        def apply(state,statuses):
+        def apply(state,statuses,accepted_at):
             if not domain_plan:
                 if erased_refs or "classifications" in state:
                     # Check continuity before an ordinary write while allowing
                     # an existing receipt to remain readable after revocation.
                     self.backend.audit()
-                verify_request(at or now())
+                verify_request(accepted_at)
             snapshot=catalog.get(plan["snapshot_id"],"graph-snapshot")
             require(state["schema_hash"]==plan["schema_hash"] and digest(snapshot)==digest(snapshot_body(state)),"SNAPSHOT_BINDING","commit snapshot differs")
             return apply_publication_state(catalog, state, plan, statuses)
