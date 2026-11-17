@@ -96,7 +96,7 @@ class TrialReportTests(unittest.TestCase):
                      dense_input_absent_count=1, dense_input_absent_ids=['SECRETDOC3'])
         path = self.root/'specter2'/'dense_cache.json'
         path.parent.mkdir(exist_ok=True)
-        write_dense_batch_fixture(path.parent, cache)
+        write_dense_batch_fixture(path.parent, cache, [row['query'] for row in queries], '7' * 64)
         raw = json.dumps(cache).encode()
         path.write_bytes(raw)
         sha = hashlib.sha256(raw).hexdigest()

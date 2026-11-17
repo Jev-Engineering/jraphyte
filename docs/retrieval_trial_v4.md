@@ -266,6 +266,9 @@ use fixed codes and may identify an arm by its predefined name. The report
 checks arithmetic and replays the stored score order and SPECTER2 cache
 against their reported candidates. The dense cache must account for every
 vector batch, and each checkpoint and batch receipt must match the cache and
-its frozen vector protocol. Source rights and the frozen protocol's
+its frozen vector protocol. Query batch input hashes are checked against the
+frozen ordered query texts, and the historical protocol binds the recorded
+historical field file bytes. Vector checkpoint payloads are treated as opaque
+bytes. Source rights and the frozen protocol's
 external inputs require separate verification. The report always sets
 `issue_acceptance_complete` to false.

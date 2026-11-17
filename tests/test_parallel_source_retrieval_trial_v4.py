@@ -14,12 +14,12 @@ from trace_gc.pdf_source_parallel_v4 import digest_value
 from src.parallel_source_v4.retrieval_policy import coverage, VERSION as POLICY_VERSION
 
 
-def write_dense_batch_fixture(output, cache):
+def write_dense_batch_fixture(output, cache, query_texts, fields_file_sha):
     """Write authored checkpoint byte files and their normal format receipts."""
     bindings = ('fields_sha256', 'ranking_inputs_sha256', 'document_ids_sha256', 'query_ids_sha256',
                 'model_manifest_sha256', 'model_revisions', 'top_k', 'target_ids_used_for_ranking')
     protocol = {key: cache[key] for key in bindings}
-    protocol.update(schema_version='specter2-vector-protocol-v1', batch_size=16)
+    protocol.update(schema_version='specter2-vector-protocol-v1', batch_size=16, fields_file_sha256=fields_file_sha)
     write_once(output / 'protocol.json', protocol)
     cache['protocol_sha256'] = digest_value(protocol)
     cache['vector_batches'] = {}
@@ -27,7 +27,7 @@ def write_dense_batch_fixture(output, cache):
         path = output / group / '00000.npz'
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(f'authored {group} checkpoint'.encode())
-        receipt = {'start': 0, 'count': count, 'input_sha256': digest_value(group),
+        receipt = {'start': 0, 'count': count, 'input_sha256': digest_value(query_texts if group == 'queries' else group),
                    'checkpoint_sha256': digest(path), 'truncated': 0}
         receipt_sha = write_once(path.with_suffix('.receipt.json'),
             {**receipt, 'schema_version': 'specter2-batch-v1', 'protocol_sha256': cache['protocol_sha256']})
@@ -121,7 +121,7 @@ class EmpiricalTrialTests(unittest.TestCase):
                   "query_ids_sha256": digest_value([q["id"] for q in queries]),
                   "fields_sha256": digest_value(fields), "top_k": 50, "target_ids_used_for_ranking": False,
                   "ranking_inputs_sha256": digest_value([{"id": q["id"], "query": q["query"]} for q in queries])}
-        write_dense_batch_fixture(output, result)
+        write_dense_batch_fixture(output, result, [q['query'] for q in queries], digest(fields_file))
         write_once(output / "dense_cache.json", result)
         return result
 

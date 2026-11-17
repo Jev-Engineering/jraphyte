@@ -290,16 +290,18 @@ def _check_ablation(base, variant, removed):
         raise ValueError(error)
 
 
-def _check_dense_batches(directory, cache, artifacts, counts, error):
+def _check_dense_batches(directory, cache, artifacts, counts, query_texts, historical_file_sha, error):
     raw = _read_regular(directory / 'protocol.json', error)
     protocol = _json_object(raw, error)
     protocol_sha = sha(cache['protocol_sha256'])
     batch_size = protocol['batch_size']
+    fields_file_sha = sha(protocol['fields_file_sha256'])
     bindings = ('fields_sha256', 'ranking_inputs_sha256', 'document_ids_sha256', 'query_ids_sha256',
                 'model_manifest_sha256', 'model_revisions', 'top_k', 'target_ids_used_for_ranking')
     if (_canonical_hash(protocol) != protocol_sha or artifacts['protocol.json'] != hashlib.sha256(raw).hexdigest() or
             protocol['schema_version'] != 'specter2-vector-protocol-v1' or
             type(batch_size) is not int or batch_size <= 0 or
+            (historical_file_sha is not None and fields_file_sha != historical_file_sha) or
             any(_canonical_hash(protocol[key]) != _canonical_hash(cache[key]) for key in bindings)):
         raise ValueError(error)
     batches = cache['vector_batches']
@@ -316,7 +318,8 @@ def _check_dense_batches(directory, cache, artifacts, counts, error):
                         'checkpoint_sha256': sha(batch['checkpoint_sha256']), 'truncated': batch['truncated']}
             if (type(batch['start']) is not int or batch['start'] != start or
                     type(batch['count']) is not int or batch['count'] != count or
-                    type(batch['truncated']) is not int or not 0 <= batch['truncated'] <= count):
+                    type(batch['truncated']) is not int or not 0 <= batch['truncated'] <= count or
+                    (group == 'queries' and expected['input_sha256'] != _canonical_hash(query_texts[start:start + count]))):
                 raise ValueError(error)
             name = f'{group}/{start:05d}'
             raw = _read_regular(directory / (name + '.receipt.json'), error)
@@ -335,6 +338,7 @@ def _check_dense_caches(trial_dir, receipt, results, queries, historical_ids):
     if type(conditions) is not dict or set(conditions) != {result['field_condition'] for result in measured}:
         raise ValueError(error)
     query_ids = [row['id'] for row in queries]
+    query_texts = [row['query'] for row in queries]
     historical_id_set = set(historical_ids) if historical_ids is not None else None
     try:
         model_identity = None
@@ -372,7 +376,9 @@ def _check_dense_caches(trial_dir, receipt, results, queries, historical_ids):
             cache = _json_object(raw, error)
             rankings = cache['rankings']
             document_count, query_count = receipt['document_count'], len(query_ids)
-            _check_dense_batches(directory, cache, artifacts, {'papers': document_count, 'queries': query_count}, error)
+            historical_file_sha = receipt['result_file_sha256']['historical-fields.json'] if condition == 'historical' else None
+            _check_dense_batches(directory, cache, artifacts, {'papers': document_count, 'queries': query_count},
+                                 query_texts, historical_file_sha, error)
             versions = cache['model_revisions']
             model_sha = sha(cache['model_manifest_sha256'])
             if (type(versions) is not dict or set(versions) != {'base', 'paper', 'query'} or
