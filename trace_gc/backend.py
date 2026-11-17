@@ -345,18 +345,20 @@ class SQLiteReferenceBackend:
                 "edges":[{"subject":s,"predicate":p,"object":o,"qualifiers":loads(q),"assertion_ids":sorted(ids)}
                          for (s,p,o,q),ids in sorted(edges.items())]}
 
-    def audit(self, *, trust: TrustStore | None=None) -> dict[str,Any]:
+    def audit(self, *, trust: TrustStore | None=None,
+              required_sources: tuple[str, ...]=()) -> dict[str,Any]:
         with self._lock:
             own = not self.db.in_transaction
             if own:
                 self.db.execute("BEGIN")
             try:
-                return self._audit(trust=trust)
+                return self._audit(trust=trust, required_sources=required_sources)
             finally:
                 if own and self.db.in_transaction:
                     self.db.execute("ROLLBACK")
 
-    def _audit(self, *, trust: TrustStore | None=None) -> dict[str,Any]:
+    def _audit(self, *, trust: TrustStore | None=None,
+               required_sources: tuple[str, ...]=()) -> dict[str,Any]:
         meta=loads(self.db.execute("SELECT body FROM trace_meta WHERE id=1").fetchone()[0])
         previous=None;after=meta["genesis_hash"];count=0;last_status={}
         require(digest(meta["genesis_state"])==after,"BACKEND_AUDIT","genesis differs")
@@ -377,7 +379,7 @@ class SQLiteReferenceBackend:
             previous,after,last_status=hash_,event["after_hash"],event["source_status"]
         state=self.state()
         require(state["graph_version"]==count and digest(state)==after and self.statuses()==last_status,"BACKEND_AUDIT","current state/status differs from journal")
-        domain_audit=audit_history(self,trust=trust)
+        domain_audit=audit_history(self, trust=trust, required_sources=required_sources)
         return {"events":count,"head_hash":previous,"state_hash":after,"sandbox":self.sandbox,**domain_audit,
                 "erased_record_count":self.db.execute("SELECT count(*) FROM trace_erased").fetchone()[0]}
 
@@ -438,7 +440,7 @@ class CompilerService:
         state=self.backend.state()
         require(state["graph_version"]==plan["graph_version"] and state["schema_hash"]==plan["schema_hash"],"STALE_GRAPH_VERSION","preflight snapshot")
         snapshot=catalog.get(plan["snapshot_id"],"graph-snapshot")
-        require(snapshot==snapshot_body(state),"SNAPSHOT_BINDING","snapshot must match actual backend, not caller declarations")
+        require(digest(snapshot)==digest(snapshot_body(state)),"SNAPSHOT_BINDING","snapshot must match actual backend, not caller declarations")
         validate_plan(catalog,plan,source_status=self.backend.statuses())
         self._check_policy_and_provenance(catalog,plan,reviewed=reviewed,at=at)
         payload={"plan_hash":catalog.hash(plan_id),"graph_version":plan["graph_version"],"schema_hash":plan["schema_hash"],
@@ -473,7 +475,7 @@ class CompilerService:
                    "population":self.population,"security_scope":self.scope}
         def apply(state,statuses):
             snapshot=catalog.get(plan["snapshot_id"],"graph-snapshot")
-            require(state["schema_hash"]==plan["schema_hash"] and snapshot==snapshot_body(state),"SNAPSHOT_BINDING","commit snapshot differs")
+            require(state["schema_hash"]==plan["schema_hash"] and digest(snapshot)==digest(snapshot_body(state)),"SNAPSHOT_BINDING","commit snapshot differs")
             return apply_publication_state(catalog, state, plan, statuses)
         catalog.put("receipt",authorization);catalog.put("receipt",preflight)
         from .ledger import build_ledger, references
@@ -509,7 +511,7 @@ class CompilerService:
         require(upstream_head is None or upstream_head==computed_head,"LEDGER_BINDING","supplied head differs from verified lineage")
         def verify_authority_under_lock() -> str:
             if domain_plan:
-                audit=self.backend.audit(trust=self.trust)
+                audit=self.backend.audit(trust=self.trust, required_sources=tuple(plan["source_epochs"]))
                 require(audit["classification_replay"]=="PASS","REPLAY_CONTENT_UNAVAILABLE",
                         "classification publication requires replayable classification history")
             elif erased_refs or "classifications" in self.backend.state():

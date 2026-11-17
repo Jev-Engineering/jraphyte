@@ -182,7 +182,7 @@ def verify_preflight_payload(preflight: dict[str, Any], plan: dict[str, Any], pl
                 "source_epochs": plan["source_epochs"], "checks": {key: True for key in sorted(REQUIRED_CHECKS)},
                 "run_id": plan["run_id"], "security_scope": plan["security_scope"], "execution_mode": plan["execution_mode"],
                 "policy_version": policy_version, "population": population, "review_required": required}
-    require(type(required) is bool and preflight["payload"] == expected and (not required or reviewed),
+    require(type(required) is bool and digest(preflight["payload"]) == digest(expected) and (not required or reviewed),
             "PREFLIGHT_FAILED", "invalid/missing checks or required review")
 
 def apply_publication_state(catalog, state, plan, statuses):
@@ -225,7 +225,7 @@ def _verify_classification_event(catalog, event, plan, previous, previous_projec
         trust.verify(preflight, "PREFLIGHT", at=event["committed_at"])
     verify_review_attribution(catalog, plan, authorization["payload"].get("reviewed_by"),
                               at=event["committed_at"], approval_issued_at=authorization["issued_at"])
-    require(catalog.get(plan["snapshot_id"], "graph-snapshot") == snapshot_body(previous),
+    require(digest(catalog.get(plan["snapshot_id"], "graph-snapshot")) == digest(snapshot_body(previous)),
             "DOMAIN_AUDIT", "classification plan is not based on the prior authoritative state")
     previous_revision = previous_projection["revision"] if previous_projection is not None else None
     require(plan["graph_version"] == previous["graph_version"] and
@@ -239,12 +239,52 @@ def _verify_classification_event(catalog, event, plan, previous, previous_projec
     prospective = apply_publication_state(catalog, deepcopy(previous), plan, statuses)
     prospective["graph_version"] = previous["graph_version"] + 1
     prospective["source_epochs"] = {ref: status["epoch"] for ref, status in statuses.items()}
-    require(prospective == after and event["source_status"] == statuses,
+    require(digest(prospective) == digest(after) and digest(event["source_status"]) == digest(statuses),
             "DOMAIN_AUDIT", "classification event differs from the complete validated publication state")
     return _stored_projection(prospective)
 
 
-def audit_history(backend: Any, *, trust: TrustStore | None = None) -> dict[str, Any]:
+def _source_status_changes(event, previous, statuses):
+    from .compiler import timestamp
+
+    operation = event["operation"]
+    action, recorded = operation.get("action"), event["source_status"]
+    changes = {}
+    if action in {"ADMIT", "STATUS_CHANGE", "ERASE"}:
+        require(type(operation.get("expected_version")) is int and
+                operation["expected_version"] == previous["graph_version"],
+                "DOMAIN_AUDIT", "source operation graph version differs")
+    if action == "ADMIT":
+        for ref in operation["source_hashes"]:
+            if ref in statuses:
+                require(not statuses[ref]["tombstone"], "DOMAIN_AUDIT", "source readmission after tombstone")
+                continue
+            updated_at = recorded[ref]["updated_at"]
+            timestamp(updated_at)
+            changes[ref] = {"active": True, "permission": "READ", "epoch": 0,
+                            "updated_at": updated_at, "tombstone": False}
+    elif action in {"STATUS_CHANGE", "ERASE"}:
+        ref = operation["source_id"]
+        old = statuses.get(ref)
+        active, permission, tombstone = operation["active"], operation["permission"], operation["tombstone"]
+        require(old is not None and not old["tombstone"] and type(operation["expected_epoch"]) is int and
+                old["epoch"] == operation["expected_epoch"] and
+                type(active) is bool and permission in {"READ", "DENIED"} and tombstone is (action == "ERASE") and
+                (not tombstone or (not active and permission == "DENIED")),
+                "DOMAIN_AUDIT", "invalid source operation precondition")
+        updated_at = recorded[ref]["updated_at"]
+        timestamp(updated_at)
+        changes[ref] = {"active": active, "permission": permission, "epoch": old["epoch"] + 1,
+                        "updated_at": updated_at, "tombstone": tombstone}
+    expected = {**statuses, **changes}
+    epochs = {ref: status["epoch"] for ref, status in expected.items()}
+    require(digest(recorded) == digest(expected) and digest(event["state_after"]["source_epochs"]) == digest(epochs),
+            "DOMAIN_AUDIT", "source statuses differ from the recorded operation")
+    return changes
+
+
+def audit_history(backend: Any, *, trust: TrustStore | None = None,
+                  required_sources: tuple[str, ...] = ()) -> dict[str, Any]:
     """Recompute classification transitions, optionally authenticating signed plans.
 
     A hash-chain-only audit is not advertised as origin authentication. Content
@@ -266,11 +306,44 @@ def audit_history(backend: Any, *, trust: TrustStore | None = None) -> dict[str,
     domain_events = 0
     missing_proof = False
     receipts = {digest(r["body"]): r["body"] for r in catalog.all("receipt")}
+    source_history: dict[str, list[dict[str, Any]]] = {}
+    checked_authority = set()
+
+    def authenticate_sources(refs):
+        if trust is None:
+            return
+        for ref in refs:
+            require(ref in source_history, "DOMAIN_AUDIT", "classification source admission proof is missing")
+            for event in source_history[ref]:
+                operation = event["operation"]
+                action = operation["action"]
+                source_hash = operation["source_hashes"][ref] if action == "ADMIT" else operation["source_hash"]
+                require(source_hash == catalog.hash(ref) and
+                        operation["security_scope"] == catalog.get(ref, "source")["security_scope"],
+                        "DOMAIN_AUDIT", "source authority bound different bytes or scope")
+                if event["hash"] in checked_authority:
+                    continue
+                receipt = receipts.get(event["authorization_hash"])
+                require(receipt is not None, "REPLAY_CONTENT_UNAVAILABLE", "source authorization bytes are unavailable")
+                issuer = trust.verify(receipt, "SOURCE_STATUS", at=event["committed_at"])
+                require(digest(receipt["payload"]) == digest(operation),
+                        "DOMAIN_AUDIT", "source authorization differs from the journal")
+                if action == "ADMIT":
+                    capability = "SOURCE_ADMIT"
+                elif action == "ERASE":
+                    capability = "SOURCE_ERASE"
+                else:
+                    capability = "SOURCE_PERMISSION" if operation["active"] else "SOURCE_WITHDRAW"
+                require(capability in issuer.operations, "DOMAIN_AUDIT", "source operation was not authorized")
+                checked_authority.add(event["hash"])
+
     for (text,) in backend.db.execute("SELECT body FROM trace_journal ORDER BY version"):
         event = loads(text)
         operation = event["operation"]
         after = event["state_after"]
         current_projection = _stored_projection(after)
+        for ref in _source_status_changes(event, previous, statuses):
+            source_history.setdefault(ref, []).append(event)
         changed = current_projection != previous_projection
         expected = previous_projection
         if operation.get("action") == "PUBLISH_PLAN":
@@ -300,6 +373,7 @@ def audit_history(backend: Any, *, trust: TrustStore | None = None) -> dict[str,
                                 "DOMAIN_AUDIT", "erased snapshot metadata does not match the signed plan")
                         catalog.put("graph-snapshot", snapshot, id_=snapshot_id)
                     try:
+                        authenticate_sources(plan["source_epochs"])
                         expected = _verify_classification_event(catalog, event, plan, previous, previous_projection,
                             statuses, receipts, trust=trust, sandbox=backend.sandbox)
                     except ContractError as exc:
@@ -314,5 +388,6 @@ def audit_history(backend: Any, *, trust: TrustStore | None = None) -> dict[str,
         previous, previous_projection, statuses = after, current_projection, event["source_status"]
     if missing_proof:
         return {"classification_replay": "UNAVAILABLE_ERASED_CONTENT", "classification_authority_verified": False}
+    authenticate_sources(required_sources)
     return {"classification_replay": "PASS", "classification_events": domain_events,
             "classification_authority_verified": trust is not None and domain_events > 0}

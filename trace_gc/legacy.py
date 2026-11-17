@@ -269,7 +269,7 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
                 self.db.guard=self.db.finish=self.db.authority_check=None
                 self.db.guarded=self.db.checking_authority=False
 
-    def _audit(self, *, trust=None):
+    def _audit(self, *, trust=None, required_sources=()):
         upstream=self._store.audit();meta=self._meta();previous=None;after=meta["genesis_hash"];count=0;last_status={}
         require(digest(meta["genesis_state"]) == after, "BACKEND_AUDIT", "genesis differs")
         for version,key,fingerprint,text,h in self.db.execute("SELECT version,key,fingerprint,body,hash FROM trace_journal ORDER BY version"):
@@ -288,6 +288,6 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
                     require(erased and erased[0]==hash_,"BACKEND_AUDIT","record missing without tombstone")
             previous,after,last_status=h,event["after_hash"],event["source_status"]
         require(count==upstream["events"] and digest(self.state())==after and last_status==self.statuses(),"BACKEND_AUDIT","unmediated graph/status write")
-        domain_audit=audit_history(self,trust=trust)
+        domain_audit=audit_history(self, trust=trust, required_sources=required_sources)
         return {"events":count,"head_hash":previous,"state_hash":after,"sandbox":self.sandbox,"upstream":upstream,**domain_audit,
                 "core_blob":PINNED_CORE_BLOB,"erased_record_count":self.db.execute("SELECT COUNT(*) FROM trace_erased").fetchone()[0]}

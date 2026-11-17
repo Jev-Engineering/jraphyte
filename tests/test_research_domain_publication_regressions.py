@@ -104,6 +104,7 @@ class PublicationRegressions:
             lambda event: event["state_after"]["metadata"].update(unreviewed={"note": "authored"}),
             lambda event: event["state_after"]["source_epochs"].update({self.f.source: 99}),
             lambda event: event["source_status"][self.f.source].update(permission="DENIED"),
+            lambda event: event["source_status"][self.f.source].update(active=1),
             lambda event: event["state_after"].update(schema_hash="0" * 64),
         ):
             with self.subTest(change=change):
@@ -172,6 +173,18 @@ class PublicationRegressions:
         first = self.f.publish(plan, approvals=approvals)
         self.assertEqual(self.b.state()["classifications"], projection)
         self.assertEqual(self.f.publish(plan, approvals=approvals)["receipt"], first["receipt"])
+
+    def test_new_classification_requires_authenticated_source_admission(self):
+        self.f.migrate()
+        plan = self.f.assignment_plan(self.f.assign())
+        approvals = self.f.approvals(plan)
+        previous = self.b.state()
+        self.f.trust.revoke(self.f.source_admin.issuer)
+        with self.assertRaisesRegex(ContractError, "UNTRUSTED_ISSUER"):
+            self.f.publish(plan, approvals=approvals)
+        self.assertEqual(self.b.state(), previous)
+        self.assertFalse(self.b.db.in_transaction)
+        self.assertEqual(self.b.audit()["classification_replay"], "PASS")
 
     def test_revoked_historical_reviewer_blocks_authenticated_audit_but_not_ordinary_writes(self):
         self.f.migrate()

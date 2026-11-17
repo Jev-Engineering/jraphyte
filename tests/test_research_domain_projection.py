@@ -84,8 +84,13 @@ class PublicationProjectionTests(unittest.TestCase):
                 CREATE TABLE trace_erased (id TEXT PRIMARY KEY, hash TEXT);
             """)
             backend = SimpleNamespace(db=db, load_catalog=lambda: self.catalog)
-            event = {"operation": {"action": "ADMIT"}, "source_status": {}, "state_after": self.state}
-            db.execute("INSERT INTO trace_meta VALUES (1, ?)", (dumps({"genesis_state": self.state}),))
+            genesis = {**self.state, "graph_version": 0, "source_epochs": {}}
+            status = {"active": True, "permission": "READ", "epoch": 0,
+                      "updated_at": "2026-01-01T00:00:00Z", "tombstone": False}
+            event = {"operation": {"action": "ADMIT", "expected_version": 0,
+                                   "source_hashes": {self.source: self.catalog.hash(self.source)}},
+                     "source_status": {self.source: status}, "state_after": self.state}
+            db.execute("INSERT INTO trace_meta VALUES (1, ?)", (dumps({"genesis_state": genesis}),))
             db.execute("INSERT INTO trace_journal VALUES (1, ?)", (dumps(event),))
             self.assertEqual(audit_history(backend)["classification_replay"], "PASS")
 
@@ -96,7 +101,7 @@ class PublicationProjectionTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, "SCHEMA_ERROR")
 
             db.execute("UPDATE trace_journal SET body = ?", (dumps(event),))
-            db.execute("UPDATE trace_meta SET body = ?", (dumps({"genesis_state": invalid}),))
+            db.execute("UPDATE trace_meta SET body = ?", (dumps({"genesis_state": {**genesis, "classifications": None}}),))
             with self.assertRaises(ContractError) as caught:
                 audit_history(backend)
             self.assertEqual(caught.exception.code, "SCHEMA_ERROR")
