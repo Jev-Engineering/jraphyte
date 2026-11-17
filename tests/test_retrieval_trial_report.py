@@ -196,6 +196,23 @@ class TrialReportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '^trial_metrics_readback_mismatch:without_dense$'):
             aggregate(self.root)
 
+    def test_invalid_historical_field_encoding_has_a_fixed_error(self):
+        self.receipt['ablations']['historical_field_policy'] = 'ARCHIVED_FIELDS_MEASURED'
+        self.receipt['all_arm_target_permutations']['historical_fields'] = self.receipt['target_permutation']
+        for baseline, name in (('primary', 'historical_fields'),
+                               ('target_permutation', 'historical_fields_target_permutation')):
+            result = json.loads((self.root/(baseline+'.json')).read_bytes())['result']
+            self.write_arm(name, result)
+        ids = ['DISTRACTOR' + str(i) for i in range(11)] + ['SECRETDOC' + str(i) for i in range(4)]
+        rows = [{'id': doc, 'title': 'authored'} for doc in ids]
+        rows[0]['title'] = '\ud800'
+        raw = json.dumps({'fields': rows}).encode()
+        (self.root/'historical-fields.json').write_bytes(raw)
+        self.receipt['result_file_sha256']['historical-fields.json'] = hashlib.sha256(raw).hexdigest()
+        self.write_receipt()
+        with self.assertRaisesRegex(ValueError, '^trial_historical_fields_mismatch$'):
+            aggregate(self.root)
+
     def test_blocked_receipt(self):
         self.receipt['status'] = 'BLOCKED'
         self.write_receipt()

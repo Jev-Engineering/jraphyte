@@ -21,9 +21,9 @@ def number(value):
         return False
 
 
-def numeric(values):
+def numeric(values, *, integers=False):
     # Key names are allowlisted too: an input key could itself contain private text.
-    return {k: v for k, v in values.items() if number(v)}
+    return {k: v for k, v in values.items() if number(v) and v >= 0 and (not integers or type(v) is int)}
 
 
 def status(value, allowed):
@@ -112,7 +112,7 @@ def arm_report(name, result, query_count):
 def memory_report(memory) -> dict:
     """Copy the trial's own high-water receipt (`retrieval_trial.memory_receipt`)."""
     memory = memory if isinstance(memory, dict) else {}
-    report = numeric({'peak_rss_bytes': memory.get('peak_rss_bytes')})
+    report = numeric({'peak_rss_bytes': memory.get('peak_rss_bytes')}, integers=True)
     report['scope'] = status(memory.get('scope'), ('current_process_lifetime_including_model_threads',))
     for key in ('child_processes_included', 'system_memory_measured'):
         if type(memory.get(key)) is bool:
@@ -145,8 +145,11 @@ def _json_object(raw, error):
             fields[key] = value
         return fields
 
+    def nonfinite(_):
+        raise ValueError(error)
+
     try:
-        value = json.loads(raw, object_pairs_hook=unique_object)
+        value = json.loads(raw, object_pairs_hook=unique_object, parse_constant=nonfinite)
     except (ValueError, UnicodeError):
         raise ValueError(error) from None
     if type(value) is not dict:
@@ -354,7 +357,10 @@ def aggregate(trial_dir: Path) -> dict:
         historical_ids = {row['id'] for row in historical}
         if len(historical_ids) != document_count or not observed_ids.issubset(historical_ids):
             raise ValueError('trial_historical_fields_mismatch')
-        expected_fields = _canonical_hash(historical)
+        try:
+            expected_fields = _canonical_hash(historical)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError('trial_historical_fields_mismatch') from None
         if any(result.get('fields_sha256') != expected_fields for name, result in results.items()
                if name.startswith('historical_fields')):
             raise ValueError('trial_historical_fields_mismatch')
@@ -368,7 +374,7 @@ def aggregate(trial_dir: Path) -> dict:
     return dict(schema_version='retrieval-trial-sanitized-metrics-v1',
         trial_receipt_sha256=hashlib.sha256(raw).hexdigest(), protocol_sha256=sha(receipt.get('protocol_sha256')),
         **numeric({k: receipt.get(k) for k in ('document_count', 'query_count',
-                                             'new_paid_api_calls', 'production_graph_writes')}),
+                                             'new_paid_api_calls', 'production_graph_writes')}, integers=True),
         full_10000_by_60=full,
         ablations={k: status(receipt.get('ablations', {}).get(k),
             ('MEASURED', 'NOT_RUN', 'ARCHIVED_FIELDS_MEASURED')) for k in
