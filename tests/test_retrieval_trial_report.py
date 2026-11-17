@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from src.retrieval_trial_report import aggregate, CHANNELS, _canonical_hash
 
@@ -212,6 +213,11 @@ class TrialReportTests(unittest.TestCase):
         self.write_receipt()
         with self.assertRaisesRegex(ValueError, '^trial_historical_fields_mismatch$'):
             aggregate(self.root)
+
+    def test_deep_receipt_returns_a_fixed_input_error(self):
+        with patch('src.retrieval_trial_report.json.loads', side_effect=RecursionError('fixture')):
+            with self.assertRaisesRegex(ValueError, '^trial_receipt_invalid$'):
+                aggregate(self.root)
 
     def test_blocked_receipt(self):
         self.receipt['status'] = 'BLOCKED'

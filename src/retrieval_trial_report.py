@@ -150,7 +150,7 @@ def _json_object(raw, error):
 
     try:
         value = json.loads(raw, object_pairs_hook=unique_object, parse_constant=nonfinite)
-    except (ValueError, UnicodeError):
+    except (ValueError, UnicodeError, RecursionError):
         raise ValueError(error) from None
     if type(value) is not dict:
         raise ValueError(error)
@@ -234,7 +234,7 @@ def _permutation_check(arm, base, rotated, queries, recorded):
                 recorded != {'status': 'PASS', 'checks': checks} or
                 any(value is not True for value in recorded['checks'].values())):
             raise ValueError(error)
-    except (KeyError, TypeError, UnicodeError, ValueError):
+    except (KeyError, TypeError, UnicodeError, ValueError, RecursionError):
         raise ValueError(error) from None
     return 'PASS'
 
@@ -359,7 +359,7 @@ def aggregate(trial_dir: Path) -> dict:
             raise ValueError('trial_historical_fields_mismatch')
         try:
             expected_fields = _canonical_hash(historical)
-        except (TypeError, ValueError, OverflowError):
+        except (TypeError, ValueError, OverflowError, RecursionError):
             raise ValueError('trial_historical_fields_mismatch') from None
         if any(result.get('fields_sha256') != expected_fields for name, result in results.items()
                if name.startswith('historical_fields')):
