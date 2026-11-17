@@ -76,7 +76,10 @@ class WindowsModel:
         self.dacls: dict[str, tuple[str, list[str]]] = {}
         self.token_bypasses_deny = False      # e.g. a token whose privileges let it create
         self.marks_auto_inherited = False     # Windows adds AI when it rewrites an unprotected DACL
-        self.remove_exit = 0
+        self.restore_exit = 0
+        self.restore_adds_ai = False
+        self.deny_exit = 0
+        self.deny_timeout = False
         self.mkdir_error = None
         self.rmdir_fails = False
         nt = _NtOs(self)
@@ -117,22 +120,34 @@ class WindowsModel:
     def run(self, args, **kwargs):
         assert args[0] == "icacls.exe", args
         path, verb, spec = args[1], args[2], args[3]
+        if verb == "/save":
+            original = self.key(Path(kwargs["cwd"]) / path)
+            Path(spec).write_text(json.dumps([original, self.dacls[original]]), encoding="utf-8")
+            return subprocess.CompletedProcess(args, 0)
+        if verb == "/restore":
+            original, (flags, aces) = json.loads(Path(spec).read_text(encoding="utf-8"))
+            assert Path(original).parent == Path(path).resolve()
+            if not self.restore_exit:
+                self.set(original, flags + ("AI" if self.restore_adds_ai else ""), aces)
+            return subprocess.CompletedProcess(args, self.restore_exit)
         self.sddl(path)
         flags, aces = self.dacls[self.key(path)]
         trustee = self.spell(spec.lstrip("*").split(":")[0])
         if verb == "/deny":
             mask = {"(AD)": "LC", "(WD,AD)": "DCLC"}[spec.split(":", 1)[1]]
-            aces = ["(D;;" + mask + ";;;" + trustee + ")"] + aces
+            aces = ["(D;;" + mask + ";;;" + trustee + ")"] + [
+                ace for ace in aces if ace != "(A;;" + mask + ";;;" + trustee + ")"]
+
         elif verb == "/remove:d":
-            if self.remove_exit:
-                return subprocess.CompletedProcess(args, self.remove_exit, "", "")
             aces = [ace for ace in aces if not (ace.startswith("(D;;") and ace.endswith(";;;" + trustee + ")"))]
         else:
             raise AssertionError(verb)
         if self.marks_auto_inherited and "P" not in flags and "AI" not in flags:
             flags += "AI"
         self.dacls[self.key(path)] = (flags, aces)
-        return subprocess.CompletedProcess(args, 0, "", "")
+        if verb == "/deny" and self.deny_timeout:
+            raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+        return subprocess.CompletedProcess(args, self.deny_exit if verb == "/deny" else 0)
 
 
 class ModeledFence(unittest.TestCase):
@@ -260,11 +275,16 @@ class ModeledTokenGateTests(ModeledFence):
         self.hold(v1.TOKEN_NOT_REFUSED)
         self.assert_no_effect(before)
 
-    def test_an_unprotected_parent_marked_auto_inherited_is_reported_unverified(self):
+    def test_an_unprotected_parent_with_new_control_flags_is_restored(self):
         self.model.token_bypasses_deny = True
         self.model.marks_auto_inherited = True
         self.model.set(self.parent, "", ["(A;OICIID;FA;;;SY)"])
-        self.hold(v1.TOKEN_NOT_REFUSED + "; the added deny could not be removed and verified"
+        before = self.model.sddl(self.parent)
+        self.hold("old parent DACL changed beyond the exact deny-create ACE")
+        self.assert_no_effect(before)
+        self.model.restore_adds_ai = True
+        self.hold("old parent DACL changed beyond the exact deny-create ACE"
+                  "; original parent DACL restoration could not be verified"
                   " (DACL differs from its pre-state)")
         self.assertEqual(self.model.sddl(self.parent), "D:AI(A;OICIID;FA;;;SY)")
         self.assertTrue(self.old.is_dir() and not self.receipt.exists())
@@ -276,11 +296,27 @@ class ModeledTokenGateTests(ModeledFence):
         self.hold(v1.TOKEN_NOT_REFUSED)
         self.assert_no_effect(before)
 
-    def test_a_removal_that_exits_nonzero_is_not_trusted(self):
+    def test_a_restoration_that_exits_nonzero_is_not_trusted(self):
         self.model.token_bypasses_deny = True
-        self.model.remove_exit = 5
-        self.hold(v1.TOKEN_NOT_REFUSED + "; the added deny could not be removed and verified"
+        self.model.restore_exit = 5
+        self.hold(v1.TOKEN_NOT_REFUSED + "; original parent DACL restoration could not be verified"
                   " (icacls exit 5)")
+
+    def test_success_status_with_a_removed_grant_holds_and_restores_the_grant(self):
+        self.model.set(self.parent, "P", ["(A;;LC;;;BU)", "(A;OICI;FA;;;BA)"])
+        before = self.model.sddl(self.parent)
+        self.hold("old parent DACL changed beyond the exact deny-create ACE")
+        self.assert_no_effect(before)
+
+    def test_nonzero_or_timeout_after_mutation_restores_the_grant(self):
+        self.model.set(self.parent, "P", ["(A;;LC;;;BU)", "(A;OICI;FA;;;BA)"])
+        before = self.model.sddl(self.parent)
+        for timeout in (False, True):
+            with self.subTest(timeout=timeout):
+                self.model.deny_exit = 5
+                self.model.deny_timeout = timeout
+                self.hold("could not deny old state recreation")
+                self.assert_no_effect(before)
 
     def test_acl_readback_error_rolls_back_the_new_deny(self):
         before = self.model.sddl(self.parent)
@@ -301,7 +337,7 @@ class ModeledTokenGateTests(ModeledFence):
         with patch.object(v1, "directory_dacl_sddl", side_effect=[
                 before, OSError("private readback diagnostic"),
                 ContractError("PHASE_FENCE", "private rollback diagnostic")]):
-            self.hold(v1.DACL_UNVERIFIED + "; the added deny could not be removed and verified"
+            self.hold(v1.DACL_UNVERIFIED + "; original parent DACL restoration could not be verified"
                       " (restored DACL could not be read)")
         self.assert_no_effect(before)
 
