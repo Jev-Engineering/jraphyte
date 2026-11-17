@@ -11,7 +11,9 @@ from trace_gc.canonical import text_digest
 from trace_gc.cli import main
 from trace_gc.compiler import now
 from trace_gc.errors import ContractError
-from trace_gc.paper_pilot_evaluator import PROTOCOL_VERSION, RECEIPTS_VERSION, evaluate, export_receipts, question_sha256
+from trace_gc.paper_pilot_evaluator import (
+    PROTOCOL_VERSION, RECEIPTS_VERSION, _evaluate_sections, evaluate, export_receipts, question_sha256,
+)
 from trace_gc.pdf_image_evidence import REPRESENTATION as IMAGE
 from tests import test_paper_pilot as base
 
@@ -56,8 +58,9 @@ def receipts():
             "provider_calls_by_exporter": 0}
 
 
-def rows(report, section):
-    return {r.get("question_sha256") or r.get("assertion_id_sha256") or r.get("scenario_sha256"): r for r in report["rows"][section]}
+def scored_rows(value, section):
+    rows = _evaluate_sections(protocol(), value, [])[section]
+    return {row.get("question_sha256") or row.get("assertion_id_sha256"): row for row in rows}
 
 
 class AggregateEvaluatorTests(unittest.TestCase):
@@ -70,6 +73,12 @@ class AggregateEvaluatorTests(unittest.TestCase):
         self.assertEqual(report["metrics"]["abstention"], {"denominator": 1, "pass": 1, "fail": 0, "hold": 0,
                                                             "not_run": 0, "invalidated": 0})
         self.assertEqual(report["metrics"]["source_reviews"]["independent"], 0)
+        encoded = json.dumps(report)
+        for fingerprint in (QUESTION, UNSUPPORTED, text_digest("cand-1"), text_digest("paper-a"),
+                            text_digest("retrieve-q1"), text_digest("authored-pilot")):
+            self.assertNotIn(fingerprint, encoded)
+        self.assertEqual(report["rows"]["citation_chains"], [
+            {"count": 1, "reason": "CITATION_EVIDENCE_SOURCE_PAGE", "status": "PASS", "evidence_class": None}])
 
     def test_missing_outputs_are_not_run_with_honest_denominators(self):
         empty = receipts()
@@ -101,35 +110,35 @@ class AggregateEvaluatorTests(unittest.TestCase):
                 value = receipts(); mutate(value)
                 report = evaluate(protocol(), value, [])
                 self.assertEqual(report["verdict"], "FAIL")
-                self.assertEqual(rows(report, "questions")[QUESTION]["reason"], reason)
+                self.assertEqual(scored_rows(value, "questions")[QUESTION]["reason"], reason)
 
     def test_answered_unsupported_question_and_graph_gaps_fail(self):
         value = receipts()
         value["answers"][1].update(state="SUPPORTED", abstention_reason=None)
-        self.assertEqual(rows(evaluate(protocol(), value, []), "questions")[UNSUPPORTED]["reason"],
+        self.assertEqual(scored_rows(value, "questions")[UNSUPPORTED]["reason"],
                          "ANSWERED_UNSUPPORTED_QUESTION")
         for field, bad in (("transaction_event_hash", None), ("transaction_event_hash", "e" * 64), ("resolution_outcome", "REJECTED"),
                            ("observations_ok", False), ("resolution_id_sha256", None),
                            ("transaction_version", None), ("transaction_version", 3), ("observation_ids_sha256", [])):
             with self.subTest(field=field):
                 value = receipts(); value["assertions"][0][field] = bad
-                self.assertEqual(rows(evaluate(protocol(), value, []), "assertions")[question_sha256("cand-1")]["reason"],
+                self.assertEqual(scored_rows(value, "assertions")[question_sha256("cand-1")]["reason"],
                                  "INCOMPLETE_GRAPH_CHAIN")
         value = receipts()
         value["assertions"].append({**value["assertions"][0], "assertion_id_sha256": text_digest("cand-unexpected")})
         report = evaluate(protocol(), value, [])
-        self.assertEqual(rows(report, "assertions")[question_sha256("cand-unexpected")]["reason"], "UNEXPECTED_ASSERTION")
+        self.assertEqual(scored_rows(value, "assertions")[question_sha256("cand-unexpected")]["reason"], "UNEXPECTED_ASSERTION")
 
     def test_answer_version_is_compared_with_receipt_graph_version(self):
         value = receipts()
         value["answers"][0].update(answer_graph_version=1, graph_version_current=False)
-        question = rows(evaluate(protocol(), value, []), "questions")[QUESTION]
+        question = scored_rows(value, "questions")[QUESTION]
         self.assertEqual(question["reason"], "GRAPH_CHANGED_AFTER_ANSWER_REFRESH_REQUIRED")
 
     def test_supported_answer_without_context_readback_is_held(self):
         value = receipts()
         del value["answers"][0]["retrieval_context_current"]
-        question = rows(evaluate(protocol(), value, []), "questions")[QUESTION]
+        question = scored_rows(value, "questions")[QUESTION]
         self.assertEqual(question["status"], "HOLD")
 
     def test_abstention_requires_current_context_and_completed_stage(self):
@@ -146,7 +155,7 @@ class AggregateEvaluatorTests(unittest.TestCase):
             with self.subTest(changes=changes):
                 value = receipts()
                 value["answers"][1].update(changes)
-                question = rows(evaluate(protocol(), value, []), "questions")[UNSUPPORTED]
+                question = scored_rows(value, "questions")[UNSUPPORTED]
                 self.assertEqual((question["status"], question["reason"]), (status, reason))
 
     def test_withdrawn_source_invalidates_supported_answer_and_assertion(self):
@@ -155,8 +164,8 @@ class AggregateEvaluatorTests(unittest.TestCase):
         value["assertions"][0]["active"] = False
         report = evaluate(protocol(), value, [])
         self.assertEqual(report["verdict"], "HOLD")
-        self.assertEqual(rows(report, "questions")[QUESTION]["status"], "INVALIDATED")
-        self.assertEqual(rows(report, "assertions")[question_sha256("cand-1")]["status"], "INVALIDATED")
+        self.assertEqual(scored_rows(value, "questions")[QUESTION]["status"], "INVALIDATED")
+        self.assertEqual(scored_rows(value, "assertions")[question_sha256("cand-1")]["status"], "INVALIDATED")
         self.assertEqual(report["metrics"]["citation_chains"]["invalidated"], 1)
 
     def test_latest_attempt_per_question_is_scored(self):
@@ -165,7 +174,7 @@ class AggregateEvaluatorTests(unittest.TestCase):
         later.update(retrieval_id_sha256=text_digest("retrieve-q1-again"), prepare_id_sha256=text_digest("prepare-q1-again"), state="ABSTAIN_NO_AUTHORIZED_EVIDENCE",
                      abstention_reason="NO_AUTHORIZED_EVIDENCE", claims=[], response_id_sha256=None, review_id_sha256=None, reviewer_kind=None)
         value["answers"].append(later)
-        self.assertEqual(rows(evaluate(protocol(), value, []), "questions")[QUESTION]["retrieval_id_sha256"], question_sha256("retrieve-q1-again"))
+        self.assertEqual(scored_rows(value, "questions")[QUESTION]["retrieval_id_sha256"], question_sha256("retrieve-q1-again"))
 
     def test_text_fields_undeclared_inputs_and_duplicates_are_rejected(self):
         mutations = [
@@ -267,7 +276,7 @@ class PilotExportTests(unittest.TestCase):
 
     def supported(self):
         f = self.f
-        _, _, reviewed = f.answer_request()
+        _, _, reviewed = f.answer_request(grant_decisions=True)
         response = json.dumps({"abstain": False, "claims": [{"text": "The authored result is 17 units.",
                                "evidence_ids": [reviewed["evidence_id"]]}]}).encode()
         f.pilot.record_answer_response("answer", prepared_id="prepare-answer", response=response,
@@ -308,7 +317,9 @@ class PilotExportTests(unittest.TestCase):
         self.assertEqual(denied["metrics"]["questions"]["invalidated"], 1)
         self.assertEqual(denied["metrics"]["citation_chains"]["invalidated"], 1)
         self.assertEqual(denied["metrics"]["assertions"]["invalidated"], 1)
-        self.assertEqual(set(denied_receipts["evidence"][0]), {"evidence_id", "currently_readable"})
+        self.assertEqual(denied_receipts["evidence"], [])
+        self.assertEqual(denied_receipts["answers"][0]["claims"], [
+            {"evidence_ids": [], "support": None, "withheld_reason": "SOURCE_NOT_CURRENTLY_READABLE"}])
         for secret in (source_ref, exported["evidence"][0]["raw_document_sha256"],
                        text_digest("The authored result is 17 units.")):
             self.assertNotIn(secret, json.dumps(denied_receipts))
@@ -321,7 +332,11 @@ class PilotExportTests(unittest.TestCase):
         self.assertEqual(before["assertions"][0]["assertion_id_sha256"], text_digest(edge))
         self.f.grants.pop("edge:" + edge)
         after = export_receipts(self.f.pilot)
-        self.assertTrue(after["evidence"][0]["currently_readable"])
+        source = before["evidence"][0]["source_snapshot_id"]
+        self.assertEqual(self.f.backend.statuses()[source]["permission"], "READ")
+        self.assertEqual(after["evidence"], [])
+        self.assertEqual(after["answers"][0]["claims"], [
+            {"evidence_ids": [], "support": None, "withheld_reason": "CITATION_CONTEXT_REFRESH_REQUIRED"}])
         self.assertEqual(after["assertions"][0],
                          {"assertion_id_sha256": text_digest(edge), "currently_readable": False})
         report = evaluate(self.frozen(), after, [])
@@ -329,8 +344,22 @@ class PilotExportTests(unittest.TestCase):
         self.assertEqual(report["metrics"]["citation_chains"]["hold"], 1)
         self.assertEqual(report["metrics"]["assertions"]["invalidated"], 1)
 
+    def test_denied_decision_withholds_lineage_even_with_edge_and_source_access(self):
+        self.supported()
+        before = export_receipts(self.f.pilot)
+        self.assertIsNotNone(before["assertions"][0]["transaction_event_hash"])
+        observation = self.f.pilot.requests["response"]["result"]["observation_ids"][0]
+        self.f.grants.pop("decision:" + observation)
+        after = export_receipts(self.f.pilot)
+        self.assertEqual(after["assertions"], [
+            {"assertion_id_sha256": before["assertions"][0]["assertion_id_sha256"], "currently_readable": False}])
+        self.assertEqual(after["evidence"], [])
+        public = evaluate(self.frozen(), after, [])
+        self.assertEqual(public["metrics"]["assertions"]["invalidated"], 1)
+        self.assertNotIn(before["assertions"][0]["assertion_id_sha256"], json.dumps(public))
+
     def test_denied_assertion_does_not_export_its_only_evidence(self):
-        self.f.answer_request()
+        self.f.answer_request(grant_decisions=True)
         edge = next(iter(self.f.backend.state()["assertions"]))
         self.assertTrue(export_receipts(self.f.pilot)["evidence"])
         self.f.grants.pop("edge:" + edge)

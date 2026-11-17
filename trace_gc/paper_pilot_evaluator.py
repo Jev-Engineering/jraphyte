@@ -16,7 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-from .canonical import bytes_digest, digest, text_digest
+from .canonical import bytes_digest, digest, loads, text_digest
 from .errors import boundary, require
 from .paper_ingestion import REPRESENTATION as NATIVE
 from .pdf_image_evidence import REPRESENTATION as IMAGE
@@ -33,6 +33,10 @@ ROW_STATUSES = ("PASS", "FAIL", "HOLD", "NOT_RUN", "INVALIDATED")
 _HEX = re.compile(r"[0-9a-f]{64}")
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._/-]{0,199}")
 _ABSTAIN = {"ABSTAIN_NO_AUTHORIZED_EVIDENCE": "NO_AUTHORIZED_EVIDENCE", "ABSTAIN_MODEL": "MODEL_ABSTAINED"}
+
+_DENIED_CITATION = "SOURCE_NOT_CURRENTLY_READABLE"
+_STALE_CITATION = "CITATION_CONTEXT_REFRESH_REQUIRED"
+_WITHHELD_CITATIONS = {_DENIED_CITATION, _STALE_CITATION}
 
 _ANSWER_REFS = ("retrieval_id_sha256", "prepare_id_sha256", "response_id_sha256", "review_id_sha256")
 
@@ -106,10 +110,10 @@ def _evidence_row(pilot, evidence_id):
             "currently_readable": True}
 
 
-def _assertion_row(pilot, assertion_id, row, journal, *, readable):
-    reference = {"assertion_id_sha256": text_digest(assertion_id), "currently_readable": readable}
-    if not readable:
-        return reference
+def _assertion_row(pilot, assertion_id, row, journal, acl):
+    withheld = {"assertion_id_sha256": text_digest(assertion_id), "currently_readable": False}
+    if not acl.edge(assertion_id, row):
+        return withheld
     chain = {"transaction_event_hash": None, "transaction_version": None, "plan_id_sha256": None,
              "resolution_id_sha256": None, "resolution_outcome": None, "observation_ids_sha256": [], "observations_ok": False}
     for publish in _completed(pilot, "PUBLISH"):
@@ -120,8 +124,11 @@ def _assertion_row(pilot, assertion_id, row, journal, *, readable):
         if not ops:
             continue
         receipt = publish["result"]["receipt"]
-        resolution = pilot.catalog.get(ops[0]["resolution_id"], "resolution")
+        resolution_id = ops[0]["resolution_id"]
+        resolution = pilot.catalog.get(resolution_id, "resolution")
         observations = resolution["observation_ids"]
+        if not acl.decision(resolution_id) or not all(acl.decision(ref) for ref in observations):
+            return withheld
         chain = {"transaction_event_hash": receipt["event_hash"] if journal.get(receipt["event_hash"]) == receipt and
                      receipt["plan_hash"] == pilot.catalog.hash(plan_id) else None,
                  "transaction_version": receipt["version"], "plan_id_sha256": text_digest(plan_id),
@@ -129,7 +136,8 @@ def _assertion_row(pilot, assertion_id, row, journal, *, readable):
                  "observation_ids_sha256": [text_digest(ref) for ref in observations],
                  "observations_ok": bool(observations) and all(
                      pilot.catalog.get(o, "observation")["status"] == "OK" for o in observations)}
-    return {**reference, "active": row["active"], "evidence_ids": list(row["evidence_ids"]), **chain}
+    return {**withheld, "currently_readable": True, "active": row["active"],
+            "evidence_ids": list(row["evidence_ids"]), **chain}
 
 
 def _answer_rows(pilot, current_stamp, graph_version):
@@ -187,7 +195,9 @@ def export_receipts(pilot) -> dict:
     current_stamp = pilot._stamp()
     access = pilot._access()
     acl = AccessFilter(access, pilot.catalog, statuses)
-    journal = {r["body"]["event_hash"]: r["body"] for r in pilot.backend.load_catalog().all("transaction")}
+    journal = {row["hash"]: row["transaction_receipt"]
+               for (body,) in pilot.backend.db.execute("SELECT body FROM trace_journal")
+               for row in (loads(body),)}
     reviews = []
     for request in _completed(pilot, "REVIEW_SOURCE") + _completed(pilot, "REVIEW_SOURCE_IMAGE"):
         payload = request["args"]["receipt"]["payload"]
@@ -206,24 +216,22 @@ def export_receipts(pilot) -> dict:
                         "independent_review": False})
     answers = _answer_rows(pilot, current_stamp, state["graph_version"])
     graph_assertions = state["assertions"]
-    readable_assertions = {ref for ref, row in graph_assertions.items() if acl.edge(ref, row)}
-    cited = sorted({e for a in answers for c in a["claims"] for e in c["evidence_ids"]} |
-                   {e for ref in readable_assertions for e in graph_assertions[ref]["evidence_ids"]})
-    evidence = []
-    evidence_refs = {}
-    for ref in cited:
-        if acl.evidence(ref):
-            evidence_refs[ref] = ref
-            evidence.append(_evidence_row(pilot, ref))
-        else:
-            marker = f"denied:{len(evidence)}"
-            evidence_refs[ref] = marker
-            evidence.append({"evidence_id": marker, "currently_readable": False})
+    assertions = [_assertion_row(pilot, ref, graph_assertions[ref], journal, acl)
+                  for ref in sorted(graph_assertions)]
+    cited = {ref for row in assertions if row["currently_readable"] for ref in row["evidence_ids"]}
     for answer in answers:
         for claim in answer["claims"]:
-            claim["evidence_ids"] = [evidence_refs[ref] for ref in claim["evidence_ids"]]
-    assertions = [_assertion_row(pilot, ref, graph_assertions[ref], journal, readable=ref in readable_assertions)
-                  for ref in sorted(graph_assertions)]
+            refs = claim["evidence_ids"]
+            reason = None
+            if not all(acl.evidence(ref) for ref in refs):
+                reason = _DENIED_CITATION
+            elif not answer["retrieval_context_current"] or not answer["graph_version_current"]:
+                reason = _STALE_CITATION
+            if reason is not None:
+                claim.update(evidence_ids=[], support=None, withheld_reason=reason)
+            else:
+                cited.update(refs)
+    evidence = [_evidence_row(pilot, ref) for ref in sorted(cited)]
     require(state["graph_version"] == audit["events"] and digest(state) == audit["state_hash"] and
             digest(statuses) == current_stamp["statuses_sha256"] and
             digest(access) == current_stamp["access_sha256"] and pilot._stamp() == current_stamp and
@@ -362,9 +370,16 @@ def _validate_receipts(receipts):
         require(state not in _ABSTAIN or not a["claims"], "EVALUATOR_INPUT",
                 "abstention cannot carry claims", path=path)
         for j, c in enumerate(a["claims"]):
-            _keys(c, {"evidence_ids", "support"}, f"{path}.claims[{j}]")
-            _ids(c["evidence_ids"], f"{path}.claims[{j}].evidence_ids", nonempty=True)
-            _bool(c["support"], f"{path}.claims[{j}]", nullable=True)
+            claim_path = f"{path}.claims[{j}]"
+            if type(c) is dict and "withheld_reason" in c:
+                _keys(c, {"evidence_ids", "support", "withheld_reason"}, claim_path)
+                require(c["evidence_ids"] == [] and c["support"] is None and
+                        type(c["withheld_reason"]) is str and c["withheld_reason"] in _WITHHELD_CITATIONS,
+                        "EVALUATOR_INPUT", "invalid withheld citation marker", path=claim_path)
+            else:
+                _keys(c, {"evidence_ids", "support"}, claim_path)
+                _ids(c["evidence_ids"], claim_path + ".evidence_ids", nonempty=True)
+                _bool(c["support"], claim_path, nullable=True)
     for name, keys in (("assertions", ("assertion_id_sha256",)), ("evidence", ("evidence_id",)),
                        ("source_reviews", ("request_id_sha256",)), ("answers", _ANSWER_REFS)):
         for key in keys:
@@ -398,12 +413,18 @@ def _chain(evidence, ref):
     if e is None:
         return "MISSING_EVIDENCE"
     if not e["currently_readable"]:
-        return "SOURCE_NOT_CURRENTLY_READABLE"
+        return _DENIED_CITATION
     if e["physical_page"] is None or e["page_png_sha256"] is None:
         return "MISSING_PAGE_LINEAGE"
     if e["representation"] == IMAGE and e["crop_png_sha256"] is None:
         return "MISSING_CROP_LINEAGE"
     return None
+
+
+def _citation_problems(claim, evidence):
+    if "withheld_reason" in claim:
+        return {claim["withheld_reason"]}
+    return {_chain(evidence, ref) for ref in claim["evidence_ids"]} - {None}
 
 
 def _question(q, attempt, evidence):
@@ -431,19 +452,21 @@ def _question(q, attempt, evidence):
         return {**row, "status": "FAIL", "reason": "REVIEW_REJECTED_CLAIM"}
     if state != "SUPPORTED":
         return {**row, "status": "HOLD", "reason": "PENDING:" + state}
-    problems = {_chain(evidence, ref) for c in attempt["claims"] for ref in c["evidence_ids"]} - {None}
+    problems = {problem for claim in attempt["claims"] for problem in _citation_problems(claim, evidence)}
     if not all(attempt[key] for key in (*_ANSWER_REFS[1:], "reviewer_kind")):
         return {**row, "status": "FAIL", "reason": "INCOMPLETE_ANSWER_REVIEW_CHAIN"}
+    if problems - _WITHHELD_CITATIONS:
+        return {**row, "status": "FAIL", "reason": "INCOMPLETE_CITATION_CHAIN:" + ",".join(sorted(problems))}
+    if _DENIED_CITATION in problems:
+        return {**row, "status": "INVALIDATED", "reason": "CITED_SOURCE_WITHDRAWN_OR_DENIED"}
+    if _STALE_CITATION in problems:
+        return {**row, "status": "HOLD", "reason": "GRAPH_CHANGED_AFTER_ANSWER_REFRESH_REQUIRED"}
     if not attempt["claims"] or not all(c["support"] is True for c in attempt["claims"]):
         return {**row, "status": "FAIL", "reason": "SUPPORT_JUDGMENT_INCOMPLETE"}
-    if problems == {"SOURCE_NOT_CURRENTLY_READABLE"}:
-        return {**row, "status": "INVALIDATED", "reason": "CITED_SOURCE_WITHDRAWN_OR_DENIED"}
-    if problems:
-        return {**row, "status": "FAIL", "reason": "INCOMPLETE_CITATION_CHAIN:" + ",".join(sorted(problems))}
     cited = {evidence[ref]["source_id_sha256"] for c in attempt["claims"] for ref in c["evidence_ids"]}
     missing = sorted({text_digest(ref) for ref in q["required_source_ids"]} - cited)
     if missing:
-        return {**row, "status": "FAIL", "reason": "REQUIRED_SOURCE_NOT_CITED", "missing_source_id_sha256": missing}
+        return {**row, "status": "FAIL", "reason": "REQUIRED_SOURCE_NOT_CITED", "missing_required_source_count": len(missing)}
     if not attempt["graph_version_current"] or attempt.get("retrieval_context_current") is not True:
         return {**row, "status": "HOLD", "reason": "GRAPH_CHANGED_AFTER_ANSWER_REFRESH_REQUIRED"}
     return {**row, "status": "PASS", "reason": "SUPPORTED_WITH_COMPLETE_CURRENT_CHAINS"}
@@ -470,9 +493,8 @@ def _assertion(ref, rows, evidence, graph):
     return {"assertion_id_sha256": ref, "status": "PASS", "reason": "TRANSACTION_PLAN_RESOLUTION_OBSERVATION_CHAIN"}
 
 
-@boundary
-def evaluate(protocol: dict, receipts: dict, recovery: list) -> dict:
-    """Aggregate report; recovery rows are application-attested scenario outcomes."""
+def _evaluate_sections(protocol, receipts, recovery):
+    """Evaluate identifier-bearing rows for the operator before aggregation."""
     _validate_protocol(protocol)
     _validate_receipts(receipts)
     _validate_recovery(recovery, protocol)
@@ -492,12 +514,14 @@ def evaluate(protocol: dict, receipts: dict, recovery: list) -> dict:
     chains = []
     for attempt in latest.values():
         for position, claim in enumerate(attempt["claims"], start=1):
-            problems = sorted({_chain(evidence, ref) for ref in claim["evidence_ids"]} - {None})
-            if problems:
-                status = "INVALIDATED" if problems == ["SOURCE_NOT_CURRENTLY_READABLE"] else "FAIL"
-                reason = ",".join(problems)
-            elif not attempt["graph_version_current"] or attempt.get("retrieval_context_current") is not True:
-                status, reason = "HOLD", "CITATION_CONTEXT_REFRESH_REQUIRED"
+            problems = _citation_problems(claim, evidence)
+            if problems - _WITHHELD_CITATIONS:
+                status, reason = "FAIL", ",".join(sorted(problems))
+            elif _DENIED_CITATION in problems:
+                status, reason = "INVALIDATED", _DENIED_CITATION
+            elif (problems or not attempt["graph_version_current"] or
+                  attempt.get("retrieval_context_current") is not True):
+                status, reason = "HOLD", _STALE_CITATION
             else:
                 status, reason = "PASS", "CITATION_EVIDENCE_SOURCE_PAGE"
             chains.append({"question_sha256": attempt["question_sha256"], "claim_position": position,
@@ -507,17 +531,31 @@ def evaluate(protocol: dict, receipts: dict, recovery: list) -> dict:
                       "receipt_sha256": supplied[name]["receipt_sha256"]} if name in supplied else
                      {"scenario_sha256": text_digest(name), "status": "NOT_RUN", "evidence_class": None, "receipt_sha256": None}
                      for name in protocol["required_recovery"]]
+    return {"questions": questions, "assertions": assertions, "citation_chains": chains, "recovery": recovery_rows}
+
+
+@boundary
+def evaluate(protocol: dict, receipts: dict, recovery: list) -> dict:
+    """Publish anonymous status/reason counts from the operator's receipt rows."""
+    sections = _evaluate_sections(protocol, receipts, recovery)
     reviews = receipts["source_reviews"]
-    sections = {"questions": questions, "assertions": assertions, "citation_chains": chains, "recovery": recovery_rows}
-    abstention = [q for q in questions if q["expectation"] == "ABSTAIN"]
+    abstention = [row for row in sections["questions"] if row["expectation"] == "ABSTAIN"]
     all_rows = [r for rows in sections.values() for r in rows]
     verdict = ("FAIL" if any(r["status"] == "FAIL" for r in all_rows) else
                "PASS" if all_rows and all(r["status"] == "PASS" for r in all_rows) else "HOLD")
     synthetic = receipts["execution_mode"] == "SYNTHETIC" or any(
-        r["evidence_class"] == "AUTHORED_SYNTHETIC" for r in recovery_rows)
-    report = {"version": VERSION, "evaluator": evaluator_identity(), "protocol_id_sha256": text_digest(protocol["protocol_id"]),
+        r["evidence_class"] == "AUTHORED_SYNTHETIC" for r in sections["recovery"])
+    public_rows = {}
+    for name, rows in sections.items():
+        counts = {}
+        for row in rows:
+            key = (row["status"], row.get("reason", ""), row.get("evidence_class") or "")
+            counts[key] = counts.get(key, 0) + 1
+        public_rows[name] = [{"status": status, "reason": reason or None, "evidence_class": evidence_class or None,
+                              "count": count} for (status, reason, evidence_class), count in sorted(counts.items())]
+    report = {"version": VERSION, "evaluator": evaluator_identity(),
               "protocol_sha256": digest(protocol), "receipts_sha256": digest(receipts),
-              "recovery_sha256": digest(recovery), "run_id_sha256": receipts["run_id_sha256"],
+              "recovery_sha256": digest(recovery),
               "checkpoint_head": receipts["checkpoint_head"], "graph": receipts["graph"],
               "evidence_class": "AUTHORED_SYNTHETIC_MECHANICS_ONLY" if synthetic else "UNSIGNED_AGGREGATE_OF_LIVE_RECEIPTS",
               "verdict": verdict,
@@ -528,7 +566,7 @@ def evaluate(protocol: dict, receipts: dict, recovery: list) -> dict:
                                              "assistant": sum(r["reviewer_kind"] == "assistant" for r in reviews),
                                              "human": sum(r["reviewer_kind"] == "human" for r in reviews),
                                              "independent": 0}},
-              "rows": sections, "source_text_included": False, "provider_calls": 0,
+              "rows": public_rows, "source_text_included": False, "provider_calls": 0,
               "authorization_granted": False, "qualifies_issue_23": False,
               "limits": ["Claim support is the recorded attributed review, not an entailment check by this evaluator.",
                          "Receipt rows are unsigned; bind them to the private run by checkpoint and journal heads.",

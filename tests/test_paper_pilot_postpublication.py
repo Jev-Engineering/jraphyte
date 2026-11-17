@@ -19,10 +19,6 @@ from tests import test_paper_pilot as base
 CLAIM_TEXT = "The authored result is 17 units."
 
 
-def by_key(report, section):
-    return {r.get("question_sha256") or r.get("assertion_id_sha256") or r.get("scenario_sha256"): r for r in report["rows"][section]}
-
-
 @unittest.skipIf(base.fitz is None, "optional PyMuPDF fixture dependency unavailable")
 class PostpublicationScenarioTests(unittest.TestCase):
     def setUp(self):
@@ -35,7 +31,7 @@ class PostpublicationScenarioTests(unittest.TestCase):
 
     def supported(self):
         f = self.f
-        _, _, reviewed = f.answer_request()
+        _, _, reviewed = f.answer_request(grant_decisions=True)
         response = json.dumps({"abstain": False, "claims": [{"text": CLAIM_TEXT,
                                "evidence_ids": [reviewed["evidence_id"]]}]}).encode()
         f.pilot.record_answer_response("answer", prepared_id="prepare-answer", response=response,
@@ -106,7 +102,7 @@ class PostpublicationScenarioTests(unittest.TestCase):
         stale = export_receipts(f.pilot)
         stale_report = evaluate(self.protocol("SUPPORTED"), stale, [])
         self.assertEqual(stale_report["verdict"], "HOLD")
-        self.assertEqual(by_key(stale_report, "questions")[question_sha256(self.question)]["status"], "INVALIDATED")
+        self.assertEqual(stale_report["rows"]["questions"][0]["status"], "INVALIDATED")
         self.assertEqual({r["status"] for r in stale_report["rows"]["assertions"]}, {"INVALIDATED"})
         self.assertEqual(stale_report["metrics"]["citation_chains"]["invalidated"], 1)
         self.assertTrue(all("transaction_event_hash" not in a for a in stale["assertions"]))
@@ -127,7 +123,7 @@ class PostpublicationScenarioTests(unittest.TestCase):
         self.assertEqual(f.budget.snapshot()["used"]["model_calls"], used["model_calls"])
 
         scenario_report = evaluate(self.protocol("ABSTAIN"), export_receipts(f.pilot), [])
-        row = by_key(scenario_report, "questions")[question_sha256(self.question)]
+        row = scenario_report["rows"]["questions"][0]
         self.assertEqual((row["status"], row["reason"]), ("PASS", "NO_AUTHORIZED_EVIDENCE"))
         self.assertEqual(scenario_report["evidence_class"], "AUTHORED_SYNTHETIC_MECHANICS_ONLY")
         for text in (CLAIM_TEXT, self.question, f.native.strip()):
@@ -138,8 +134,8 @@ class PostpublicationScenarioTests(unittest.TestCase):
                      "evidence_class": "AUTHORED_SYNTHETIC"}]
         combined = evaluate(self.protocol("SUPPORTED", recovery=[name, "interrupted_publication"]),
                             parent_receipts, recovery)
-        self.assertEqual(by_key(combined, "recovery")[question_sha256(name)]["status"], "PASS")
-        self.assertEqual(by_key(combined, "recovery")[question_sha256("interrupted_publication")]["status"], "NOT_RUN")
+        self.assertEqual(combined["metrics"]["recovery"]["pass"], 1)
+        self.assertEqual(combined["metrics"]["recovery"]["not_run"], 1)
         self.assertEqual(combined["verdict"], "HOLD")
         self.assertFalse(combined["qualifies_issue_23"])
 

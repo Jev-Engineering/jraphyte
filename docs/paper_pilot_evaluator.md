@@ -19,11 +19,11 @@ public, reproducible way to count its rows.
    callbacks and backend) and call `export_receipts(pilot)`. The exporter reads
    the verified checkpoint, the backend journal and the **current** source and
    assertion status. It emits identifiers, hashes, page numbers, review kinds and
-   states. Application-assigned references use SHA-256 of their exact UTF-8
-   identifiers. Claims are identified by position within their answer. Questions
-   use the frozen protocol's SHA-256 references. A denied assertion contributes
-   its fingerprint and access status. It contributes no evidence links or
-   provenance, and a denied source contributes a local marker.
+   states. Within the private receipt, application-assigned references use
+   SHA-256 of their exact UTF-8 identifiers. Proofs require current edge, source,
+   resolution and observation access. The receipt records a withheld outcome
+   for access-stale claims and omits their source links and support findings.
+   The public report contains anonymous counts by status and reason.
 2. Freeze the evaluation protocol before inspecting answers. See
    [`examples/paper_pilot/evaluation_protocol.synthetic.json`](../examples/paper_pilot/evaluation_protocol.synthetic.json).
    `question_sha256(text)` gives the question identifier.
@@ -40,7 +40,8 @@ trace-gc paper-pilot evaluate receipts.json --protocol protocol.json \
 ```
 
 It exits 1 with a structured `EVALUATOR_INPUT` error for any extra field,
-free-text value, duplicate row, undeclared scenario or malformed hash. The public report emits SHA-256 references for caller-supplied identifiers. Keep the receipt inputs and identifier mapping private. No
+free-text value, duplicate row, undeclared scenario or malformed hash. The public report binds the complete protocol and receipt files with digests and groups
+outcomes without record identifiers. Keep the receipt inputs and identifier mapping private. No
 report is written in that case.
 
 ## Row rules
