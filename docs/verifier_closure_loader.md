@@ -27,7 +27,7 @@ of a top-level-only pin. It is not V6.
 | `verifier_id` | Reviewed verifier name |
 | `entry`, `callable` | Entry module (dotted, inside the release root) and the function called with the inputs |
 | `runtime` | `{"implementation", "version"}` (major.minor); any other runtime is rejected |
-| `approved_external` | Sorted stdlib modules the closure may import. Import machinery (`importlib`, `sys`, `builtins`, `runpy`, `pkgutil`, `zipimport`, `marshal`, `site`, `imp`, `ctypes`, `code`, `codeop`) cannot be approved, and neither can a module outside the stdlib |
+| `approved_external` | Sorted stdlib modules the closure may import. Import machinery and code-loading modules (`DENIED_EXTERNAL`: `importlib`, `sys`, `builtins`, `runpy`, `pkgutil`, `zipimport`, `marshal`, `site`, `imp`, `ctypes`, `code`, `codeop`, `os`, `posix`, `nt`, `subprocess`, `multiprocessing`, `concurrent`, `pickle`, `shelve`, `copyreg`, `types`, `inspect`, `gc`, `pdb`, `bdb`, `trace`, `profile`, `cProfile`, `zipapp`) cannot be approved, and neither can a module outside the stdlib. This is a denylist, not an allowlist: every other approved module must be reviewed, as part of the trusted base, for whether it can load or run code outside the closure |
 | `approved_dynamic` | Sorted modules inside the verifier package that the code loads with a literal `__import__("...")`. They are pinned like static imports |
 | `closure` | `{relative path: sha256}` for every local file: entry, transitive helpers, package `__init__` files and approved dynamic modules |
 
@@ -56,19 +56,30 @@ itself, signing and delivery happen out of band and are not performed here.
    when the root carries files that `method_hashes` seeds by default.
 5. No closure module may already be in `sys.modules`. No closure top-level name
    may be a stdlib name or resolve anywhere else on `sys.path`.
-6. The hashes of the scanned bytes must equal `closure` exactly.
+6. Each approved external, and each of its submodules already in
+   `sys.modules`, must be builtin or frozen or have its spec origin (and
+   `__file__`) under the base runtime's `stdlib`/`platstdlib` directories (plus
+   `DLLs` on Windows), outside any `site-packages`. A stdlib-named module found
+   elsewhere on `sys.path`, or a cached `sys.modules` entry from elsewhere,
+   fails closed with `external_module_not_from_stdlib`.
+7. The hashes of the scanned bytes must equal `closure` exactly.
 
 Only after all of these checks pass does any verifier code run. The scanned
 bytes are compiled in memory with `dont_inherit=True` into private module
 objects. Those objects are never inserted into `sys.modules`, and their packages
 get an empty `__path__`. No `__pycache__` file is read or written. A private
 `__import__` resolves local names only from the verified map and passes only
-declared stdlib names to the normal import system. Afterwards the closure is
+declared stdlib names to the normal import system. It re-checks the stdlib
+origin of each imported name before and after that import. A failed runtime
+check rejects the run even if the verifier catches the `ImportError`. Afterwards the closure is
 re-read and must be byte-identical, and the inputs must have the same digest
 before the result is accepted. A verifier exception, an import-time exception or
-any result other than `PASS`/`HOLD` becomes HOLD. `evaluate_closure_gate`
-turns every closure rejection into a HOLD record that carries the rejection
-code.
+any result other than the exact `str` `PASS`/`HOLD` (a `str` subclass or an
+object with its own `__eq__` is not accepted) becomes HOLD. The record stores
+the canonical literal. `evaluate_closure_gate` turns every closure rejection
+into a HOLD record that carries the rejection code. Read and parse failures in
+the scan map to `closure_unreadable`, `closure_not_utf8`,
+`closure_syntax_error` and `invalid_module_reference`.
 
 ## Boundaries
 

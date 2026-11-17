@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from src import verifier_closure_loader as loader
 from src.verifier_closure_loader import VerifierClosureError
@@ -297,6 +298,159 @@ class StaleBytecodeTests(unittest.TestCase):
         pinned = sha(release.path("entry.py"))
         self.assertEqual(release.legacy(pinned, flags=()), "PASS")  # executes the stale bytecode
         self.assertEqual(release.run(contract)["status"], "HOLD")  # executes the verified source bytes
+
+
+STATS_HELPER = """import statistics
+
+from .criteria import THRESHOLD
+
+
+def decide(inputs):
+    return "PASS" if statistics.mean([inputs["observed"]]) >= THRESHOLD else "HOLD"
+"""
+
+
+class ExternalOriginTests(unittest.TestCase):
+    """An approved stdlib name must resolve to the runtime's stdlib (review of #116)."""
+
+    def setUp(self):
+        self.saved = {name: module for name, module in sys.modules.items()
+                      if name == "statistics" or name.startswith("statistics.")}
+        for name in self.saved:
+            del sys.modules[name]
+        self.addCleanup(self.restore)
+
+    def restore(self):
+        for name in [n for n in sys.modules if n == "statistics" or n.startswith("statistics.")]:
+            del sys.modules[name]
+        sys.modules.update(self.saved)
+
+    def release_with_shadow(self):
+        release = Release(self, approved_external=("json", "statistics"))
+        release.write("helper.py", STATS_HELPER)
+        contract = release.contract()
+        self.assertEqual(release.run(contract, BELOW)["status"], "HOLD")
+        sys.modules.pop("statistics", None)
+        shadow = Path(release.temporary.name) / "shadow"
+        shadow.mkdir()
+        self.marker = Path(release.temporary.name) / "shadow_ran"
+        (shadow / "statistics.py").write_text(
+            f"open({str(self.marker)!r}, 'w').close()\n\ndef mean(values):\n    return 1.0\n", encoding="utf-8")
+        return release, contract, shadow
+
+    def assert_rejected(self, action):
+        with self.assertRaises(VerifierClosureError) as caught:
+            action()
+        self.assertEqual(caught.exception.code, "external_module_not_from_stdlib")
+        self.assertIn("statistics", str(caught.exception))
+
+    def test_stdlib_named_shadow_on_sys_path_outside_root_is_rejected(self):
+        release, contract, shadow = self.release_with_shadow()
+        sys.path.insert(0, str(shadow))
+        try:
+            self.assert_rejected(lambda: release.run(contract, BELOW))
+            self.assert_rejected(release.contract)
+            gate = loader.evaluate_closure_gate(release.root, contract, BELOW, approved_roots=[release.root])
+            self.assertEqual((gate["status"], gate["rejected"]), ("HOLD", "external_module_not_from_stdlib"))
+        finally:
+            sys.path.remove(str(shadow))
+        self.assertFalse(self.marker.exists())
+        self.assertEqual(release.run(contract, BELOW)["status"], "HOLD")
+
+    def test_stdlib_named_shadow_in_sys_modules_is_rejected(self):
+        release, contract, shadow = self.release_with_shadow()
+        fake = type(sys)("statistics")
+        fake.__file__ = str(shadow / "statistics.py")
+        fake.mean = lambda values: 1.0
+        sys.modules["statistics"] = fake
+        self.assert_rejected(lambda: release.run(contract, BELOW))
+        fake.__spec__ = None
+        del fake.__file__
+        self.assert_rejected(lambda: release.run(contract, BELOW))
+        del sys.modules["statistics"]
+        self.assertEqual(release.run(contract, BELOW)["status"], "HOLD")
+
+    def test_runtime_import_rechecks_origin_even_if_verifier_swallows_error(self):
+        release, _, shadow = self.release_with_shadow()
+        release.write("helper.py", "def decide(inputs):\n    try:\n        import statistics\n"
+                                   "    except ImportError:\n        pass\n    return 'PASS'\n")
+        contract = release.contract()
+        sys.path.insert(0, str(shadow))
+        try:  # model a shadow that appears after the pre-execution check
+            with mock.patch.object(loader, "_check_external_origins"):
+                self.assert_rejected(lambda: release.run(contract, BELOW))
+        finally:
+            sys.path.remove(str(shadow))
+        self.assertFalse(self.marker.exists())
+
+
+class OutcomeAndDenialTests(unittest.TestCase):
+    def test_result_must_be_the_exact_str_literal(self):
+        bodies = {
+            "str_subclass": "class Result(str):\n    pass\n\ndef decide(inputs):\n    return Result('PASS')\n",
+            "eq_override": "class Result:\n    def __eq__(self, other):\n        return True\n"
+                           "    __hash__ = object.__hash__\n\ndef decide(inputs):\n    return Result()\n",
+        }
+        for label, body in bodies.items():
+            with self.subTest(label):
+                release = Release(self)
+                release.write("helper.py", body)
+                held = release.run(release.contract(), ABOVE)
+                self.assertIs(type(held["status"]), str)
+                self.assertEqual((held["status"], held["hold_reason"]), ("HOLD", "unrecognized_verifier_result"))
+        release = Release(self)
+        passed = release.run(release.contract(), ABOVE)
+        self.assertIs(type(passed["status"]), str)
+        self.assertEqual(passed["status"], "PASS")
+
+    def test_code_loading_modules_cannot_be_approved(self):
+        for name in ("os", "subprocess", "multiprocessing", "pickle", "types", "inspect"):
+            with self.subTest(name):
+                release = Release(self, approved_external=("json", name))
+                with self.assertRaises(VerifierClosureError) as caught:
+                    release.contract()
+                self.assertEqual(caught.exception.code, "import_machinery_denied")
+                release = Release(self)
+                release.write("entry.py", f"import {name}\n\ndef evaluate(inputs):\n    return 'PASS'\n")
+                with self.assertRaises(VerifierClosureError) as caught:
+                    release.contract()
+                self.assertEqual(caught.exception.code, "import_machinery_denied")
+
+
+class ScanErrorMappingTests(unittest.TestCase):
+    def gate(self, release, contract):
+        return loader.evaluate_closure_gate(release.root, contract, BELOW, approved_roots=[release.root])
+
+    def test_read_and_parse_failures_become_hold_records(self):
+        cases = {
+            "closure_not_utf8": lambda r: r.path("helper.py").write_bytes(b"VALUE = '\xff'\n"),
+            "closure_syntax_error": lambda r: r.write("helper.py", "def decide(:\n"),
+            "invalid_module_reference": lambda r: r.write("helper.py", "from .... import nothing\n"),
+        }
+        for code, mutate in cases.items():
+            with self.subTest(code):
+                release = Release(self)
+                contract = release.contract()
+                mutate(release)
+                with self.assertRaises(VerifierClosureError) as caught:
+                    release.run(contract)
+                self.assertEqual(caught.exception.code, code)
+                gate = self.gate(release, contract)
+                self.assertEqual((gate["status"], gate["rejected"]), ("HOLD", code))
+
+    def test_unreadable_file_becomes_hold_record(self):
+        release = Release(self)
+        contract = release.contract()
+        real = Path.read_bytes
+
+        def denied(path):
+            if path.name == "helper.py":
+                raise PermissionError("synthetic")
+            return real(path)
+
+        with mock.patch.object(Path, "read_bytes", denied):
+            gate = self.gate(release, contract)
+        self.assertEqual((gate["status"], gate["rejected"]), ("HOLD", "closure_unreadable"))
 
 
 if __name__ == "__main__":

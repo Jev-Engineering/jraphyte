@@ -31,7 +31,9 @@ import copy
 import hashlib
 import importlib.machinery
 import importlib.util
+import os
 import sys
+import sysconfig
 import types
 from pathlib import Path
 
@@ -42,10 +44,16 @@ CONTRACT = "verifier_closure_release_v1"
 CONTRACT_KEYS = {"contract", "verifier_id", "entry", "callable", "runtime",
                  "approved_external", "approved_dynamic", "closure"}
 RESULTS = ("PASS", "HOLD")
-# Modules that can redirect imports, reach sys.modules/sys.path or load other
-# executable representations. They cannot be approved as external imports.
+# Modules that can redirect imports, reach sys.modules/sys.path, start other
+# processes or load other executable representations. They cannot be approved
+# as external imports. This is a denylist, not an allowlist: any other stdlib
+# module a contract approves must itself be reviewed as part of the trusted
+# base for whether it can load or run code outside the pinned closure.
 DENIED_EXTERNAL = frozenset({"builtins", "importlib", "imp", "marshal", "pkgutil",
-                             "runpy", "site", "sys", "zipimport", "ctypes", "code", "codeop"})
+                             "runpy", "site", "sys", "zipimport", "ctypes", "code", "codeop",
+                             "os", "posix", "nt", "subprocess", "multiprocessing", "concurrent",
+                             "pickle", "shelve", "copyreg", "types", "inspect", "gc",
+                             "pdb", "bdb", "trace", "profile", "cProfile", "zipapp"})
 DENIED_NAMES = frozenset({"exec", "eval", "compile", "__builtins__", "__loader__", "__spec__",
                           "globals", "vars", "breakpoint"})
 DENIED_ATTRIBUTES = frozenset({"__import__", "__builtins__", "__loader__", "__spec__", "__globals__",
@@ -77,8 +85,11 @@ def _approved_root(root, approved_roots) -> Path:
     raw = Path(root)
     if raw.is_symlink():
         _fail("symlinked_verifier_root")
-    resolved = raw.resolve()
-    approved = {Path(item).resolve() for item in approved_roots}
+    try:
+        resolved = raw.resolve()
+        approved = {Path(item).resolve() for item in approved_roots}
+    except (OSError, RuntimeError, TypeError) as exc:
+        _fail("unapproved_verifier_root", type(exc).__name__)
     if resolved not in approved or not resolved.is_dir():
         _fail("unapproved_verifier_root")
     return resolved
@@ -120,6 +131,69 @@ def _top_level_bindings(tree) -> set:
     return names
 
 
+def _stdlib_roots() -> tuple:
+    """Directories of the base runtime's stdlib, without any site-packages."""
+    base = {"base": sys.base_prefix, "platbase": sys.base_exec_prefix,
+            "installed_base": sys.base_prefix, "installed_platbase": sys.base_exec_prefix}
+    allowed, excluded = [], []
+    for key in ("stdlib", "platstdlib"):
+        allowed.append(sysconfig.get_path(key, vars=base))
+    if os.name == "nt":  # stdlib extension modules live in <base>/DLLs on Windows
+        allowed.append(os.path.join(sys.base_exec_prefix, "DLLs"))
+    for key in ("purelib", "platlib"):
+        excluded.extend((sysconfig.get_path(key), sysconfig.get_path(key, vars=base)))
+    resolve = lambda items: tuple({Path(item).resolve() for item in items if item})
+    return resolve(allowed), resolve(excluded)
+
+
+def _stdlib_origin(origin) -> bool:
+    if origin in ("built-in", "frozen"):
+        return True
+    if not isinstance(origin, str) or not origin:
+        return False
+    try:
+        path = Path(origin).resolve()
+    except (OSError, RuntimeError):
+        return False
+    allowed, excluded = _stdlib_roots()
+    if any(path.is_relative_to(item) for item in excluded):
+        return False
+    return any(path.is_relative_to(item) for item in allowed)
+
+
+def _require_stdlib_module(name: str) -> None:
+    """An approved external must come from this runtime's stdlib, not sys.path.
+
+    An existing ``sys.modules`` entry is checked by its spec and ``__file__``;
+    otherwise the spec the normal import system would use is located without
+    executing the module. Builtin and frozen modules are accepted; anything else
+    must originate under the base runtime's stdlib directories.
+    """
+    if name in sys.modules:
+        module = sys.modules[name]
+        spec = getattr(module, "__spec__", None)
+        origins = [getattr(spec, "origin", None)]
+        if getattr(module, "__file__", None) is not None:
+            origins.append(module.__file__)
+        if spec is None or not all(_stdlib_origin(item) for item in origins):
+            _fail("external_module_not_from_stdlib", name)
+        return
+    try:
+        spec = importlib.util.find_spec(name)
+    except (ImportError, ValueError):
+        spec = None
+    if spec is None or not _stdlib_origin(spec.origin):
+        _fail("external_module_not_from_stdlib", name)
+
+
+def _check_external_origins(approved_external) -> None:
+    for name in approved_external:
+        _require_stdlib_module(name)
+    for name in list(sys.modules):  # submodules already imported under an approved name
+        if name.split(".")[0] in approved_external and "." in name:
+            _require_stdlib_module(name)
+
+
 def _external(name: str, approved_external) -> None:
     top = name.split(".")[0]
     if top in DENIED_EXTERNAL:
@@ -129,6 +203,22 @@ def _external(name: str, approved_external) -> None:
 
 
 def scan_closure(root: Path, entry: str, *, approved_external=(), approved_dynamic=()) -> dict:
+    """Statically resolve the closure; read and parse failures become closure errors."""
+    try:
+        return _scan_closure(root, entry, approved_external=approved_external, approved_dynamic=approved_dynamic)
+    except VerifierClosureError:
+        raise
+    except UnicodeDecodeError as exc:
+        _fail("closure_not_utf8", str(exc))
+    except SyntaxError as exc:
+        _fail("closure_syntax_error", "%s:%s" % (exc.filename, exc.lineno))
+    except OSError as exc:
+        _fail("closure_unreadable", type(exc).__name__)
+    except (ImportError, ValueError) as exc:  # e.g. relative import beyond the package
+        _fail("invalid_module_reference", str(exc))
+
+
+def _scan_closure(root: Path, entry: str, *, approved_external=(), approved_dynamic=()) -> dict:
     """Statically resolve the strict local closure without executing it.
 
     Returns ({module: relative_path}, {relative_path: bytes}); the bytes are
@@ -242,8 +332,14 @@ def _check_unambiguous(root: Path, modules: dict) -> None:
 def _read_closure(root: Path, contract: dict, *, check_ambiguity: bool) -> tuple[dict, dict]:
     modules, payloads = scan_closure(root, contract["entry"], approved_external=contract["approved_external"],
                                      approved_dynamic=contract["approved_dynamic"])
+    _check_external_origins(set(contract["approved_external"]))
     if check_ambiguity:
-        _check_unambiguous(root, modules)
+        try:
+            _check_unambiguous(root, modules)
+        except (ImportError, ValueError, OSError) as exc:
+            if isinstance(exc, VerifierClosureError):
+                raise
+            _fail("import_path_check_failed", type(exc).__name__)
     hashes = {relative: hashlib.sha256(raw).hexdigest() for relative, raw in payloads.items()}
     try:
         reused = method_hashes(root, additional_roots=(contract["entry"], *contract["approved_dynamic"]))
@@ -292,6 +388,7 @@ class _PrivateImporter:
         self.local_top = contract["entry"].split(".")[0]
         self.external = set(contract["approved_external"])
         self.loaded = {}
+        self.violation = None  # kept even if the verifier swallows the ImportError
         self.builtins = dict(builtins.__dict__)
         self.builtins["__import__"] = self.import_
 
@@ -329,7 +426,21 @@ class _PrivateImporter:
         if name.split(".")[0] != self.local_top:
             if name.split(".")[0] not in self.external:
                 raise ImportError("unpinned_import_at_runtime:" + name)
-            return builtins.__import__(name, None, None, fromlist, 0)
+            parts = name.split(".")
+            prefixes = [".".join(parts[:i]) for i in range(1, len(parts) + 1)]
+            try:
+                for prefix in prefixes:  # before anything outside the closure can execute
+                    _require_stdlib_module(prefix)
+                result = builtins.__import__(name, None, None, fromlist, 0)
+                for prefix in prefixes:
+                    _require_stdlib_module(prefix)
+                for item in fromlist or ():
+                    if isinstance(getattr(result, item, None), types.ModuleType):
+                        _require_stdlib_module(name + "." + item)
+            except VerifierClosureError as exc:
+                self.violation = self.violation or exc
+                raise ImportError(str(exc)) from None
+            return result
         module = self.module(name)
         for item in fromlist or ():
             if name + "." + item in self.modules:
@@ -362,6 +473,12 @@ def run_verifier(root, contract: dict, inputs, *, approved_roots) -> dict:
             outcome = function(copy.deepcopy(inputs))
         except Exception as exc:  # a verifier failure is a HOLD, never a PASS
             outcome, error = "HOLD", type(exc).__name__
+    if type(outcome) is str and outcome in RESULTS:
+        outcome = RESULTS[RESULTS.index(outcome)]  # canonical literal, never a subclass
+    else:
+        outcome, error = "HOLD", error or "unrecognized_verifier_result"
+    if importer.violation is not None:
+        raise importer.violation
     _, after = _read_closure(root, contract, check_ambiguity=False)
     if after != payloads:
         _fail("closure_changed_during_execution")
@@ -369,11 +486,11 @@ def run_verifier(root, contract: dict, inputs, *, approved_roots) -> dict:
         _fail("inputs_changed_during_execution")
     record = {"contract": CONTRACT, "verifier_id": contract["verifier_id"],
               "release_contract_sha256": contract_sha256(contract), "input_sha256": input_sha,
-              "status": outcome if outcome in RESULTS else "HOLD",
+              "status": outcome,
               "executed_representation": "verified_source_bytes_compiled_in_memory",
               "evidence": "mechanical_closure_check_not_qualification"}
-    if error or outcome not in RESULTS:
-        record["hold_reason"] = error or "unrecognized_verifier_result"
+    if error:
+        record["hold_reason"] = error
     return record
 
 
