@@ -109,7 +109,7 @@ class PostpublicationScenarioTests(unittest.TestCase):
         self.assertEqual(by_key(stale_report, "questions")[question_sha256(self.question)]["status"], "INVALIDATED")
         self.assertEqual({r["status"] for r in stale_report["rows"]["assertions"]}, {"INVALIDATED"})
         self.assertEqual(stale_report["metrics"]["citation_chains"]["invalidated"], 1)
-        self.assertTrue(all(a["transaction_event_hash"] is None for a in stale["assertions"]))
+        self.assertTrue(all("transaction_event_hash" not in a for a in stale["assertions"]))
         original_events = {row["transaction_event_hash"] for row in parent_receipts["assertions"]}
         journal_events = {row["body"]["event_hash"] for row in f.backend.load_catalog().all("transaction")}
         self.assertTrue(original_events)
