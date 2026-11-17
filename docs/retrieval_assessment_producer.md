@@ -145,3 +145,58 @@ long-tail pages, I/O variation, interruptions and final field/ranking work
 need additional time. Reserve at least a 24-hour execution window and memory
 headroom above the observed 1.5 GiB worker working set, plus evaluator and OS
 cache. Run only after the final #19 selector tree and profile are frozen.
+
+## Full-run resource budget derivation
+
+Measure an exposed smoke from protocol creation through final ledger readback
+for N exposed documents. Retain that end-to-end wall time, each converter's
+`wall_seconds`, peak `peak_process_memory_bytes`, and the converter session
+count. Compute `projected_hours = wall_seconds_total / N * eligible_count / 3600`.
+Declare a window comprising that projection plus explicit margins for long-tail
+pages, session restarts (one session per `max_documents_per_session` eligible
+rows), interruptions, and downstream field, dense and ranking stages. Declare
+memory as the observed peak worker working set plus evaluator and OS cache
+headroom; the worker peak alone is not a host memory budget.
+
+The 2026-09-29 example used 10 documents and 66.02 seconds end to end, giving
+about 18.3 hours projected for 10,000 documents. Peak worker memory was
+1,475 MiB. The 24-hour planning window and memory headroom described above
+belong to that example. Derive the actual budget from a fresh smoke on the
+final frozen #19 tree and profile for the verified eligible count.
+
+## Aggregate public receipt schema
+
+The redacted `retrieval-assessment-aggregate-public-v1` receipt summarizes a
+completed private `ledger.json` after independent readback from the bound
+protocol, manifest, profile, row receipts and assessment map. Use
+`FULL_CORPUS` only after verifying coverage of the whole frozen manifest and
+`EXPOSED_SMOKE` for the verified exposed subset. For a migrated run, verify
+the origin protocols, imported rows and pending-conversion lineage, including
+nested imports, and bind their evidence by digest. Distinguish inherited work
+from new attempts and measurements when reporting totals.
+
+The receipt contains the following fields.
+
+- `scope`: `FULL_CORPUS` or `EXPOSED_SMOKE`; `status`.
+- `private_evidence_sha256`: protocol, ledger, assessment map, manifest and
+  profile hashes; `code_tree`: git head and method-hash digest.
+- `document_count`, `eligible_count`, `eligibility_counts`, `state_counts`,
+  and assessment status counts.
+- Converter totals: attempts, success, error and unknown/held.
+- Resource measurements: total wall seconds, median and maximum converter
+  seconds, and peak worker bytes.
+- Operational claims with verified evidence for the declared scope.
+  Assert `query_independent` from the bound selection inputs and execution
+  records. Assert `new_paid_api_calls` and `production_graph_writes` from
+  verified accounting across the run and its workers. Assert
+  `graph_admission_enabled` from the effective admission policy and execution
+  evidence. Bind the supporting private evidence by digest. For imported
+  work, verify the same claims against its origin evidence and distinguish
+  its accounting from activity new to the resumed run. Omit unsupported
+  claims or mark them unverified, including when an origin has missing
+  evidence. A completed ledger alone does not establish these values.
+
+Never include sample IDs, source paths, converter text, native text, proposals,
+labels, per-paper rankings or private model paths. This schema is a
+documentation contract: no producer for it exists yet and no full-corpus
+instance has been published.

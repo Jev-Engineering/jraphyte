@@ -16,3 +16,8 @@ CLI shape (paths and SHA placeholders require exact external pins after final co
 ```
 
 The `run` command is illustrative and remains held until exact external approval and original-window resource safeguards. The source gate must be genuinely remeasured after the final source repair and bind its complete method/image closures, original 91 IDs and source-fidelity criterion.
+
+Offline tests cover resume refusals for a changed plan, changed origin,
+code/runtime drift, a gate that is not PASS or has a different method closure,
+owner-lock collision, and changed native inputs. These are synthetic-fixture
+tests, not a recovered run.

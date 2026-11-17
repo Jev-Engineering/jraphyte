@@ -1,6 +1,9 @@
 """Corpus assessment producer guards; no model download or conversion in tests."""
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -227,6 +230,163 @@ class AssessmentProducerTests(unittest.TestCase):
                 patch("src.parallel_source_v4.extraction.validate_cached_input",
                       side_effect=AssertionError("success schema was applied to error partial")):
             producer._verify_receipt(self.root, row, receipt, self.output, None, protocol)
+
+class OfflineProducerGuards(unittest.TestCase):
+    setUp = AssessmentProducerTests.setUp
+    manifest_rows = AssessmentProducerTests.manifest_rows
+    freeze = AssessmentProducerTests.freeze
+    def assets(self):
+        row = {'sample_id': 'f001', 'physical_page': 1, 'source_root_id': 'data_root'}
+        for key, filename in zip(('source', 'page', 'image', 'native'),
+                                 ('source.pdf', 'page.pdf', 'image.png', 'native.json')):
+            path = self.root / filename
+            path.write_bytes(key.encode())
+            row[key+'_relative'] = filename
+            row[key+'_sha256'] = producer.digest(path)
+        return row
+
+    def setup_attempt(self, native_document=False):
+        row = self.manifest_rows(['f001'])[0]
+        _, protocol = self.freeze()
+        runtime = {'python': '3.12', 'executable_sha256': '0'*64, 'packages': {}}
+        self.profile.write_text(json.dumps({'runtime': runtime}), encoding='utf-8')
+        folder = self.output/'attempts/f001'
+        intent = dict(sample_id='f001', protocol_sha256=producer.digest(self.output/'protocol.json'),
+                      **{k+'_sha256': row[k+'_sha256'] for k in ('source','page','image','native')})
+        write_once(folder/'intent.json', intent)
+        start = self.output/'sessions/one/start.json'
+        start_sha = write_once(start, dict(schema_version='retrieval-docling-session-start-v1',
+            protocol_sha256=intent['protocol_sha256'], converter_profile_sha256=protocol['profile_sha256'],
+            worker_pid=123, runtime=runtime, code_sha256=protocol['code_sha256'],
+            network_guard='nonlocal_connect_denied'))
+        document_sha = write_once(folder/'document.json', [{'text': 'native'}] if native_document
+                                  else {'texts': [], 'body': {'children': []}})
+        conversion = dict(status='success', docling_status='ConversionStatus.SUCCESS',
+            document_sha256=document_sha, worker_pid=123, runtime=runtime,
+            session_start={'relative': start.relative_to(self.root).as_posix(), 'sha256': start_sha},
+            wall_seconds=.5, peak_process_memory_bytes=1000, error_class=None, model_called=True)
+        conversion_sha = write_once(folder/'conversion.json', conversion)
+        receipt = dict(sample_id='f001', protocol_sha256=intent['protocol_sha256'],
+            source_hashes={k: row[k+'_sha256'] for k in ('source','page','image','native')},
+            eligibility='eligible', state='complete', document_sha256=document_sha, wall_seconds=.5,
+            conversion_relative=(folder/'conversion.json').relative_to(self.root).as_posix(),
+            conversion_sha256=conversion_sha)
+        return row, protocol, runtime, folder, conversion, receipt
+
+    def test_row_hash_mismatch(self):
+        row = self.assets()
+        for key in ('source', 'page', 'image', 'native'):
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'field_source_hash_mismatch:'+key):
+                producer._verified_row(self.root, dict(row, **{key+'_sha256': 'f'*64}), None)
+
+    def test_interrupted_intent_hash_mismatch(self):
+        row, protocol, runtime, folder, _, _ = self.setup_attempt()
+        intent = json.loads((folder/'intent.json').read_text())
+        session = Mock()
+        for key in ('source','page','image','native'):
+            (folder/'intent.json').write_text(json.dumps(dict(intent, **{key+'_sha256':'f'*64})))
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'interrupted_attempt_identity_mismatch'):
+                producer._attempt(self.root, self.output, row, {'runtime':runtime}, protocol,
+                                  None, [], [100,100], session)
+        session.convert.assert_not_called()
+
+    def test_receipt_source_hash_mismatch(self):
+        row, protocol, _, _, _, receipt = self.setup_attempt()
+        for key in ('source','page','image','native'):
+            changed = dict(receipt, source_hashes=dict(receipt['source_hashes'], **{key:'f'*64}))
+            with self.subTest(key=key), patch.object(producer, '_verified_row', return_value=([],[100,100],'eligible')):
+                with self.assertRaisesRegex(ValueError, 'assessment_receipt_source_mismatch'):
+                    producer._verify_receipt(self.root,row,changed,self.output,None,protocol)
+
+    def test_source_changed_during_conversion(self):
+        row, protocol, runtime, folder, conversion, _ = self.setup_attempt()
+        import shutil
+        shutil.rmtree(folder)
+        def convert(sid, path):
+            conversion['document_sha256'] = write_once(path.parent/'document.json', {'texts':[]})
+            write_once(path, conversion)
+            return 0
+        session = Mock()
+        session.convert.side_effect = convert
+        with patch.object(producer, '_check_code'), patch.object(producer, '_verified_row',
+                return_value=([{'text':'changed'}],[100,100],'eligible')):
+            with self.assertRaisesRegex(ValueError, 'source_changed_during_conversion'):
+                producer._attempt(self.root,self.output,row,{'runtime':runtime},protocol,None,[],[100,100],session)
+        session.convert.assert_called_once()
+        self.assertFalse((self.output/'assessments').exists())
+
+    def test_worker_changed_assets(self):
+        row = self.assets()
+        write_once(self.manifest, {'pdfs':[row], 'stage':'retrieval_source_first_no_predictions',
+                                   'query_independent':True})
+        _, protocol = self.freeze()
+        converter = Mock()
+        converter.convert.side_effect = AssertionError('converter reached')
+        for key in ('source','page','image','native'):
+            path = self.root/row[key+'_relative']
+            original = path.read_bytes()
+            path.write_bytes(b'changed')
+            with self.subTest(key=key), patch.object(producer,'method_hashes',return_value=protocol['code_sha256']):
+                with self.assertRaisesRegex(ValueError, 'worker_source_asset_changed:'+key):
+                    producer._convert_one(self.root,self.output,'f001',converter=converter)
+            path.write_bytes(original)
+        converter.convert.assert_not_called()
+
+    def test_native_document_rejected_at_readback(self):
+        from src.parallel_source_v4.extraction import InputGateError
+        self.assertTrue(issubclass(InputGateError, ValueError))
+        row, protocol, _, _, _, receipt = self.setup_attempt(native_document=True)
+        with patch.object(producer,'_verified_row',return_value=([],[100,100],'eligible')):
+            with self.assertRaisesRegex(ValueError, 'invalid_cached_json_shape'):
+                producer._verify_receipt(self.root,row,receipt,self.output,None,protocol)
+
+    def test_native_conversion_path_rejected(self):
+        # A receipt that names the native line list as its converter receipt fails
+        # closed. Known gap: the current verifier raises an uncoded AttributeError
+        # (list has no .get) rather than a coded ValueError. Changing the verifier
+        # changes the frozen method closure, so it is left for a versioned change.
+        row, protocol, _, _, _, receipt = self.setup_attempt()
+        path = self.root/'native.json'
+        receipt.update(conversion_relative='native.json', conversion_sha256=write_once(path, [{'text':'native'}]))
+        with patch.object(producer,'_verified_row',return_value=([],[100,100],'eligible')), \
+                patch.object(producer,'verify_source_bound_assessment',
+                             side_effect=AssertionError('native receipt reached assessment verification')):
+            with self.assertRaisesRegex(AttributeError, r"^'list' object has no attribute 'get'$") as refused:
+                producer._verify_receipt(self.root,row,receipt,self.output,None,protocol)
+        self.assertEqual(refused.exception.obj, [{'text':'native'}])
+
+    def test_model_not_called_rejected(self):
+        row, protocol, runtime, folder, conversion, _ = self.setup_attempt()
+        conversion['model_called'] = False
+        (folder/'conversion.json').write_text(json.dumps(conversion))
+        session = Mock()
+        with self.assertRaisesRegex(ValueError, 'invalid_converter_result_status'):
+            producer._attempt(self.root,self.output,row,{'runtime':runtime},protocol,None,[],[100,100],session)
+        session.convert.assert_not_called()
+
+    def test_owner_collision_and_reacquisition(self):
+        lock = self.root/'.run.owner.lock'
+        with producer._owner(lock):
+            with self.assertRaisesRegex(ValueError,'assessment_producer_already_owned'):
+                with producer._owner(lock):
+                    self.fail('acquired twice')
+            code = ('from pathlib import Path\n'
+                    'import sys\n'
+                    'from src.parallel_source_v4 import assessment_producer as p\n'
+                    'try:\n'
+                    '    with p._owner(Path(sys.argv[1])):\n'
+                    '        print("acquired")\n'
+                    'except ValueError as exc:\n'
+                    '    print(exc)\n')
+            child = subprocess.run([sys.executable,'-c',code,str(lock)],
+                cwd=Path(__file__).resolve().parents[1], capture_output=True,text=True,check=True)
+            self.assertEqual(child.stdout.strip(),'assessment_producer_already_owned')
+            with patch.object(producer,'_freeze',side_effect=AssertionError('freeze reached')) as freeze:
+                with self.assertRaisesRegex(ValueError,'assessment_producer_already_owned'):
+                    producer._run(self.root,self.manifest,self.profile,self.output,None)
+                freeze.assert_not_called()
+        with producer._owner(lock):
+            pass
 
 
 if __name__ == "__main__":
