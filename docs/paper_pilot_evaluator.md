@@ -18,7 +18,10 @@ public, reproducible way to count its rows.
 1. Inside the private application, reopen the run as usual (same config, trust,
    callbacks and backend) and call `export_receipts(pilot)`. The exporter reads
    the verified checkpoint, the backend journal and the **current** source and
-   assertion status. It emits identifiers, hashes, page numbers, review kinds and
+   assertion status. It verifies signed source and answer reviews against the
+   recorded inputs. For a current answer, it reconstructs the draft from its
+   authenticated stored response and verifies the exact signed support
+   judgments. It emits identifiers, hashes, page numbers, review kinds and
    states. Within the private receipt, application-assigned references use
    SHA-256 of their exact UTF-8 identifiers. Proofs require current edge, source,
    resolution and observation access. The receipt records a withheld outcome

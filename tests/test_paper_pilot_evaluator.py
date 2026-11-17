@@ -15,6 +15,7 @@ from trace_gc.paper_pilot_evaluator import (
     PROTOCOL_VERSION, RECEIPTS_VERSION, _evaluate_sections, evaluate, export_receipts, question_sha256,
 )
 from trace_gc.pdf_image_evidence import REPRESENTATION as IMAGE
+from trace_gc.trust import IssuerPolicy, Signer
 from tests import test_paper_pilot as base
 
 H = "a" * 64
@@ -274,8 +275,9 @@ class PilotExportTests(unittest.TestCase):
     def tearDown(self):
         self.f.tearDown()
 
-    def supported(self):
+    def supported(self, reviewer_signer=None):
         f = self.f
+        reviewer_signer = reviewer_signer or f.signer
         _, _, reviewed = f.answer_request(grant_decisions=True)
         response = json.dumps({"abstain": False, "claims": [{"text": "The authored result is 17 units.",
                                "evidence_ids": [reviewed["evidence_id"]]}]}).encode()
@@ -285,7 +287,7 @@ class PilotExportTests(unittest.TestCase):
         payload = f.pilot.answer_review_payload("answer", reviewer="authored-test-reviewer", reviewer_kind="assistant",
                                                 reviewed_at=at, claim_support=[True])
         f.pilot.review_answer("answer-review", response_id="answer",
-                              receipt=f.signer.issue("SOURCE_STATUS", payload, issued_at=at))
+                              receipt=reviewer_signer.issue("SOURCE_STATUS", payload, issued_at=at))
         return reviewed
 
     def frozen(self):
@@ -324,6 +326,31 @@ class PilotExportTests(unittest.TestCase):
                        text_digest("The authored result is 17 units.")):
             self.assertNotIn(secret, json.dumps(denied_receipts))
             self.assertNotIn(secret, json.dumps(denied))
+
+    def test_export_requires_durable_review_to_match_signed_judgments(self):
+        self.supported()
+        review = self.f.pilot.requests["answer-review"]["result"]["review"]
+        original = review["claim_support"]
+        try:
+            review["claim_support"] = []
+            with self.assertRaisesRegex(ContractError, "durable answer review differs"):
+                export_receipts(self.f.pilot)
+        finally:
+            review["claim_support"] = original
+        self.assertEqual(export_receipts(self.f.pilot)["answers"][0]["claims"][0]["support"], True)
+
+    def test_export_applies_current_answer_reviewer_revocation(self):
+        signer = Signer.ephemeral("authored-answer-review-only")
+        self.f.trust.enroll(signer.issuer, IssuerPolicy(signer.public_key(), "authored-test-reviewer",
+            frozenset({"SOURCE_STATUS"}), frozenset({"PAPER_ANSWER_REVIEW"}),
+            frozenset({"pilot-test"}), frozenset({"SYNTHETIC"}), can_review=True))
+        self.supported(signer)
+        stamp = self.f.pilot._stamp()
+        self.assertEqual(evaluate(self.frozen(), export_receipts(self.f.pilot), [])["verdict"], "PASS")
+        self.f.trust.revoke(signer.issuer)
+        self.assertEqual(self.f.pilot._stamp(), stamp)
+        with self.assertRaisesRegex(ContractError, "UNTRUSTED_ISSUER"):
+            export_receipts(self.f.pilot)
 
     def test_edge_grant_removal_holds_citation_even_with_readable_source(self):
         self.supported()

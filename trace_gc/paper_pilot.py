@@ -954,19 +954,28 @@ class PaperPilot:
         return self._payload("REVIEW_ANSWER", draft_sha256=draft["sha256"], reviewer=reviewer,
             reviewer_kind=reviewer_kind, reviewed_at=reviewed_at, claim_support=claim_support)
 
-    @boundary
-    def review_answer(self, id_, *, response_id, receipt):
-        from .paper_answer import review_answer
+    def _verified_answer_response(self, response_id):
         result = self._result(response_id, "ANSWER_RESPONSE")
         imported = self.requests[response_id]["args"]
-        self._execution(result["prepared_id"], "ANSWER", self._read_blob(imported["response_blob"]), imported["execution_receipt"])
+        response = self._read_blob(imported["response_blob"])
+        self._execution(result["prepared_id"], "ANSWER", response, imported["execution_receipt"])
         require(result["prepared_id"] == imported["prepared_id"] and
                 result["draft"]["response_sha256"] == imported["response_blob"],
                 "PILOT_EXECUTION", "draft differs from authenticated external answer")
+        return result, response
+
+    def _verified_answer_review_fields(self, response_id, receipt):
         p = receipt["payload"]
         fields = {k: p[k] for k in ("reviewer", "reviewer_kind", "reviewed_at", "claim_support")}
         self._trusted(receipt, "SOURCE_STATUS", "PAPER_ANSWER_REVIEW",
                       self.answer_review_payload(response_id, **fields), review=True)
+        return fields
+
+    @boundary
+    def review_answer(self, id_, *, response_id, receipt):
+        from .paper_answer import review_answer
+        result, _ = self._verified_answer_response(response_id)
+        fields = self._verified_answer_review_fields(response_id, receipt)
         args = self.requests[result["prepared_id"]]["args"]
         self._answer_args(**args)
         def review(_):

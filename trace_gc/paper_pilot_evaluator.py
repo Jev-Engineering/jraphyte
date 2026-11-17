@@ -8,7 +8,8 @@ reports PASS/FAIL/HOLD/NOT_RUN/INVALIDATED rows with explicit denominators.
 
 The report is unsigned aggregate arithmetic. It does not authenticate the
 receipt file, judge entailment, or qualify issue #23; claim support comes only
-from the attributed answer reviews already recorded by the pilot. A SYNTHETIC
+from signed attributed answer reviews that the exporter verifies against the
+reconstructed current answer and its authenticated model response. A SYNTHETIC
 run is labelled mechanics-only regardless of its verdict.
 """
 from __future__ import annotations
@@ -18,8 +19,9 @@ import re
 
 from .canonical import bytes_digest, digest, loads, text_digest
 from .errors import boundary, require
-from .paper_ingestion import REPRESENTATION as NATIVE
-from .pdf_image_evidence import REPRESENTATION as IMAGE
+from .paper_answer import draft_answer, review_answer
+from .paper_ingestion import CHECKS as NATIVE_CHECKS, REPRESENTATION as NATIVE
+from .pdf_image_evidence import CHECKS as IMAGE_CHECKS, REPRESENTATION as IMAGE
 from .retrieval.security import AccessFilter
 
 VERSION = "paper-pilot-aggregate-evaluator-v1"
@@ -140,12 +142,25 @@ def _assertion_row(pilot, assertion_id, row, journal, acl):
             "evidence_ids": list(row["evidence_ids"]), **chain}
 
 
+def _verify_current_draft(pilot, prepared, response=None):
+    result = prepared["result"]
+    args = pilot._answer_args(**prepared["args"])
+
+    def read_response(prompt):
+        require(response is not None and bytes_digest(prompt) == result.get("request_sha256"),
+                "EVALUATOR_INPUT", "answer response is not bound to the reconstructed prompt")
+        return response
+
+    return draft_answer(pilot.catalog, pilot.backend, generate=read_response, **args)
+
+
 def _answer_rows(pilot, current_stamp, graph_version):
+    links = {"PREPARE_ANSWER": "retrieval_id", "ANSWER_RESPONSE": "prepared_id", "REVIEW_ANSWER": "response_id"}
     by_arg = {}
     for request in pilot.requests.values():
-        for field in ("retrieval_id", "prepared_id", "response_id"):
-            if field in request["args"] and request["kind"] in {"PREPARE_ANSWER", "ANSWER_RESPONSE", "REVIEW_ANSWER"}:
-                by_arg.setdefault((field, request["args"][field]), []).append(request)
+        field = links.get(request["kind"])
+        if field is not None:
+            by_arg.setdefault((field, request["args"][field]), []).append(request)
     rows = []
     for retrieval in [r for r in pilot.requests.values() if r["kind"] == "RETRIEVE"]:
         chain = {"retrieval_id": retrieval["id"], "prepare_id": None, "response_id": None, "review_id": None}
@@ -163,27 +178,93 @@ def _answer_rows(pilot, current_stamp, graph_version):
         claims, reviewer_kind = [], None
         retrieval_version = (pilot.catalog.get(retrieved["context_id"], "graphrag-answer")["graph_version"]
                              if retrieved is not None else None)
-        answer_version = retrieval_version
-        response = pilot.requests.get(chain["response_id"] or "", {}).get("result")
+        current = retrieved is not None and retrieved["stamp"] == current_stamp and retrieval_version == graph_version
+        response_request = pilot.requests.get(chain["response_id"] or "", {})
+        response = response_request.get("result")
+        prepared_request = pilot.requests.get(chain["prepare_id"] or "", {})
+        prepared = prepared_request.get("result")
+        review_request = pilot.requests.get(chain["review_id"] or "", {})
+        review = review_request.get("result")
         if response is not None:
-            require(retrieval_version == response["draft"]["graph_version"],
-                    "EVALUATOR_INPUT", "response graph version differs from retrieval")
-            review = pilot.requests.get(chain["review_id"] or "", {}).get("result")
-            support = review["review"]["claim_support"] if review else [None] * len(response["draft"]["claims"])
-            reviewer_kind = review["review"]["reviewer_kind"] if review else None
-            claims = [{"evidence_ids": list(c["evidence_ids"]), "support": s}
-                      for c, s in zip(response["draft"]["claims"], support)]
-        prepared = pilot.requests.get(chain["prepare_id"] or "", {}).get("result")
+            draft = response["draft"]
+            require(retrieval_version == draft["graph_version"], "EVALUATOR_INPUT", "response graph version differs")
+            support = [None] * len(draft["claims"])
+            if review is not None:
+                fields = pilot._verified_answer_review_fields(response_request["id"], review_request["args"]["receipt"])
+                body = {key: value for key, value in draft.items() if key != "sha256"}
+                require(draft["sha256"] == digest(body) and len(fields["claim_support"]) == len(draft["claims"]) and
+                        all(type(value) is bool for value in fields["claim_support"]),
+                        "EVALUATOR_INPUT", "answer draft or signed judgment count differs")
+                reviewer_kind = fields["reviewer_kind"]
+            if current:
+                authenticated, response_bytes = pilot._verified_answer_response(response_request["id"])
+                expected = _verify_current_draft(pilot, prepared_request, response_bytes)
+                expected_state = "WAIT_ANSWER_REVIEW" if expected["review_required"] else expected["status"]
+                require(authenticated["prepared_id"] == prepared_request["id"] and
+                        digest(draft) == digest(expected) and response["state"] == expected_state,
+                        "EVALUATOR_INPUT", "durable answer differs from authenticated response")
+                if review is not None:
+                    reviewed = review_answer(pilot.catalog, pilot.backend, draft=expected,
+                        expected_draft_sha256=expected["sha256"], current_access=pilot._access(), **fields)
+                    require(digest(review["review"]) == digest(reviewed) and review["state"] == reviewed["status"],
+                            "EVALUATOR_INPUT", "durable answer review differs from signed judgments")
+                    support, reviewer_kind = reviewed["claim_support"], reviewed["reviewer_kind"]
+            claims = [{"evidence_ids": list(claim["evidence_ids"]), "support": supported}
+                      for claim, supported in zip(draft["claims"], support, strict=True)]
         if prepared is not None and "draft" in prepared:
             require(retrieval_version == prepared["draft"]["graph_version"],
                     "EVALUATOR_INPUT", "prepared graph version differs from retrieval")
+            if current:
+                expected = _verify_current_draft(pilot, prepared_request)
+                require(expected["status"] == "ABSTAIN_NO_AUTHORIZED_EVIDENCE" and
+                        digest(prepared["draft"]) == digest(expected) and prepared["state"] == expected["status"],
+                        "EVALUATOR_INPUT", "durable abstention differs from current retrieval")
+        if current:
+            status = review or response or prepared
+            if status is not None and state in {*_ABSTAIN, "SUPPORTED", "REJECTED_UNSUPPORTED_CLAIM"}:
+                require((review is not None and response is not None) or
+                        (state == "ABSTAIN_MODEL" and response is not None) or
+                        (state == "ABSTAIN_NO_AUTHORIZED_EVIDENCE" and prepared is not None and "draft" in prepared),
+                        "EVALUATOR_INPUT", "answer state has no verified durable stage")
         references = {f"{field}_sha256": text_digest(ref) if ref is not None else None for field, ref in chain.items()}
         rows.append({**references, "question_sha256": text_digest(retrieval["args"]["request"]["text"]), "state": state,
                      "abstention_reason": _ABSTAIN.get(state), "claims": claims, "reviewer_kind": reviewer_kind,
-                     "answer_graph_version": answer_version,
+                     "answer_graph_version": retrieval_version,
                      "retrieval_context_current": retrieved is not None and retrieved["stamp"] == current_stamp,
-                     "graph_version_current": answer_version is not None and answer_version == graph_version})
+                     "graph_version_current": retrieval_version is not None and retrieval_version == graph_version})
     return rows
+
+
+def _source_review_row(pilot, request, statuses, access, acl):
+    args, result = request["args"], request["result"]
+    receipt = args["receipt"]
+    payload = receipt["payload"]
+    fields = {key: payload[key] for key in ("reviewer", "reviewer_kind", "reviewed_at", "checks")}
+    native = request["kind"] == "REVIEW_SOURCE"
+    expected_payload = pilot.source_review_payload if native else pilot.image_review_payload
+    pilot._trusted(receipt, "SOURCE_STATUS", "PAPER_SOURCE_REVIEW",
+                   expected_payload(args["prepared_id"], **fields), review=True)
+    require(set(payload["checks"]) == set(NATIVE_CHECKS if native else IMAGE_CHECKS) and
+            all(value is True for value in payload["checks"].values()),
+            "EVALUATOR_INPUT", "completed source review lacks signed passing checks")
+    snapshot = result["source_id"]
+    source = pilot.catalog.get(snapshot, "source")
+    status = statuses.get(snapshot)
+    readable = (acl.allows("source", snapshot) and source["security_scope"] == access["tenant"]
+                and status is not None and status["permission"] == "READ" and status["active"]
+                and not status["tombstone"])
+    if readable:
+        pilot._source(snapshot, admitted=False)
+        if not native:
+            reviewed = result["reviewed_candidate"]["review"]
+            require(all(digest(reviewed[key]) == digest(value) for key, value in fields.items()) and
+                    pilot.catalog.get(result["evidence_id"], "evidence")["source_snapshot_id"] == snapshot,
+                    "EVALUATOR_INPUT", "image review or evidence differs from signed source review")
+    return {"request_id_sha256": text_digest(request["id"]) if readable else None,
+            "source_snapshot_id": snapshot if readable else None,
+            "source_id_sha256": text_digest(source["source_id"]) if readable else None,
+            "representation": source["representation"] if readable else None,
+            "reviewer_kind": payload["reviewer_kind"], "all_checks_passed": True, "independent_review": False}
 
 
 @boundary
@@ -198,22 +279,8 @@ def export_receipts(pilot) -> dict:
     journal = {row["hash"]: row["transaction_receipt"]
                for (body,) in pilot.backend.db.execute("SELECT body FROM trace_journal")
                for row in (loads(body),)}
-    reviews = []
-    for request in _completed(pilot, "REVIEW_SOURCE") + _completed(pilot, "REVIEW_SOURCE_IMAGE"):
-        payload = request["args"]["receipt"]["payload"]
-        source = pilot.catalog.get(request["result"]["source_id"], "source")
-        snapshot = request["result"]["source_id"]
-        status = statuses.get(snapshot)
-        readable = (acl.allows("source", snapshot) and source["security_scope"] == access["tenant"]
-                    and status is not None and status["permission"] == "READ" and status["active"]
-                    and not status["tombstone"])
-        reviews.append({"request_id_sha256": text_digest(request["id"]) if readable else None,
-                        "source_snapshot_id": snapshot if readable else None,
-                        "source_id_sha256": text_digest(source["source_id"]) if readable else None,
-                        "representation": source["representation"] if readable else None,
-                        "reviewer_kind": payload["reviewer_kind"],
-                        "all_checks_passed": all(v is True for v in payload["checks"].values()),
-                        "independent_review": False})
+    reviews = [_source_review_row(pilot, request, statuses, access, acl)
+               for request in _completed(pilot, "REVIEW_SOURCE") + _completed(pilot, "REVIEW_SOURCE_IMAGE")]
     answers = _answer_rows(pilot, current_stamp, state["graph_version"])
     graph_assertions = state["assertions"]
     assertions = [_assertion_row(pilot, ref, graph_assertions[ref], journal, acl)
