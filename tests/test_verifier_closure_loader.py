@@ -514,14 +514,14 @@ class ScanErrorMappingTests(unittest.TestCase):
     def test_unreadable_file_becomes_hold_record(self):
         release = Release(self)
         contract = release.contract()
-        real = Path.read_bytes
+        real = loader._source_bytes
 
-        def denied(path):
-            if path.name == "helper.py":
+        def denied(root, relative):
+            if Path(relative).name == "helper.py":
                 raise PermissionError("synthetic")
-            return real(path)
+            return real(root, relative)
 
-        with mock.patch.object(Path, "read_bytes", denied):
+        with mock.patch.object(loader, "_source_bytes", denied):
             gate = self.gate(release, contract)
         self.assertEqual((gate["status"], gate["rejected"]), ("HOLD", "closure_unreadable"))
 

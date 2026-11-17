@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+from contextlib import ExitStack
 import hashlib
 import importlib.machinery
 import importlib.util
@@ -141,6 +142,33 @@ def _no_symlink(root: Path, relative: str) -> None:
             _fail("symlink_in_closure", relative)
 
 
+def _source_bytes(root: Path, relative: str) -> bytes:
+    path = root / relative
+    _no_symlink(root, relative)
+    read_flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
+    with ExitStack() as stack:
+        if os.open in os.supports_dir_fd and hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY"):
+            directory_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY
+            directory = os.open(root.anchor, directory_flags)
+            stack.callback(os.close, directory)
+            for part in (*root.parts[1:], *Path(relative).parts[:-1]):
+                directory = os.open(part, directory_flags, dir_fd=directory)
+                stack.callback(os.close, directory)
+            handle = os.open(path.name, read_flags | os.O_NOFOLLOW, dir_fd=directory)
+        else:
+            handle = os.open(path, read_flags)
+        with os.fdopen(handle, "rb") as source:
+            opened = os.fstat(source.fileno())
+            require_regular = stat.S_ISREG(opened.st_mode)
+            if not require_regular or not os.path.samestat(opened, path.lstat()):
+                _fail("closure_file_identity_changed")
+            contents = source.read()
+        _no_symlink(root, relative)
+        if not os.path.samestat(opened, path.lstat()):
+            _fail("closure_file_identity_changed")
+    return contents
+
+
 def _top_level_bindings(tree) -> set:
     names = set()
     for node in tree.body:
@@ -216,11 +244,10 @@ def _scan_closure(root: Path, entry: str, *, approved_external=(), approved_dyna
         if found is None:
             _fail("missing_dependency", module)
         relative, is_package = found
-        _no_symlink(root, relative)
         modules[module] = relative
         parts = module.split(".")
         pending.extend(".".join(parts[:i]) for i in range(1, len(parts)))
-        payloads[relative] = (root / relative).read_bytes()
+        payloads[relative] = _source_bytes(root, relative)
         tree = ast.parse(payloads[relative].decode("utf-8"), filename=relative)
         bindings[module] = _top_level_bindings(tree)
         package = module if is_package else module.rpartition(".")[0]
@@ -441,6 +468,8 @@ class _PrivateImporter:
             # already bound that name. Retain the full conservative pin set.
             if item not in module.__dict__ and submodule in self.modules:
                 self.module(submodule)
+            if item not in module.__dict__:
+                self.reject_import(VerifierClosureError("local_import_binding_missing"))
         return module if fromlist else self.loaded[self.local_top]
 
 
