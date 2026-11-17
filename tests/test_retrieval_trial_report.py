@@ -26,17 +26,22 @@ class TrialReportTests(unittest.TestCase):
             rerank_seconds=3, wall_seconds=6, process_cpu_seconds=5,
             rankings={'SECRETQUERY0': ['SECRETDOC0']}, private_path='secret/model/path')
         self.receipt = dict(status='COMPLETE', protocol_sha256='a'*64, document_count=6,
-            query_count=4, full_10000_by_60=False, ablations={'without_dense': 'MEASURED'},
+            query_count=4, full_10000_by_60=False, ablations={'without_dense': 'MEASURED',
+                'without_page_channel': 'NOT_RUN', 'historical_field_policy': 'NOT_RUN'},
             relevance_judgments='NOT_PERFORMED', memory={'peak_rss_bytes': 123, 'secret': 'SECRETDOC', 'scope': 'SECRETDOC',
                 'child_processes_included': False},
             new_paid_api_calls=0, production_graph_writes=0,
             target_permutation={'status': 'PASS', 'private': 'SECRETQUERY'},
-            all_arm_target_permutations={'primary': {'status': 'PASS'}}, result_file_sha256={})
-        for name in ('primary', 'target_permutation', 'without_dense'):
+            all_arm_target_permutations={arm: {'status': 'PASS'} for arm in ('primary', 'without_dense')},
+            result_file_sha256={})
+        for name in ('primary', 'target_permutation', 'without_dense', 'without_dense_target_permutation'):
             result = json.loads(json.dumps(self.result))
-            if name == 'without_dense':
+            if name.startswith('without_dense'):
                 result['candidate_stage_metrics']['specter2'] = {'status': 'NOT_RUN'}
             self.write_arm(name, result)
+        raw = b'{"queries":[]}'
+        (self.root/'queries-permuted.json').write_bytes(raw)
+        self.receipt['result_file_sha256']['queries-permuted.json'] = hashlib.sha256(raw).hexdigest()
         self.write_receipt()
 
     def write_receipt(self):
@@ -81,6 +86,56 @@ class TrialReportTests(unittest.TestCase):
                 self.write_receipt()
                 with self.assertRaisesRegex(ValueError, 'trial_metrics_readback_mismatch:primary'):
                     aggregate(self.root)
+
+    def test_incomplete_manifest_and_false_full_dimensions(self):
+        original = self.receipt['result_file_sha256'].copy()
+        for manifest in ({}, {key: value for key, value in original.items()
+                              if key != 'without_dense_target_permutation.json'}):
+            with self.subTest(manifest=manifest):
+                self.receipt['result_file_sha256'] = manifest
+                self.write_receipt()
+                with self.assertRaisesRegex(ValueError, 'trial_result_manifest_incomplete'):
+                    aggregate(self.root)
+        self.receipt['result_file_sha256'] = original
+        self.receipt['full_10000_by_60'] = True
+        self.write_receipt()
+        with self.assertRaisesRegex(ValueError, 'trial_receipt_invalid_counts'):
+            aggregate(self.root)
+
+    def test_rank_pool_and_candidate_stage_contradictions(self):
+        for mutate in (
+            lambda result: result['details'][0].update(candidate_present=False),
+            lambda result: result['details'][-1].update(candidate_present=True),
+            lambda result: result['candidate_stage_metrics']['union'].update(status='NOT_RUN'),
+            lambda result: result['candidate_stage_metrics']['bm25_page'].update(hits=2.5, recall=.625),
+        ):
+            with self.subTest(mutate=mutate):
+                value = json.loads(json.dumps(self.result))
+                mutate(value)
+                self.write_arm('primary', value)
+                self.write_receipt()
+                with self.assertRaisesRegex(ValueError, 'trial_metrics_readback_mismatch:primary'):
+                    aggregate(self.root)
+
+    def test_symlink_and_private_filename_errors_are_sanitized(self):
+        private = self.root/'SYNTHETIC_PRIVATE_FILENAME.json'
+        primary = self.root/'primary.json'
+        primary.rename(private)
+        primary.symlink_to(private)
+        with self.assertRaisesRegex(ValueError, '^trial_result_hash_mismatch:primary.json$'):
+            aggregate(self.root)
+        primary.unlink()
+        private.rename(primary)
+        self.receipt['result_file_sha256'][private.name] = 'a'*64
+        self.write_receipt()
+        with self.assertRaisesRegex(ValueError, '^trial_result_hash_mismatch$'):
+            aggregate(self.root)
+        command = [sys.executable, '-m', 'src.retrieval_trial_report', '--trial-dir',
+                   str(self.root), '--output', str(self.root/'report.json')]
+        result = subprocess.run(command, cwd=Path(__file__).resolve().parents[1], capture_output=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr, b'trial_result_hash_mismatch\n')
+        self.assertFalse((self.root/'report.json').exists())
 
     def test_blocked_receipt(self):
         self.receipt['status'] = 'BLOCKED'

@@ -256,8 +256,10 @@ only allowlisted aggregate measurements, hashes and fixed statuses; permutation
 arms contribute statuses, not quality scores. Private IDs, text, paths and
 rankings are excluded.
 
-The reporter refuses incomplete receipts, missing or hash-mismatched listed
-results, inconsistent metric arithmetic or union hits, and an existing output
-file. It certifies arithmetic consistency, not input provenance, and always
-leaves `issue_acceptance_complete` false. It is ready to run once the real
-corpus trial exists; no real-run output exists yet.
+The reporter requires the primary results and every declared ablation with its
+target-permutation results. It checks the receipt dimensions, every listed
+file's hash, and the consistency of candidate-pool membership, ranks and
+channel metrics. Receipt and result files must be regular files. Input errors
+use fixed codes and may identify an arm by its predefined name. The report
+certifies arithmetic consistency and always sets `issue_acceptance_complete`
+to false. It is ready to run once the real corpus trial exists.
