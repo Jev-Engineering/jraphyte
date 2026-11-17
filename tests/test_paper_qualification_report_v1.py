@@ -292,6 +292,20 @@ class AggregateTests(unittest.TestCase):
                 write_report(root, "new.json", bare)
             self.assertFalse((root/"new.json").exists())
 
+    def test_public_summary_withholds_nested_case_identifiers_and_unapproved_reasons(self):
+        value = evaluation()
+        selected = {"rejected_partial_or_absent_accepts": ["authored_private_case_id"]}
+        value.update(primary=selected, challenge={"image_only": selected},
+                     measured_arms={"test_method": {"primary": selected, "challenge": {"image_only": selected}}},
+                     reason="authored_private_reason_token")
+        summary = _public_summary(value, "a"*64)
+        self.assertNotIn("authored_private", json.dumps(summary))
+        for row in (summary["primary"], summary["challenge"]["image_only"],
+                    summary["measured_arms"]["test_method"]["primary"],
+                    summary["measured_arms"]["test_method"]["challenge"]["image_only"]):
+            self.assertEqual(row, {"rejected_partial_or_absent_accepts_count": 1})
+        self.assertEqual(summary["reason"], "unrecognized_reason_redacted")
+
     def test_report_rejects_data_root_containing_checkout(self):
         with self.assertRaisesRegex(EvidenceError, "private_test_data_must_be_outside_repository"):
             write_report(REPO.parent, f"{REPO.name}/authored-report.json", {})
@@ -300,9 +314,12 @@ class AggregateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             ev = published(root, early_block(), "pub")
-            with self.assertRaisesRegex(EvidenceError, "publication_invalidated"):
-                write_report(root, "pub/publication-invalidated.json", ev)
+            for reserved in ("pub/publication-invalidated.json", "pub/publication-invalidated.json/aggregate.json",
+                             "different/PUBLICATION-INVALIDATED.JSON/aggregate.json"):
+                with self.assertRaisesRegex(EvidenceError, "publication_invalidated"):
+                    write_report(root, reserved, ev)
             self.assertFalse((root / "pub" / "publication-invalidated.json").exists())
+            self.assertFalse((root / "different").exists())
             def public_summary_changed(*args, **kwargs):
                 (root / "pub" / "public-summary.json").write_text("{}")
             with patch("src.paper_qualification_report_v1.verify_published", side_effect=public_summary_changed):
@@ -346,7 +363,9 @@ class AggregateTests(unittest.TestCase):
             body = json.loads((root/descriptor["relative"]).read_bytes())
             original = Path.read_bytes
             def guarded(path):
-                self.assertIn(path.name, ("bundle.json", "current.json", "unrelated.json"))
+                self.assertIn(path.name, ("bundle.json", "current.json", "unrelated.json", "protocol.json",
+                                          "evaluator-clarification.json", "historical.json", "recent.json",
+                                          "malformed-frame.json"))
                 return original(path)
             with patch("src.paper_qualification_report_v1.runtime_receipt", return_value={}), \
                     patch("src.paper_qualification_report_v1.evaluator_identity", return_value={}), \
@@ -369,7 +388,19 @@ class AggregateTests(unittest.TestCase):
                 args.preregistration_sha256 = prereg["sha256"]
                 (root/prereg["relative"]).write_text("{}")
                 self.assertFalse(preflight(args)["checks"]["preregistration"])
+                frozen_protocol_file = root/"prereg/protocol.json"
+                frozen_protocol = frozen_protocol_file.read_bytes()
+                malformed_protocol = json.loads(frozen_protocol)
+                malformed_protocol["seed"] = "changed-authored-seed"
+                invalid_protocol = save(root, "prereg/protocol.json", malformed_protocol)
+                malformed_protocol_bytes = frozen_protocol_file.read_bytes()
+                frozen_protocol_file.write_bytes(frozen_protocol)
+                malformed_frame = save(root, "prereg/malformed-frame.json", {})
                 for alter in (
+                    lambda value: value["base_protocol_and_additive_amendments"].update(
+                        {"protocol.json": invalid_protocol["sha256"]}),
+                    lambda value: value["frames"].update(historical={"identity_projection_relative": "malformed-frame.json",
+                        "sha256": malformed_frame["sha256"]}),
                     lambda value: value.update(base_protocol_and_additive_amendments={}),
                     lambda value: value["base_protocol_and_additive_amendments"].update({"protocol.json": "bad"}),
                     lambda value: value["frames"].update(recent={}),
@@ -378,6 +409,10 @@ class AggregateTests(unittest.TestCase):
                 ):
                     invalid = deepcopy(pointer)
                     alter(invalid)
+                    if invalid["base_protocol_and_additive_amendments"].get("protocol.json") == invalid_protocol["sha256"]:
+                        frozen_protocol_file.write_bytes(malformed_protocol_bytes)
+                    else:
+                        frozen_protocol_file.write_bytes(frozen_protocol)
                     updated = save(root, prereg["relative"], invalid)
                     updated_bundle = save(root, descriptor["relative"], {**body, "preregistration": updated})
                     args.preregistration_sha256 = updated["sha256"]

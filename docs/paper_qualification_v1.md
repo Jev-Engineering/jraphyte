@@ -322,7 +322,8 @@ STUDY=validation_v3_private/qualification-UNIQUE
 1. **Read-only preflight.** Opens no selected source. It checks the data root is
    outside the repository, the bundle hash and descriptor shape, the bound
    preregistration pointer, its externally supplied hash and the required protocol
-   and frame descriptors. It also checks that the output path is fresh and has
+   and frame descriptors, numeric protocol and evaluator clarification, and
+   the frame projections' identity structure. It also checks that the output path is fresh and has
    directory ancestors, the optional PDF/image dependencies are discoverable, and the evaluator
    identity and runtime receipt compute under the runtime lock.
 
@@ -371,8 +372,8 @@ from an allowlist and contains:
 - per-arm summaries;
 - reference-status and route counts;
 - image counts;
-- per-stage calls, failures, retries, review counts and timings (null when
-  unavailable);
+- the execution receipt's recorded per-stage calls, failures, retries, review
+  counts and timings (null when unavailable);
 - spend and graph writes, both of which must be zero.
 
 Every string must belong to a fixed vocabulary, so work IDs, paths, study

@@ -9,10 +9,11 @@ import math
 from pathlib import Path
 import re
 
-from src.paper_qualification_v1 import (Artifacts, EvidenceError, METHODS, PHASES, QUOTAS,
-    REQUIRED_PREREGISTRATION_DOCUMENTS, REVIEW_POLICY, VERSION as EVALUATION_VERSION,
-    evaluator_identity, exact, read_preregistration,
-    _trust_identity, read_study_bundle, require, summarize, verify_published)
+from src.paper_qualification_v1 import (Artifacts, CLARIFICATION, EvidenceError, METHODS, PHASES,
+    PUBLIC_REASONS as REASONS, QUOTAS, REQUIRED_PREREGISTRATION_DOCUMENTS, REVIEW_POLICY,
+    VERSION as EVALUATION_VERSION, _trust_identity, evaluator_identity, exact, normalize_work_id,
+    public_reason_code as reason_code, read_preregistration, read_study_bundle, require, summarize,
+    validate_protocol, verify_published)
 from src.parallel_source_v4.common import REPO, child, data_root, write_once
 from src.parallel_source_v4.runtime import DEFAULT_RUNTIME_LOCK, runtime_receipt
 from trace_gc.cli import read_trust
@@ -24,12 +25,8 @@ CLAIM = ("Redacted aggregate only; internally attributed source-first review, no
     "first-page abstract scope only, not validation of later-page ingestion, graph publication or generated answers; "
     "synthetic or authored inputs are not empirical evidence.")
 SCOPE = "first_page_abstract_extraction_only"
-REDACTED_REASON = "unrecognized_reason_redacted"
-REASONS = {REDACTED_REASON, "missing_or_invalid_bound_study_evidence",
-    "external_review_trust_required", "artifact_bytes_changed",
-    "regression_prerequisite_changed_during_qualification", "code_or_runtime_changed_during_evaluation",
-    "execution_descriptor_required", "execution_not_bound_to_evaluation", "report_output_exists",
-    "publication_invalidated_or_not_evaluation", "publication_completion_required"}
+RESERVED_PUBLICATION_PATHS = {"evaluation.json", "public-summary.json",
+    "publication-complete.json", "publication-invalidated.json"}
 SHA = re.compile(r"[0-9a-f]{64}")
 STUDY_MODES = {"REAL_LOCAL", "AUTHORED_CONTRACT_TEST"}
 STATUSES = {"PASS", "FAIL", "BLOCKED", "AUTHORED_CONTRACT_PASS_NOT_QUALIFICATION"}
@@ -100,10 +97,6 @@ def aggregate_metrics(primary_rows, challenge_rows, strata):
 def summaries(values):
     exact(values, QUOTAS, "fixed_challenge_strata_required")
     return {name: _redacted_summary(values[name]) for name in QUOTAS}
-
-
-def reason_code(value):
-    return value if type(value) is str and value in REASONS else REDACTED_REASON
 
 
 def build_report(evaluation, *, execution=None):
@@ -211,7 +204,7 @@ def authorized_root(explicit):
 def write_report(data_root, output_relative, evaluation_descriptor, *, execution_descriptor=None,
                  expected_preregistration_sha256=None, trust=None, runtime_lock=DEFAULT_RUNTIME_LOCK):
     root = authorized_root(data_root)
-    output = child(root, output_relative)
+    output = _report_output_path(root, output_relative)
     require(not output.exists(), "report_output_exists")
     store = Artifacts(root)
     evaluation = store.json(evaluation_descriptor)
@@ -273,22 +266,43 @@ def _validate_preregistration_descriptors(store, pointer_relative, pointer):
                 "artifact_descriptor_required")
         path = child(directory, relative)
         require(path.suffix.lower() in {".json", ".jsonl", ".md", ".txt"}, "artifact_descriptor_required")
-        store.verify({"relative": path.relative_to(store.root).as_posix(), "sha256": sha256})
+        descriptor = {"relative": path.relative_to(store.root).as_posix(), "sha256": sha256}
+        store.verify(descriptor)
+        return descriptor
 
     documents = pointer.get("base_protocol_and_additive_amendments")
     require(isinstance(documents, dict) and REQUIRED_PREREGISTRATION_DOCUMENTS <= documents.keys(),
             "base_protocol_and_both_frame_amendments_required")
-    for relative, sha256 in documents.items():
-        validate(relative, sha256)
+    descriptors = {relative: validate(relative, sha256) for relative, sha256 in documents.items()}
+    validate_protocol(store.json(descriptors["protocol.json"]))
+    require(store.json(descriptors["amendment-04/evaluator-clarification.json"]) == CLARIFICATION,
+            "approved_preselection_identity_and_audit_rules_required")
     frames = pointer.get("frames")
     exact(frames, {"recent", "historical"}, "frozen_preregistration_pointer_required")
+    frame_ids = set()
     for frame in frames.values():
         require(isinstance(frame, dict), "artifact_descriptor_required")
-        validate(frame.get("identity_projection_relative"), frame.get("sha256"))
+        rows = store.json(validate(frame.get("identity_projection_relative"), frame.get("sha256")))
+        require(type(rows) is list and bool(rows), "frozen_frame_projection_required")
+        for row in rows:
+            require(type(row) is dict and type(row.get("version_id")) is str and
+                    row["version_id"] and (row.get("doi") is None or type(row["doi"]) is str),
+                    "frozen_frame_projection_required")
+            work_id = normalize_work_id(row["work_id"])
+            require(work_id not in frame_ids, "frozen_frame_projection_required")
+            frame_ids.add(work_id)
+
+
+def _report_output_path(root, relative):
+    output = child(root, relative)
+    path_components = (*Path(relative).parts, *output.relative_to(root).parts)
+    require(not any(component.casefold() in RESERVED_PUBLICATION_PATHS for component in path_components),
+            "publication_invalidated_or_not_evaluation")
+    return output
 
 
 def _fresh_output_path(root, relative):
-    output = child(root, relative)
+    output = _report_output_path(root, relative)
     if output == root or output.exists():
         return False
     for parent in output.parents:

@@ -1127,13 +1127,38 @@ def evaluate(root, bundle_descriptor, *, expected_preregistration_sha256, trust:
             "graph_writes": 0, "paid_calls": 0}
 
 
+PUBLIC_REASONS = frozenset({"unrecognized_reason_redacted", "missing_evidence",
+    "missing_or_invalid_bound_study_evidence", "external_review_trust_required", "artifact_bytes_changed",
+    "regression_prerequisite_changed_during_qualification", "code_or_runtime_changed_during_evaluation",
+    "execution_descriptor_required", "execution_not_bound_to_evaluation", "report_output_exists",
+    "publication_invalidated_or_not_evaluation", "publication_completion_required"})
+
+
+def public_reason_code(value):
+    return value if type(value) is str and value in PUBLIC_REASONS else "unrecognized_reason_redacted"
+
+
 def _public_summary(result, private_hash):
     """Deterministic redaction; the public claim is derived from the pinned result."""
     excluded = {"input_hashes", "cases", "review_audit_ids", "study_id", "invocation"}
-    public = {key: value for key, value in result.items() if key not in excluded}
-    if "measured_arms" in public:
-        public["measured_arms"] = {method: {key: value for key, value in arm.items() if key != "cases"}
-            for method, arm in public["measured_arms"].items()}
+    def redact(value):
+        if type(value) is list:
+            return [redact(item) for item in value]
+        if type(value) is not dict:
+            return value
+        summary = {}
+        for key, item in value.items():
+            if key in excluded:
+                continue
+            if key == "rejected_partial_or_absent_accepts":
+                summary["rejected_partial_or_absent_accepts_count"] = len(item)
+            elif key == "reason":
+                summary[key] = public_reason_code(item)
+            else:
+                summary[key] = redact(item)
+        return summary
+
+    public = redact(result)
     public["private_evaluation_sha256"] = private_hash
     return public
 
