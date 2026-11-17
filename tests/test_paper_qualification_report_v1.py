@@ -260,6 +260,16 @@ class AggregateTests(unittest.TestCase):
                 (root/status/"publication-invalidated.json").write_text("{}")
                 with self.assertRaisesRegex(EvidenceError, "publication_invalidated"):
                     write_report(root, "new.json", ev, **anchors)
+            current = {**value, "status": "FAIL", "qualification_pass": False}
+            ev = published(root, current, "replayed")
+            def bound_input_changed(*args, **kwargs):
+                (root / wrong_ex["relative"]).write_text("{}")
+                return build_report(*args, **kwargs)
+            with patch("src.paper_qualification_v1.evaluate", return_value=current), \
+                    patch("src.paper_qualification_report_v1.build_report", side_effect=bound_input_changed):
+                with self.assertRaisesRegex(EvidenceError, "artifact_changed_during_evaluation"):
+                    write_report(root, "changed.json", ev, **anchors)
+            self.assertFalse((root / "changed.json").exists())
             bare = save(root, "bare/evaluation.json", early_block())
             with self.assertRaisesRegex(EvidenceError, "publication_completion_required"):
                 write_report(root, "new.json", bare)

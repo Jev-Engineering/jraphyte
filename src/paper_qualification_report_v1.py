@@ -12,7 +12,7 @@ import re
 from src.paper_qualification_v1 import (Artifacts, EvidenceError, METHODS, PHASES, QUOTAS,
     REQUIRED_PREREGISTRATION_DOCUMENTS, REVIEW_POLICY, VERSION as EVALUATION_VERSION,
     evaluator_identity, exact, read_preregistration,
-    read_study_bundle, require, summarize, verify_published)
+    _trust_identity, read_study_bundle, require, summarize, verify_published)
 from src.parallel_source_v4.common import child, data_root as authorized_root, write_once
 from src.parallel_source_v4.runtime import DEFAULT_RUNTIME_LOCK, runtime_receipt
 from trace_gc.cli import read_trust
@@ -223,6 +223,7 @@ def write_report(data_root, output_relative, evaluation_descriptor, *, execution
     require(isinstance(marker, dict), "publication_completion_required")
     store.verify({"relative": (folder / "public-summary.json").relative_to(root).as_posix(),
                   "sha256": marker.get("public_summary_sha256")})
+    replay_trust = _trust_identity(trust) if trust is not None and "input_hashes" in evaluation else None
     verify_published(root, evaluation_descriptor, expected_preregistration_sha256=expected_preregistration_sha256,
         trust=trust, runtime_lock=runtime_lock, qualification_only=False)
     execution = execution_mode = None
@@ -234,12 +235,16 @@ def write_report(data_root, output_relative, evaluation_descriptor, *, execution
             and evaluation["input_hashes"].get(bound["relative"]) == bound["sha256"],
             "execution_not_bound_to_evaluation")
         execution = store.json(bound)
+        for relative, sha256 in evaluation["input_hashes"].items():
+            store.verify({"relative": relative, "sha256": sha256})
     else:
         require(execution_descriptor is None, "execution_not_bound_to_evaluation")
     report = build_report(evaluation, execution=execution, execution_mode=execution_mode)
     report["source_evaluation_sha256"] = evaluation_descriptor["sha256"]
     assert_redacted(report)
     store.recheck()
+    if replay_trust is not None:
+        require(_trust_identity(trust) == replay_trust, "review_trust_changed_during_reporting")
     require(not invalidation.exists(), "publication_invalidated_or_not_evaluation")
     return {"relative": output_relative, "sha256": write_once(output, report)}
 
