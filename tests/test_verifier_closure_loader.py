@@ -511,6 +511,10 @@ class ScanErrorMappingTests(unittest.TestCase):
                 gate = self.gate(release, contract)
                 self.assertEqual((gate["status"], gate["rejected"]), ("HOLD", code))
 
+    def test_only_assignment_targets_and_initialized_annotations_bind_values(self):
+        tree = loader.ast.parse("registry[len] = 1\nspec: int\nready: int = 2\na, *b = [0, 1]")
+        self.assertEqual(loader._top_level_bindings(tree), {"ready", "a", "b"})
+
     def test_unreadable_file_becomes_hold_record(self):
         release = Release(self)
         contract = release.contract()

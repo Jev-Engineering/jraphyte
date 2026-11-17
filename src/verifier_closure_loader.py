@@ -175,8 +175,16 @@ def _top_level_bindings(tree) -> set:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             names.add(node.name)
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-            for target in (node.targets if isinstance(node, ast.Assign) else [node.target]):
-                names.update(n.id for n in ast.walk(target) if isinstance(n, ast.Name))
+            targets = list(node.targets) if isinstance(node, ast.Assign) else (
+                [node.target] if node.value is not None else [])
+            while targets:
+                target = targets.pop()
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+                elif isinstance(target, (ast.Tuple, ast.List)):
+                    targets.extend(target.elts)
+                elif isinstance(target, ast.Starred):
+                    targets.append(target.value)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             names.update((alias.asname or alias.name).split(".")[0] for alias in node.names)
     return names
@@ -208,6 +216,8 @@ def scan_closure(root: Path, entry: str, *, approved_external=(), approved_dynam
         raise
     except UnicodeDecodeError:
         _fail("closure_not_utf8")
+    except RecursionError:
+        _fail("closure_source_too_deep")
     except SyntaxError as exc:
         _fail("closure_syntax_error", "%s:%s" % (exc.filename, exc.lineno))
     except OSError as exc:
@@ -290,6 +300,10 @@ def _scan_closure(root: Path, entry: str, *, approved_external=(), approved_dyna
                  and n.func.id == "__import__"]
         if len(names) != len(calls):
             _fail("unapproved_dynamic_import", "__import__ reference")
+    for name in modules:
+        parent = name.rpartition(".")[0]
+        if parent and not modules[parent].endswith("/__init__.py"):
+            _fail("module_parent_is_not_package", parent)
     for parent, attribute in required_bindings:
         if attribute not in bindings[parent]:
             _fail("missing_dependency", parent + "." + attribute)
@@ -328,7 +342,7 @@ def _read_closure(root: Path, contract: dict, *, check_ambiguity: bool) -> tuple
     hashes = {relative: hashlib.sha256(raw).hexdigest() for relative, raw in payloads.items()}
     try:
         reused = method_hashes(root, additional_roots=(contract["entry"], *contract["approved_dynamic"]))
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, RecursionError) as exc:
         _fail("closure_changed_while_reading", type(exc).__name__)
     if reused != hashes:
         _fail("closure_scan_disagreement", ",".join(sorted(set(reused) ^ set(hashes))) or "hash")
@@ -340,7 +354,7 @@ def _compile_closure(root: Path, payloads: dict) -> dict:
         return {relative: compile(raw.decode("utf-8"), str(root / relative), "exec",
                                   dont_inherit=True, optimize=0)
                 for relative, raw in payloads.items()}
-    except (SyntaxError, UnicodeError, ValueError):
+    except (SyntaxError, UnicodeError, ValueError, RecursionError):
         _fail("verifier_compile_failed")
 
 
