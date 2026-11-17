@@ -151,14 +151,32 @@ def _smoke_result(stdout: str) -> dict:
     return result
 
 
+def _check_report_path(wheel: Path, report: Path) -> None:
+    if wheel.resolve() == report.resolve():
+        raise WheelValidationError("REPORT_PATH_ALIAS", "report path identifies the input wheel")
+    if wheel.exists() and report.exists() and wheel.samefile(report):
+        raise WheelValidationError("REPORT_PATH_ALIAS", "report path identifies the input wheel")
+
+
+def _write_report(wheel: Path, path: Path, report: dict) -> None:
+    data = json.dumps(report, indent=2) + "\n"
+    with tempfile.TemporaryDirectory(prefix=".domain-wheel-report-", dir=path.parent) as directory:
+        staged = Path(directory) / "report.json"
+        staged.write_text(data, encoding="utf-8", newline="\n")
+        _check_report_path(wheel, path)
+        staged.replace(path)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--wheel", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args(argv)
     report: dict = {"status": "NOT_RUN", "production_qualified": False, "scope": "installed-wheel-synthetic-reference-only"}
-    stage = "staging"
+    stage = "report"
     try:
+        _check_report_path(args.wheel, args.report)
+        stage = "staging"
         with tempfile.TemporaryDirectory(prefix="trace-gc-domain-wheel-") as temporary:
             root = Path(temporary)
             staged = root / "wheel"
@@ -201,7 +219,14 @@ def main(argv: list[str] | None = None) -> int:
         report.update(status="FAIL", error={"stage": stage, "code": "IO_FAILED", "message": "validation I/O failed"})
     except Exception:
         report.update(status="FAIL", error={"stage": stage, "code": "VALIDATION_FAILED", "message": "wheel validation failed"})
-    args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8", newline="\n")
+    if report.get("error", {}).get("code") != "REPORT_PATH_ALIAS":
+        try:
+            _write_report(args.wheel, args.report, report)
+        except WheelValidationError as exc:
+            report.update(status="FAIL", error={"stage": "report", "code": exc.code, "message": str(exc)})
+        except (OSError, RuntimeError):
+            report.update(status="FAIL", error={"stage": "report", "code": "REPORT_WRITE_FAILED",
+                                               "message": "could not write report"})
     print(json.dumps(report, indent=2))
     return 0 if report["status"] == "PASS" else 1
 

@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -66,6 +67,19 @@ class DomainWheelValidatorTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(data["status"], "FAIL")
         self.assertFalse(data["production_qualified"])
+
+    def test_report_destination_must_be_distinct_from_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = self.make_wheel(directory, self.complete())
+            original = wheel.read_bytes()
+            hard_link = wheel.with_name("hard-link.json")
+            os.link(wheel, hard_link)
+            for output in (wheel, hard_link):
+                with self.subTest(output=output.name), contextlib.redirect_stdout(io.StringIO()) as stdout:
+                    code = self.tool.main(["--wheel", str(wheel), "--report", str(output)])
+                    self.assertEqual(code, 1)
+                    self.assertEqual(json.loads(stdout.getvalue())["error"]["code"], "REPORT_PATH_ALIAS")
+                    self.assertEqual(wheel.read_bytes(), original)
 
     def run_validator(self, wheel, report):
         with contextlib.redirect_stdout(io.StringIO()) as stdout:
