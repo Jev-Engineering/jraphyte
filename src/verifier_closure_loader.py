@@ -31,6 +31,8 @@ import hashlib
 import importlib.machinery
 import importlib.util
 import json
+import os
+import stat
 import sys
 import types
 from pathlib import Path
@@ -79,9 +81,18 @@ def contract_sha256(contract: dict) -> str:
     return hashlib.sha256(_canonical_json(contract, "invalid_verifier_contract")).hexdigest()
 
 
+def _is_indirect_path(path: Path) -> bool:
+    if path.is_symlink():
+        return True
+    if os.name != "nt":
+        return False
+    attributes = getattr(path.lstat(), "st_file_attributes", 0)
+    return bool(attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
 def _checked_root_path(item) -> Path:
     raw = Path(item).absolute()
-    if any(path.is_symlink() for path in (*raw.parents, raw)):
+    if any(_is_indirect_path(path) for path in (*raw.parents, raw)):
         _fail("symlinked_verifier_root")
     return raw.resolve()
 
@@ -126,7 +137,7 @@ def _no_symlink(root: Path, relative: str) -> None:
     current = root
     for part in Path(relative).parts:
         current = current / part
-        if current.is_symlink():
+        if _is_indirect_path(current):
             _fail("symlink_in_closure", relative)
 
 
@@ -297,6 +308,15 @@ def _read_closure(root: Path, contract: dict, *, check_ambiguity: bool) -> tuple
     return modules, payloads
 
 
+def _compile_closure(root: Path, payloads: dict) -> dict:
+    try:
+        return {relative: compile(raw.decode("utf-8"), str(root / relative), "exec",
+                                  dont_inherit=True, optimize=0)
+                for relative, raw in payloads.items()}
+    except (SyntaxError, UnicodeError, ValueError):
+        _fail("verifier_compile_failed")
+
+
 def build_release_contract(root, entry: str, *, verifier_id: str, approved_roots,
                            callable_name: str = "evaluate", approved_external=(), approved_dynamic=()) -> dict:
     """Author a contract from a reviewed root. Review must happen out of band."""
@@ -309,6 +329,7 @@ def build_release_contract(root, entry: str, *, verifier_id: str, approved_roots
                 "approved_dynamic": approved_dynamic, "closure": {}}
     _validate_contract_fields(contract)
     _, payloads = _read_closure(root, contract, check_ambiguity=True)
+    _compile_closure(root, payloads)
     contract["closure"] = {relative: hashlib.sha256(raw).hexdigest() for relative, raw in payloads.items()}
     return contract
 
@@ -355,8 +376,8 @@ def _validate_contract(contract) -> None:
 class _PrivateImporter:
     """Resolve local imports from verified bytes only; never touch sys.modules."""
 
-    def __init__(self, root: Path, modules: dict, payloads: dict, contract: dict):
-        self.root, self.modules, self.payloads = root, modules, payloads
+    def __init__(self, root: Path, modules: dict, compiled: dict, contract: dict):
+        self.root, self.modules, self.compiled = root, modules, compiled
         self.local_top = contract["entry"].split(".")[0]
         self.external = {name: types.SimpleNamespace(**EXTERNAL_EXPORTS[name])
                          for name in contract["approved_external"]}
@@ -385,9 +406,7 @@ class _PrivateImporter:
             module.__path__ = []  # no finder may search the directory
         self.loaded[name] = module
         try:
-            code = compile(self.payloads[relative].decode("utf-8"), module.__file__, "exec",
-                           dont_inherit=True, optimize=0)
-            exec(code, module.__dict__)
+            exec(self.compiled[relative], module.__dict__)
         except BaseException:
             self.loaded.pop(name, None)
             raise
@@ -465,7 +484,7 @@ def run_verifier(root, contract: dict, inputs, *, approved_roots) -> dict:
         changed = sorted(k for k in set(actual) | set(contract["closure"])
                          if actual.get(k) != contract["closure"].get(k))
         _fail("closure_mismatch", ",".join(changed))
-    importer = _PrivateImporter(root, modules, payloads, contract)
+    importer = _PrivateImporter(root, modules, _compile_closure(root, payloads), contract)
     outcome, error = "HOLD", None
     try:
         entry = importer.module(contract["entry"])
