@@ -272,11 +272,14 @@ class SQLiteReferenceBackend:
                 records=[{"id":i,"hash":h,"kind":k,"body":loads(b)} for i,h,k,b in self.db.execute("SELECT id,hash,kind,body FROM trace_records")]
                 from .ledger import receipt_bound_hash_field
                 lost={source_id}
+                classification_plans = {record["id"] for record in records
+                                        if record["kind"] == "plan" and classification_only_plan(record["body"])}
                 committed_plans = set()
-                for (text,) in self.db.execute("SELECT body FROM trace_journal"):
-                    event = loads(text)
-                    if event["operation"].get("action") == "PUBLISH_PLAN":
-                        committed_plans.add(event["operation"]["plan_id"])
+                if classification_plans:
+                    for (text,) in self.db.execute("SELECT body FROM trace_journal"):
+                        operation = loads(text)["operation"]
+                        if operation.get("action") == "PUBLISH_PLAN" and operation["plan_id"] in classification_plans:
+                            committed_plans.add(operation["plan_id"])
                 # Previous versions could erase a plan and retain the cached
                 # receipt that referred to its hash. Clean those orphans on
                 # an explicitly authorized repeat of the erasure operation.
@@ -303,7 +306,7 @@ class SQLiteReferenceBackend:
                             bound_hash = receipt["payload"].get(field)
                             bound_to_erasure = type(bound_hash) is str and bound_hash in lost_hashes
                         body = r["body"]
-                        if r["kind"] == "plan" and r["id"] in committed_plans and classification_only_plan(body):
+                        if r["id"] in committed_plans:
                             # Keep an unrelated signed classification proof whose
                             # sole link to erased bytes is a journaled snapshot.
                             body = {key: value for key, value in body.items() if key != "snapshot_id"}
