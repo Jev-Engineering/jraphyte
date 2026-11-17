@@ -4,7 +4,7 @@ The caller must stop and close every historical owner before entry. This
 helper never terminates a process, runs a provider, edits a graph, or signs a
 receipt. A reviewed release must pin the exact closed file inventory. The fence is only
 published when the current process token is actually refused by the parent deny
-(see ``_require_denial_enforced``); otherwise it holds before any effect on the old
+(see ``_denial_problem``); otherwise it holds before any effect on the old
 state.
 """
 from __future__ import annotations
@@ -37,6 +37,7 @@ def _current_sid() -> str:
 ERROR_ACCESS_DENIED = 5
 TOKEN_NOT_REFUSED = "current process token can create beneath the parent deny"
 DENIAL_UNVERIFIED = "denial of recreation could not be verified"
+DACL_UNVERIFIED = "parent deny-create ACE could not be verified"
 
 
 def _denial_problem(parent: Path) -> str | None:
@@ -62,30 +63,22 @@ def _denial_problem(parent: Path) -> str | None:
     return TOKEN_NOT_REFUSED
 
 
-def _require_denial_enforced(parent: Path, deny_sid: str, restore_sddl: str | None) -> None:
-    """Hold unless the deny on ``parent`` really refuses this process creating a child directory.
-
-    ``restore_sddl`` is the parent DACL from before this call added the deny (``None`` when the
-    deny was already there, which a replay must leave in place). On a hold the deny this call added
-    is removed again and the DACL read back equal to ``restore_sddl``; if that cannot be shown the
-    hold says so and the parent is left for the owner to repair (rerunning the same call is safe).
-    """
-    problem = _denial_problem(parent)
-    if problem is not None and restore_sddl is not None:
-        try:
-            removed = subprocess.run(["icacls.exe", str(parent), "/remove:d", "*" + deny_sid],
-                                     capture_output=True, text=True, timeout=30)
-            if removed.returncode != 0:
-                why = "icacls exit %d" % removed.returncode
-            elif directory_dacl_sddl(parent) != restore_sddl:
-                why = "DACL differs from its pre-state"
-            else:
-                why = None
-        except (OSError, SubprocessError):
-            why = "removal could not run"
-        if why is not None:
-            problem += "; the added deny could not be removed and verified (" + why + ")"
-    require(problem is None, "PHASE_FENCE", problem or "")
+def _restore_parent_dacl(parent: Path, deny_sid: str, original: str) -> str | None:
+    """Remove the deny this call added and verify exact restoration."""
+    try:
+        removed = subprocess.run(["icacls.exe", str(parent), "/remove:d", "*" + deny_sid],
+                                 capture_output=True, timeout=30)
+    except (OSError, SubprocessError):
+        return "removal could not run"
+    if removed.returncode != 0:
+        return "icacls exit %d" % removed.returncode
+    try:
+        restored = directory_dacl_sddl(parent)
+    except Exception:
+        return "restored DACL could not be read"
+    if restored != original:
+        return "DACL differs from its pre-state"
+    return None
 
 
 def _pinned_files(root: Path, expected: dict[str, str]) -> None:
@@ -151,19 +144,29 @@ def fence_closed_old_phase(*, old_root: str | Path, archived_root: str | Path,
     sddl = directory_dacl_sddl(old.parent)
     # Windows may spell this SID as a DACL alias (for example LA); the exact
     # deny-create ACE is recognized under either spelling.
-    restore_sddl = None
     if not dacl_has_ace(sddl, DENY_PARENT_ACE, deny_sid):
         require(old.exists(), "PHASE_FENCE", "archive moved without durable parent deny")
         require(not dacl_has_deny_trustee(sddl, deny_sid), "PHASE_FENCE",
                 "old parent already carries another deny for the fence SID")
         restore_sddl = sddl
         command = subprocess.run(["icacls.exe", str(old.parent), "/deny", "*" + deny_sid + ":(AD)"],
-                                 capture_output=True, text=True, timeout=30)
+                                 capture_output=True, timeout=30)
         require(command.returncode == 0, "PHASE_FENCE", "could not deny old state recreation")
-        sddl = directory_dacl_sddl(old.parent)
-    require(dacl_has_ace(sddl, DENY_PARENT_ACE, deny_sid), "PHASE_FENCE",
-            "old parent lacks exact deny-create ACE")
-    _require_denial_enforced(old.parent, deny_sid, restore_sddl)
+        try:
+            sddl = directory_dacl_sddl(old.parent)
+            exact_deny = dacl_has_ace(sddl, DENY_PARENT_ACE, deny_sid)
+        except Exception:
+            problem = DACL_UNVERIFIED
+        else:
+            problem = (_denial_problem(old.parent) if exact_deny else
+                       "old parent lacks exact deny-create ACE")
+        if problem is not None:
+            why = _restore_parent_dacl(old.parent, deny_sid, restore_sddl)
+            if why is not None:
+                problem += "; the added deny could not be removed and verified (" + why + ")"
+    else:
+        problem = _denial_problem(old.parent)
+    require(problem is None, "PHASE_FENCE", problem or "")
     if old.exists():
         # No COPY_ALLOWED: same-volume directory rename or HOLD. Application has
         # already closed every old database/lock handle; a leaked handle fails.
