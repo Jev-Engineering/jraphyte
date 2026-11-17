@@ -16,7 +16,7 @@ class TrialReportTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
-        self.result = dict(queries=4, top1=1, top10=2, mrr=0.3958333333333333,
+        self.result = dict(queries=4, fields_count=15, top1=1, top10=2, mrr=0.3958333333333333,
             candidate_coverage=0.75, candidate_depth=50, stage='local_cross_encoder',
             details=[dict(id='SECRETQUERY'+str(i), target_id='SECRETDOC'+str(i),
                 query='secret query alpha', rank=r, candidate_present=r is not None,
@@ -132,11 +132,46 @@ class TrialReportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'trial_receipt_invalid_counts'):
             aggregate(self.root)
 
-    def test_report_rejects_more_observed_documents_than_declared(self):
-        self.receipt['document_count'] = 1
+    def test_receipt_count_matches_every_measured_and_permuted_result(self):
+        self.receipt['document_count'] = 10_000
         self.write_receipt()
         with self.assertRaisesRegex(ValueError, '^trial_document_count_mismatch$'):
             aggregate(self.root)
+        self.receipt['document_count'] = 15
+        result = json.loads((self.root/'without_dense_target_permutation.json').read_bytes())['result']
+        for count in (14, 15.0):
+            with self.subTest(count=count):
+                result['fields_count'] = count
+                self.write_arm('without_dense_target_permutation', result)
+                self.write_receipt()
+                with self.assertRaisesRegex(ValueError, '^trial_document_count_mismatch$'):
+                    aggregate(self.root)
+
+    def test_report_rejects_more_observed_documents_than_declared(self):
+        self.receipt['document_count'] = 14
+        for name in ('primary', 'without_dense', 'target_permutation', 'without_dense_target_permutation'):
+            result = json.loads((self.root/(name+'.json')).read_bytes())['result']
+            self.write_arm(name, {**result, 'fields_count': 14})
+        self.write_receipt()
+        with self.assertRaisesRegex(ValueError, '^trial_document_count_mismatch$'):
+            aggregate(self.root)
+
+    def test_report_accepts_producer_normalized_empty_query_id(self):
+        for name in ('primary', 'without_dense', 'target_permutation', 'without_dense_target_permutation'):
+            result = json.loads((self.root/(name+'.json')).read_bytes())['result']
+            first = result['details'][0]
+            previous_id, first['id'] = first['id'], ''
+            for collection in ('rankings', 'candidates'):
+                result[collection][''] = result[collection].pop(previous_id)
+            self.write_arm(name, result)
+        path = self.root/'queries-permuted.json'
+        queries = json.loads(path.read_bytes())
+        queries['queries'][0]['id'] = ''
+        raw = json.dumps(queries).encode()
+        path.write_bytes(raw)
+        self.receipt['result_file_sha256'][path.name] = hashlib.sha256(raw).hexdigest()
+        self.write_receipt()
+        self.assertEqual(aggregate(self.root)['query_count'], 4)
 
     def test_rank_pool_and_candidate_stage_contradictions(self):
         for mutate in (
@@ -270,4 +305,5 @@ class TrialReportTests(unittest.TestCase):
         self.assertTrue(original.endswith(b'\n'))
         result = subprocess.run(command, cwd=cwd, capture_output=True)
         self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stderr, b'trial_report_output_exists\n')
         self.assertEqual(output.read_bytes(), original)

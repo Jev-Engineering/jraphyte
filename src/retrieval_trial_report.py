@@ -9,6 +9,8 @@ import os
 import stat
 from pathlib import Path
 
+from src.parallel_source_v4.common import write_once
+
 ARMS = ('primary', 'without_page', 'without_dense', 'historical_fields',
         'historical_fields_without_page')
 CHANNELS = ('field_weighted_bm25_parallel_v4', 'specter2', 'bm25_page', 'union')
@@ -171,8 +173,8 @@ def _permuted_queries(data, query_count):
     queries = _json_object(data, error).get('queries')
     fields = ('id', 'query', 'target_id')
     if (type(queries) is not list or len(queries) != query_count or
-            any(type(row) is not dict or any(type(row.get(key)) is not str or not row[key] for key in fields)
-                for row in queries) or len({row['id'] for row in queries}) != query_count):
+            any(type(row) is not dict or any(type(row.get(key)) is not str for key in fields)
+                or not row['query'].strip() or not row['target_id'] for row in queries) or len({row['id'] for row in queries}) != query_count):
         raise ValueError(error)
     return queries
 
@@ -336,6 +338,9 @@ def aggregate(trial_dir: Path) -> dict:
                         type(row) is not dict or type(row.get('id')) is not str or not row['id']
                         for row in historical)):
                 raise ValueError('trial_historical_fields_mismatch')
+    if any(type(result.get('fields_count')) is not int or result['fields_count'] != document_count
+           for result in results.values()):
+        raise ValueError('trial_document_count_mismatch')
     primary = results['primary.json']
     for arm in arms:
         result = results[arm + '.json']
@@ -395,8 +400,12 @@ def main():
         report = aggregate(args.trial_dir)
     except ValueError as exc:
         parser.exit(1, str(exc) + '\n')
-    with args.output.open('x', encoding='utf-8') as handle:
-        handle.write(json.dumps(report, sort_keys=True, allow_nan=False) + '\n')
+    if args.output.exists() or args.output.is_symlink():
+        parser.exit(1, 'trial_report_output_exists\n')
+    try:
+        write_once(args.output, report)
+    except (OSError, ValueError):
+        parser.exit(1, 'trial_report_output_write_failed\n')
 
 
 if __name__ == '__main__':
