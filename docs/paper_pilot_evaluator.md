@@ -19,9 +19,11 @@ public, reproducible way to count its rows.
    callbacks and backend) and call `export_receipts(pilot)`. The exporter reads
    the verified checkpoint, the backend journal and the **current** source and
    assertion status. It emits identifiers, hashes, page numbers, review kinds and
-   states. Claims are identified by position within their answer. Questions
-   use the frozen protocol's SHA-256 references. The exporter replaces denied
-   source lineage with local markers and omits denied assertion provenance.
+   states. Application-assigned references use SHA-256 of their exact UTF-8
+   identifiers. Claims are identified by position within their answer. Questions
+   use the frozen protocol's SHA-256 references. A denied assertion contributes
+   its fingerprint and access status. It contributes no evidence links or
+   provenance, and a denied source contributes a local marker.
 2. Freeze the evaluation protocol before inspecting answers. See
    [`examples/paper_pilot/evaluation_protocol.synthetic.json`](../examples/paper_pilot/evaluation_protocol.synthetic.json).
    `question_sha256(text)` gives the question identifier.

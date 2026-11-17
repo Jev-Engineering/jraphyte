@@ -31,26 +31,26 @@ def protocol(*, questions=None, assertions=("cand-1",), recovery=()):
 def receipts():
     """Hand-authored receipt rows: one supported answer, one abstention, one published assertion."""
     evidence = {"evidence_id": "evidence:" + "1" * 64, "evidence_sha256": "1" * 64,
-                "source_snapshot_id": "source:" + "2" * 64, "source_id": "paper-a", "source_hash": "2" * 64,
+                "source_snapshot_id": "source:" + "2" * 64, "source_id_sha256": text_digest("paper-a"), "source_hash": "2" * 64,
                 "representation": "reviewed-native-pdf-page-v1", "raw_document_sha256": "3" * 64,
                 "physical_page": 2, "page_png_sha256": "4" * 64, "crop_png_sha256": None, "currently_readable": True}
-    answer = {"retrieval_id": "retrieve-q1", "prepare_id": "prepare-q1", "response_id": "answer-q1",
-              "review_id": "review-q1", "question_sha256": QUESTION, "state": "SUPPORTED", "abstention_reason": None,
+    answer = {"retrieval_id_sha256": text_digest("retrieve-q1"), "prepare_id_sha256": text_digest("prepare-q1"), "response_id_sha256": text_digest("answer-q1"),
+              "review_id_sha256": text_digest("review-q1"), "question_sha256": QUESTION, "state": "SUPPORTED", "abstention_reason": None,
               "claims": [{"evidence_ids": [evidence["evidence_id"]], "support": True}],
               "reviewer_kind": "assistant", "answer_graph_version": 2, "graph_version_current": True, "retrieval_context_current": True}
-    abstain = {"retrieval_id": "retrieve-q2", "prepare_id": "prepare-q2", "response_id": None, "review_id": None,
+    abstain = {"retrieval_id_sha256": text_digest("retrieve-q2"), "prepare_id_sha256": text_digest("prepare-q2"), "response_id_sha256": None, "review_id_sha256": None,
                "question_sha256": UNSUPPORTED, "state": "ABSTAIN_NO_AUTHORIZED_EVIDENCE",
                "abstention_reason": "NO_AUTHORIZED_EVIDENCE", "claims": [], "reviewer_kind": None,
                "answer_graph_version": 2, "graph_version_current": True, "retrieval_context_current": True}
-    assertion = {"assertion_id": "cand-1", "currently_readable": True, "active": True,
+    assertion = {"assertion_id_sha256": text_digest("cand-1"), "currently_readable": True, "active": True,
                  "evidence_ids": [evidence["evidence_id"]], "transaction_event_hash": "7" * 64,
-                 "transaction_version": 2, "plan_id": "plan:" + "8" * 64, "resolution_id": "resolution:" + "9" * 64,
-                 "resolution_outcome": "SELECTED", "observation_ids": ["observation:" + "b" * 64],
+                 "transaction_version": 2, "plan_id_sha256": "8" * 64, "resolution_id_sha256": "9" * 64,
+                 "resolution_outcome": "SELECTED", "observation_ids_sha256": ["b" * 64],
                  "observations_ok": True}
-    return {"version": RECEIPTS_VERSION, "run_id": "authored-pilot", "execution_mode": "SYNTHETIC",
+    return {"version": RECEIPTS_VERSION, "run_id_sha256": text_digest("authored-pilot"), "execution_mode": "SYNTHETIC",
             "checkpoint_head": H, "graph": {"graph_version": 2, "journal_head": "7" * 64, "state_sha256": H},
-            "source_reviews": [{"request_id": "review", "source_snapshot_id": evidence["source_snapshot_id"],
-                                "source_id": "paper-a", "representation": "reviewed-native-pdf-page-v1",
+            "source_reviews": [{"request_id_sha256": text_digest("review"), "source_snapshot_id": evidence["source_snapshot_id"],
+                                "source_id_sha256": text_digest("paper-a"), "representation": "reviewed-native-pdf-page-v1",
                                 "reviewer_kind": "assistant", "all_checks_passed": True, "independent_review": False}],
             "assertions": [assertion], "evidence": [evidence], "answers": [answer, abstain],
             "provider_calls_by_exporter": 0}
@@ -87,12 +87,12 @@ class AggregateEvaluatorTests(unittest.TestCase):
         cases = {
             "REVIEW_REJECTED_CLAIM": lambda r: r["answers"][0].update(state="REJECTED_UNSUPPORTED_CLAIM"),
             "ABSTAINED_ON_SUPPORTED_QUESTION:MODEL_ABSTAINED": lambda r: r["answers"][0].update(
-                state="ABSTAIN_MODEL", abstention_reason="MODEL_ABSTAINED", claims=[], review_id=None, reviewer_kind=None),
+                state="ABSTAIN_MODEL", abstention_reason="MODEL_ABSTAINED", claims=[], review_id_sha256=None, reviewer_kind=None),
             "SUPPORT_JUDGMENT_INCOMPLETE": lambda r: r["answers"][0]["claims"][0].update(support=None),
-            "REQUIRED_SOURCE_NOT_CITED": lambda r: r["evidence"][0].update(source_id="paper-b"),
+            "REQUIRED_SOURCE_NOT_CITED": lambda r: r["evidence"][0].update(source_id_sha256=text_digest("paper-b")),
             "INCOMPLETE_CITATION_CHAIN:MISSING_PAGE_LINEAGE": lambda r: r["evidence"][0].update(page_png_sha256=None),
             "INCOMPLETE_CITATION_CHAIN:MISSING_CROP_LINEAGE": lambda r: r["evidence"][0].update(representation=IMAGE),
-            "INCOMPLETE_ANSWER_REVIEW_CHAIN": lambda r: r["answers"][0].update(review_id=None),
+            "INCOMPLETE_ANSWER_REVIEW_CHAIN": lambda r: r["answers"][0].update(review_id_sha256=None),
             "INCOMPLETE_CITATION_CHAIN:MISSING_EVIDENCE": lambda r: r["answers"][0]["claims"][0].update(
                 evidence_ids=["evidence:unknown"]),
         }
@@ -109,14 +109,14 @@ class AggregateEvaluatorTests(unittest.TestCase):
         self.assertEqual(rows(evaluate(protocol(), value, []), "questions")[UNSUPPORTED]["reason"],
                          "ANSWERED_UNSUPPORTED_QUESTION")
         for field, bad in (("transaction_event_hash", None), ("transaction_event_hash", "e" * 64), ("resolution_outcome", "REJECTED"),
-                           ("observations_ok", False), ("resolution_id", None),
-                           ("transaction_version", None), ("transaction_version", 3), ("observation_ids", [])):
+                           ("observations_ok", False), ("resolution_id_sha256", None),
+                           ("transaction_version", None), ("transaction_version", 3), ("observation_ids_sha256", [])):
             with self.subTest(field=field):
                 value = receipts(); value["assertions"][0][field] = bad
                 self.assertEqual(rows(evaluate(protocol(), value, []), "assertions")[question_sha256("cand-1")]["reason"],
                                  "INCOMPLETE_GRAPH_CHAIN")
         value = receipts()
-        value["assertions"].append({**value["assertions"][0], "assertion_id": "cand-unexpected"})
+        value["assertions"].append({**value["assertions"][0], "assertion_id_sha256": text_digest("cand-unexpected")})
         report = evaluate(protocol(), value, [])
         self.assertEqual(rows(report, "assertions")[question_sha256("cand-unexpected")]["reason"], "UNEXPECTED_ASSERTION")
 
@@ -136,11 +136,11 @@ class AggregateEvaluatorTests(unittest.TestCase):
         for changes, status, reason in (
             ({"answer_graph_version": 1, "graph_version_current": False}, "HOLD", "ABSTENTION_CONTEXT_REFRESH_REQUIRED"),
             ({"retrieval_context_current": False}, "HOLD", "ABSTENTION_CONTEXT_REFRESH_REQUIRED"),
-            ({"prepare_id": None}, "FAIL", "INCOMPLETE_ABSTENTION_STAGE"),
-            ({"response_id": "unexpected-response"}, "FAIL", "INCOMPLETE_ABSTENTION_STAGE"),
+            ({"prepare_id_sha256": None}, "FAIL", "INCOMPLETE_ABSTENTION_STAGE"),
+            ({"response_id_sha256": text_digest("unexpected-response")}, "FAIL", "INCOMPLETE_ABSTENTION_STAGE"),
             ({"state": "ABSTAIN_MODEL", "abstention_reason": "MODEL_ABSTAINED"},
              "FAIL", "INCOMPLETE_ABSTENTION_STAGE"),
-            ({"state": "ABSTAIN_MODEL", "abstention_reason": "MODEL_ABSTAINED", "response_id": "model-response"},
+            ({"state": "ABSTAIN_MODEL", "abstention_reason": "MODEL_ABSTAINED", "response_id_sha256": text_digest("model-response")},
              "PASS", "MODEL_ABSTAINED"),
         ):
             with self.subTest(changes=changes):
@@ -162,8 +162,8 @@ class AggregateEvaluatorTests(unittest.TestCase):
     def test_latest_attempt_per_question_is_scored(self):
         value = receipts()
         later = copy.deepcopy(value["answers"][0])
-        later.update(retrieval_id="retrieve-q1-again", prepare_id="prepare-q1-again", state="ABSTAIN_NO_AUTHORIZED_EVIDENCE",
-                     abstention_reason="NO_AUTHORIZED_EVIDENCE", claims=[], response_id=None, review_id=None, reviewer_kind=None)
+        later.update(retrieval_id_sha256=text_digest("retrieve-q1-again"), prepare_id_sha256=text_digest("prepare-q1-again"), state="ABSTAIN_NO_AUTHORIZED_EVIDENCE",
+                     abstention_reason="NO_AUTHORIZED_EVIDENCE", claims=[], response_id_sha256=None, review_id_sha256=None, reviewer_kind=None)
         value["answers"].append(later)
         self.assertEqual(rows(evaluate(protocol(), value, []), "questions")[QUESTION]["retrieval_id_sha256"], question_sha256("retrieve-q1-again"))
 
@@ -171,7 +171,7 @@ class AggregateEvaluatorTests(unittest.TestCase):
         mutations = [
             lambda r: r["evidence"][0].update(quote="The authored experiment measured 17 units."),
             lambda r: r["answers"][0]["claims"][0].update(claim_sha256="The authored result is 17 units."),
-            lambda r: r["source_reviews"][0].update(source_id="a free text sentence with spaces"),
+            lambda r: r["source_reviews"][0].update(source_id_sha256="a free text sentence with spaces"),
             lambda r: r["source_reviews"][0].update(independent_review=True),
             lambda r: r["evidence"].append(copy.deepcopy(r["evidence"][0])),
             lambda r: r["evidence"][0].update(representation="unknown-representation"),
@@ -317,27 +317,41 @@ class PilotExportTests(unittest.TestCase):
     def test_edge_grant_removal_holds_citation_even_with_readable_source(self):
         self.supported()
         before = export_receipts(self.f.pilot)
-        edge = before["assertions"][0]["assertion_id"]
+        edge = next(iter(self.f.backend.state()["assertions"]))
+        self.assertEqual(before["assertions"][0]["assertion_id_sha256"], text_digest(edge))
         self.f.grants.pop("edge:" + edge)
         after = export_receipts(self.f.pilot)
         self.assertTrue(after["evidence"][0]["currently_readable"])
-        self.assertFalse(after["assertions"][0]["currently_readable"])
+        self.assertEqual(after["assertions"][0],
+                         {"assertion_id_sha256": text_digest(edge), "currently_readable": False})
         report = evaluate(self.frozen(), after, [])
         self.assertEqual(report["metrics"]["questions"]["hold"], 1)
         self.assertEqual(report["metrics"]["citation_chains"]["hold"], 1)
         self.assertEqual(report["metrics"]["assertions"]["invalidated"], 1)
+
+    def test_denied_assertion_does_not_export_its_only_evidence(self):
+        self.f.answer_request()
+        edge = next(iter(self.f.backend.state()["assertions"]))
+        self.assertTrue(export_receipts(self.f.pilot)["evidence"])
+        self.f.grants.pop("edge:" + edge)
+        exported = export_receipts(self.f.pilot)
+        self.assertEqual(exported["evidence"], [])
+        self.assertEqual(exported["assertions"],
+                         [{"assertion_id_sha256": text_digest(edge), "currently_readable": False}])
 
     def test_export_abstention_binds_retrieval_graph_and_access(self):
         f = self.f
         text = f.config["questions"][0]
         request = base.query(requesting_component="downstream-pilot-test", security_scope="pilot-test",
                              text=text, focus_entities=[f.claim])
-        f.pilot.retrieve("retrieve", request=request)
+        retrieval_id = "récupération question"
+        f.pilot.retrieve(retrieval_id, request=request)
         empty = export_receipts(f.pilot)["answers"][0]
         self.assertEqual(empty["state"], "CONTEXT_ONLY")
+        self.assertEqual(empty["retrieval_id_sha256"], text_digest(retrieval_id))
         self.assertEqual(empty["answer_graph_version"], 0)
 
-        f.pilot.prepare_answer("prepare-answer", retrieval_id="retrieve", question_text=text)
+        f.pilot.prepare_answer("prepare-answer", retrieval_id=retrieval_id, question_text=text)
         frozen = protocol(questions=[{"question_sha256": question_sha256(text), "expectation": "ABSTAIN",
                                       "required_source_ids": []}], assertions=[])
         self.assertEqual(evaluate(frozen, export_receipts(f.pilot), [])["verdict"], "PASS")
