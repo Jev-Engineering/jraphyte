@@ -13,6 +13,9 @@ from .retrieval.contracts import KINDS as RETRIEVAL_KINDS
 KINDS.update(RETRIEVAL_KINDS)
 KINDS.add("image-evidence-v1")
 
+from .domains import KINDS as DOMAIN_KINDS
+KINDS.update(DOMAIN_KINDS)
+
 class Catalog:
     def __init__(self, records: Iterable[dict[str, Any]] = ()):
         self._records: dict[str, dict[str, Any]] = {}
@@ -26,6 +29,8 @@ class Catalog:
         validate(record["kind"], record["body"])
         require(record["hash"] == digest({"kind": record["kind"], "body": record["body"]}),
                 "RECORD_HASH", record["id"])
+        from .domains import validate_record as validate_domain_record
+        validate_domain_record(record)
         if record["id"] in self._records:
             require(self._records[record["id"]] == record, "IMMUTABLE_RECORD", record["id"])
         self._records[record["id"]] = deepcopy(record)

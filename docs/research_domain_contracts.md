@@ -1,0 +1,98 @@
+# Research-domain contracts v1
+
+Refs #5, epic #4. Contract implementation and reference fixtures; no deployment
+approval is implied. The packaged reference taxonomy is explicitly `PROPOSED`.
+Its scientific coverage and governance require an identified taxonomy owner and
+trusted review before application enrollment.
+
+## Boundaries
+
+Research domains describe topics, not scientific truth or access rights. They
+are separate from relation `domain`/`range` endpoint types, `ontology_scope`,
+topology-derived `community_scope`, and tenant/ACL `security_scope`. A query may
+narrow an authorized search by domain; classification never grants a READ right
+or bypasses global graph validation. Stable entity, assertion, source, and
+evidence IDs are shared across topics. Assertion membership is derived from the
+source snapshots in its evidence; a shared entity can anchor several domains.
+
+## Immutable records
+
+`research-domain-taxonomy` and `classification-assignment` use contract version
+1 and mandatory content-addressed IDs: `kind:SHA256({kind,body})`, using the
+existing canonicalization. Existing record kinds retain their ID rules. No
+field is added to source or evidence bodies and no older hash is recalculated.
+
+A taxonomy has a stable `taxonomy_key`, an integer version, and sorted, unique
+`research:*` identifiers with definitions, display labels, active/retired status,
+and an optional acyclic parent graph. A successor binds its predecessor's exact
+ID/hash and increments the version by one. Every predecessor in an approved
+taxonomy lineage must also claim approval. Existing IDs cannot be removed,
+repurposed, or reused after retirement. Names and parent links can evolve in a
+new taxonomy version without changing the semantic identity of a domain.
+
+Each assignment binds one exact source snapshot ID, its immutable record hash,
+its security scope, and one exact taxonomy ID/hash. `CLASSIFIED` uses one or more
+sorted labels; `UNCLASSIFIED` uses an empty list. Missing authoritative assignments
+are also interpreted as unclassified by the read projection, not as access
+revocation. `RETIRED` appends an empty-label successor rather than deleting an
+older record. Per-source revisions are consecutive and successors bind their
+predecessor ID/hash. Complete bundles reject two claimed-approved records for
+the same source/revision.
+
+An assignment whose review claims `APPROVED` must bind a taxonomy version whose
+review also claims `APPROVED`, recorded no later than the assignment review.
+Successor taxonomies and reclassifications cannot record an earlier approval
+instant than their predecessor. These are consistency checks on recorded
+metadata, not authentication of the reviewers.
+
+Provenance records a method (`HUMAN_REVIEW`, `RULE_ASSISTED`, or `MODEL_ASSISTED`),
+classifier identity/version, and exact hashed source/span bases from the assigned
+snapshot. Evidence from another paper, unsupported methods, and altered source,
+taxonomy, predecessor, or basis hashes fail validation. Proposed and approved
+review metadata are distinct. An approved review must name a reviewer and review
+time. These fields alone are not authentication. Models may produce proposals;
+acceptance of a reviewed assignment is reserved for an application-enrolled
+transaction service that verifies a signature binding the immutable action.
+That publication boundary is #6 work and is not part of this contract.
+
+## Derived assertion membership
+
+For a selected graph and classification revision, resolve each assertion's
+supporting evidence to its exact source snapshot IDs. For each source, use
+the effective assignment selected by the authoritative projection at that
+revision. Check current source authorization before using evidence or labels in
+a read. Collect the sorted, unique union of explicit labels from classified
+assignments that bind the selected taxonomy ID and hash. Evidence order and
+repeated sources have no effect. Labels in other taxonomy versions contribute
+no labels to that selection, even when their IDs are spelled the same. A
+missing, unclassified, or retired assignment contributes no labels and counts
+as unclassified for an explicit unclassified selection. Parent links affect
+selection only when descendant expansion is requested.
+
+Membership is revision-specific metadata. Reclassification can change where an
+assertion appears while preserving its global assertion ID and the associated
+entity, source, and evidence IDs and hashes. A historical read uses its pinned
+classification projection and applies current authorization. The projection and
+read behavior are downstream work under #6 through #8.
+
+## Catalog, bundles, and packaging
+
+New records participate in Catalog validation, explicit ledger references,
+causal ordering, `DOMAIN_TAXONOMY` / `CLASSIFICATION` stages, and complete bundle
+validation. Partial/analysis bundles cannot authorize publication. Both schema
+trees are generated by `tools/build_schemas.py` with `tools/domain_schemas.py`;
+the packaged taxonomy is an installed-wheel resource under
+`trace_gc/data/research_domains/`. Schema IDs for old contracts are unchanged;
+new records contain their own explicit contract version.
+
+No migration is performed by importing a catalog or opening an existing source.
+Publication, append-only migration, historical selection, and rollback are
+separate transaction work tracked under #6. Indexed reads (#7) and scoped
+retrieval (#8) consume these records later; nothing in this contract grants read
+or publication authority.
+
+## Evidence boundary
+
+The tests for this contract use synthetic fixtures and fixture review metadata
+only. They are not taxonomy-owner review, private-data evidence, or deployment
+qualification.

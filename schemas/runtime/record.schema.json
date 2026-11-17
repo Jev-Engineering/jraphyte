@@ -36,7 +36,9 @@
         "graphrag-answer",
         "retrieval-replay",
         "retrieval-evaluation",
-        "image-evidence-v1"
+        "image-evidence-v1",
+        "research-domain-taxonomy",
+        "classification-assignment"
       ]
     },
     "hash": {

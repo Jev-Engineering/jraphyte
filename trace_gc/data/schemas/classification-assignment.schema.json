@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:trace-gc:0.3.0:classification-assignment",
+  "title": "TRACE-GC classification-assignment v0.3.0",
+  "type": "object",
+  "properties": {
+    "contract_version": {
+      "const": 1
+    },
+    "source_snapshot_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "security_scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "taxonomy_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "taxonomy_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "domain_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^research:[a-z0-9][a-z0-9._-]*$"
+      },
+      "minItems": 0,
+      "uniqueItems": true
+    },
+    "status": {
+      "enum": [
+        "CLASSIFIED",
+        "UNCLASSIFIED",
+        "RETIRED"
+      ]
+    },
+    "effective_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "supersedes": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "supersedes_hash": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "enum": [
+            "HUMAN_REVIEW",
+            "RULE_ASSISTED",
+            "MODEL_ASSISTED"
+          ]
+        },
+        "classifier_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "classifier_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "basis": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "record_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "record_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "required": [
+              "record_id",
+              "record_hash"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "method",
+        "classifier_id",
+        "classifier_version",
+        "basis"
+      ],
+      "additionalProperties": false
+    },
+    "review": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "PROPOSED",
+            "APPROVED"
+          ]
+        },
+        "reviewer_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reviewed_at": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "status",
+        "reviewer_id",
+        "reviewed_at",
+        "rationale"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "contract_version",
+    "source_snapshot_id",
+    "source_hash",
+    "security_scope",
+    "taxonomy_id",
+    "taxonomy_hash",
+    "domain_ids",
+    "status",
+    "effective_revision",
+    "supersedes",
+    "supersedes_hash",
+    "provenance",
+    "review"
+  ],
+  "additionalProperties": false
+}
