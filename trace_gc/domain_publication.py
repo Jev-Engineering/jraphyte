@@ -11,7 +11,7 @@ from typing import Any, TYPE_CHECKING
 
 from .canonical import digest, loads
 from .domains import create_assignment, verify_assignment
-from .errors import require
+from .errors import ContractError, require
 from .schema import validate
 
 if TYPE_CHECKING:
@@ -98,10 +98,10 @@ def apply_operations(catalog: Catalog, snapshot: dict[str, Any], operations: lis
                      security_scope: str) -> dict[str, Any] | None:
     """Pure prospective projection; every caller must still validate the full graph."""
     domain_ops = [op for op in operations if op["operation"] in OPERATIONS]
+    if not domain_ops:
+        return deepcopy(_stored_projection(snapshot))
     projection = verify_projection(catalog, snapshot)
     initialized = "classifications" in snapshot
-    if not domain_ops:
-        return projection if initialized else None
     migrations = [op for op in domain_ops if op["operation"] == "INITIALIZE_RESEARCH_DOMAINS"]
     if migrations:
         require(len(operations) == 1 and not initialized,
@@ -181,6 +181,46 @@ def verify_preflight_payload(preflight: dict[str, Any], plan: dict[str, Any], pl
     require(type(required) is bool and preflight["payload"] == expected and (not required or reviewed),
             "PREFLIGHT_FAILED", "invalid/missing checks or required review")
 
+def _verify_classification_event(catalog, event, plan, previous, previous_projection, statuses, receipts, *, trust, sandbox):
+    operation = event["operation"]
+    after = event["state_after"]
+    require(event["authorization_hash"] in receipts and event["preflight_hash"] in receipts,
+            "DOMAIN_AUDIT", "classification approvals are missing")
+    authorization, preflight = receipts[event["authorization_hash"]], receipts[event["preflight_hash"]]
+    policy = catalog.get(plan["policy_id"], "policy")
+    require(operation["policy_version"] == policy["version"] and operation["population"] == policy["population"]
+            and operation["security_scope"] == plan["security_scope"],
+            "DOMAIN_AUDIT", "publication policy or scope differs from the plan")
+    verify_preflight_payload(preflight, plan, operation["plan_hash"],
+                             policy_version=policy["version"], population=policy["population"],
+                             reviewed=authorization["payload"].get("reviewed_by") is not None)
+    if trust is not None:
+        from .trust import verify_authorization
+        reviewed = verify_authorization(trust, authorization, plan, operation["plan_hash"],
+                                        at=event["committed_at"], sandbox=sandbox)
+        require(reviewed, "REVIEW_REQUIRED", "classification history is not reviewed")
+        trust.verify(preflight, "PREFLIGHT", at=event["committed_at"])
+    verify_review_attribution(catalog, plan, authorization["payload"].get("reviewed_by"),
+                              at=event["committed_at"], approval_issued_at=authorization["issued_at"])
+    require(catalog.get(plan["snapshot_id"], "graph-snapshot") == snapshot_body(previous),
+            "DOMAIN_AUDIT", "classification plan is not based on the prior authoritative state")
+    previous_revision = previous_projection["revision"] if previous_projection is not None else None
+    require(plan["graph_version"] == previous["graph_version"] and
+            plan.get("classification_revision") == previous_revision,
+            "DOMAIN_AUDIT", "classification compare-and-swap revision differs")
+    for source_id, epoch in plan["source_epochs"].items():
+        status = statuses.get(source_id)
+        require(status is not None and status["epoch"] == epoch and status["active"] and
+                status["permission"] == "READ" and not status["tombstone"],
+                "DOMAIN_AUDIT", "classification used a stale or unauthorized source epoch")
+    from .plans import validate_plan
+    prospective = validate_plan(catalog, plan, source_status=statuses)
+    expected = _stored_projection(prospective)
+    require(prospective["nodes"] == after["nodes"] and prospective["assertions"] == after["assertions"],
+            "DOMAIN_AUDIT", "classification event differs from the fully validated prospective graph")
+    return expected
+
+
 def audit_history(backend: Any, *, trust: TrustStore | None = None) -> dict[str, Any]:
     """Recompute classification transitions, optionally authenticating signed plans.
 
@@ -190,63 +230,56 @@ def audit_history(backend: Any, *, trust: TrustStore | None = None) -> dict[str,
     """
     previous = loads(backend.db.execute("SELECT body FROM trace_meta WHERE id=1").fetchone()[0])["genesis_state"]
     previous_projection = _stored_projection(previous)
-    if backend.db.execute("SELECT 1 FROM trace_erased LIMIT 1").fetchone() is not None:
-        return {"classification_replay": "UNAVAILABLE_ERASED_CONTENT", "classification_authority_verified": False}
-    catalog = backend.load_catalog()
+    erased = dict(backend.db.execute("SELECT id,hash FROM trace_erased"))
+    if erased:
+        from .catalog import Catalog
+        catalog = Catalog({"id": ref, "hash": hash_, "kind": kind, "body": loads(body)}
+                          for ref, hash_, kind, body in backend.db.execute("SELECT id,hash,kind,body FROM trace_records"))
+    else:
+        catalog = backend.load_catalog()
     verify_projection(catalog, previous)
     statuses: dict[str, Any] = {}
     domain_events = 0
+    missing_proof = False
     receipts = {digest(r["body"]): r["body"] for r in catalog.all("receipt")}
     for (text,) in backend.db.execute("SELECT body FROM trace_journal ORDER BY version"):
         event = loads(text)
         operation = event["operation"]
         after = event["state_after"]
-        verified = verify_projection(catalog, after)
-        current_projection = verified if "classifications" in after else None
+        current_projection = _stored_projection(after)
+        changed = current_projection != previous_projection
         expected = previous_projection
         if operation.get("action") == "PUBLISH_PLAN":
-            plan = catalog.get(operation["plan_id"], "plan")
-            domain_ops = [op for op in plan["operations"] if op["operation"] in OPERATIONS]
-            if domain_ops:
-                domain_events += 1
-                require(catalog.hash(operation["plan_id"]) == operation["plan_hash"],
-                        "DOMAIN_AUDIT", "classification plan hash differs")
-                require(catalog.get(plan["snapshot_id"], "graph-snapshot") == snapshot_body(previous),
-                        "DOMAIN_AUDIT", "classification plan is not based on the prior authoritative state")
-                previous_revision = previous_projection["revision"] if previous_projection is not None else None
-                require(plan["graph_version"] == previous["graph_version"] and
-                        plan.get("classification_revision") == previous_revision,
-                        "DOMAIN_AUDIT", "classification compare-and-swap revision differs")
-                for source_id, epoch in plan["source_epochs"].items():
-                    status = statuses.get(source_id)
-                    require(status is not None and status["epoch"] == epoch and status["active"] and
-                            status["permission"] == "READ" and not status["tombstone"],
-                            "DOMAIN_AUDIT", "classification used a stale or unauthorized source epoch")
-                from .plans import validate_plan
-                prospective = validate_plan(catalog, plan, source_status=statuses)
-                expected = _stored_projection(prospective)
-                require(prospective["nodes"] == after["nodes"] and prospective["assertions"] == after["assertions"],
-                        "DOMAIN_AUDIT", "classification event differs from the fully validated prospective graph")
-                require(event["authorization_hash"] in receipts and event["preflight_hash"] in receipts,
-                        "DOMAIN_AUDIT", "classification approvals are missing")
-                authorization, preflight = receipts[event["authorization_hash"]], receipts[event["preflight_hash"]]
-                policy = catalog.get(plan["policy_id"], "policy")
-                require(operation["policy_version"] == policy["version"] and operation["population"] == policy["population"]
-                        and operation["security_scope"] == plan["security_scope"],
-                        "DOMAIN_AUDIT", "publication policy or scope differs from the plan")
-                verify_preflight_payload(preflight, plan, operation["plan_hash"],
-                                         policy_version=policy["version"], population=policy["population"],
-                                         reviewed=authorization["payload"].get("reviewed_by") is not None)
-                verify_review_attribution(catalog, plan, authorization["payload"].get("reviewed_by"),
-                                          at=event["committed_at"], approval_issued_at=authorization["issued_at"])
-                if trust is not None:
-                    from .trust import verify_authorization
-                    reviewed = verify_authorization(trust, authorization, plan, operation["plan_hash"],
-                                                    at=event["committed_at"], sandbox=backend.sandbox)
-                    require(reviewed, "REVIEW_REQUIRED", "classification history is not reviewed")
-                    trust.verify(preflight, "PREFLIGHT", at=event["committed_at"])
+            plan_id = operation["plan_id"]
+            plan_hash = operation["plan_hash"]
+            require(event["record_hashes"].get(plan_id) == plan_hash, "DOMAIN_AUDIT", "publication plan is not journal-bound")
+            if plan_id not in catalog and erased.get(plan_id) == plan_hash:
+                # An ordinary plan can lose its snapshot and plan during erasure.
+                # A classified transition without its signed plan cannot be authenticated.
+                if changed:
+                    missing_proof = True
+                    expected = current_projection
+            else:
+                plan = catalog.get(plan_id, "plan")
+                require(catalog.hash(plan_id) == plan_hash, "DOMAIN_AUDIT", "publication plan hash differs")
+                require(event["idempotency_key"] == plan["idempotency_key"] == event["transaction_receipt"]["idempotency_key"],
+                        "DOMAIN_AUDIT", "publication event and receipt key differ from the signed plan")
+                if any(op["operation"] in OPERATIONS for op in plan["operations"]):
+                    domain_events += 1
+                    try:
+                        expected = _verify_classification_event(catalog, event, plan, previous, previous_projection,
+                            statuses, receipts, trust=trust, sandbox=backend.sandbox)
+                    except ContractError as exc:
+                        if exc.code != "MISSING_REFERENCE" or exc.detail not in erased or (
+                            event["record_hashes"].get(exc.detail) != erased[exc.detail]
+                        ):
+                            raise
+                        missing_proof = True
+                        expected = current_projection
         require(current_projection == expected, "DOMAIN_AUDIT",
                 "classification state changed outside a reviewed classification operation")
         previous, previous_projection, statuses = after, current_projection, event["source_status"]
+    if missing_proof:
+        return {"classification_replay": "UNAVAILABLE_ERASED_CONTENT", "classification_authority_verified": False}
     return {"classification_replay": "PASS", "classification_events": domain_events,
             "classification_authority_verified": trust is not None and domain_events > 0}

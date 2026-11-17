@@ -81,7 +81,7 @@ class PublicationProjectionTests(unittest.TestCase):
             db.executescript("""
                 CREATE TABLE trace_meta (id INTEGER PRIMARY KEY, body TEXT);
                 CREATE TABLE trace_journal (version INTEGER PRIMARY KEY, body TEXT);
-                CREATE TABLE trace_erased (id TEXT PRIMARY KEY);
+                CREATE TABLE trace_erased (id TEXT PRIMARY KEY, hash TEXT);
             """)
             backend = SimpleNamespace(db=db, load_catalog=lambda: self.catalog)
             event = {"operation": {"action": "ADMIT"}, "source_status": {}, "state_after": self.state}

@@ -137,7 +137,7 @@ class SQLiteReferenceBackend:
                      authorization_hash: str, preflight_hash: str, upstream_head: str | None = None,
                      fault: Callable[[str],None] | None = None, at: str | None = None,
                      lineage_prefix: list[dict[str,Any]] | None = None,
-                     authority_check: Callable[[],None] | None = None) -> dict[str,Any]:
+                     authority_check: Callable[[],str] | None = None) -> dict[str,Any]:
         require(bool(key) and type(expected_version) is int and expected_version>=0,"TRANSACTION_INPUT","explicit version/key required")
         with (self._phase_guard() if self._phase_guard is not None else nullcontext()):
             return self._transaction_locked(key=key, fingerprint=fingerprint,
@@ -158,8 +158,7 @@ class SQLiteReferenceBackend:
                 # Revalidate the existing authority after acquiring the SQL write
                 # transaction, including before an idempotent receipt is returned.
                 # This callback comes from the trusted service, never a plan/model.
-                if authority_check is not None:authority_check()
-                when=at or now()
+                when=authority_check() if authority_check is not None else (at or now())
                 previous=self.db.execute("SELECT fingerprint,body FROM trace_journal WHERE key=?",(key,)).fetchone()
                 if previous:
                     require(previous[0]==fingerprint,"IDEMPOTENCY_CONFLICT","same key, different immutable action")
@@ -422,29 +421,27 @@ class CompilerService:
                 upstream_head: str | None=None,fault: Callable[[str],None] | None=None,at: str | None=None) -> dict[str,Any]:
         plan=catalog.get(plan_id,"plan");plan_hash=catalog.hash(plan_id)
         domain_plan=any(op["operation"] in DOMAIN_OPERATIONS for op in plan["operations"])
-        def verify_request() -> None:
+        def verify_request(accepted_at: str) -> None:
             # Current capability and application policy; independent of graph
             # state, so it is valid for first commit and idempotent retry alike.
             # Re-run under the commit lock, where a credential may have expired
             # or an application policy/trust root changed while this call waited.
-            reviewed=verify_authorization(self.trust,authorization,plan,plan_hash,at=at,sandbox=self.backend.sandbox)
-            self.trust.verify(preflight,"PREFLIGHT",at=at)
+            reviewed=verify_authorization(self.trust,authorization,plan,plan_hash,at=accepted_at,sandbox=self.backend.sandbox)
+            self.trust.verify(preflight,"PREFLIGHT",at=accepted_at)
             if domain_plan:
                 from .domains import validate_catalog as validate_domain_catalog
                 validate_domain_catalog(catalog)
                 verify_review_attribution(catalog,plan,authorization["payload"]["reviewed_by"],
-                                          at=at or now(),approval_issued_at=authorization["issued_at"])
+                                          at=accepted_at,approval_issued_at=authorization["issued_at"])
             verify_preflight_payload(preflight,plan,plan_hash,policy_version=self.policy_version,
                                      population=self.population,reviewed=reviewed)
-            self._check_policy_and_provenance(catalog,plan,reviewed=reviewed,at=at)
+            self._check_policy_and_provenance(catalog,plan,reviewed=reviewed,at=accepted_at)
         if domain_plan:
             # Fail fast before waiting for the owner lock; not the authority.
-            verify_request()
+            verify_request(at or now())
         operation={"action":"PUBLISH_PLAN","plan_id":plan_id,"plan_hash":plan_hash,"policy_version":self.policy_version,
                    "population":self.population,"security_scope":self.scope}
         def apply(state,statuses):
-            if not domain_plan:
-                verify_request()
             snapshot=catalog.get(plan["snapshot_id"],"graph-snapshot")
             require(state["schema_hash"]==plan["schema_hash"] and snapshot==snapshot_body(state),"SNAPSHOT_BINDING","commit snapshot differs")
             prospective=validate_plan(catalog,plan,source_status=statuses)
@@ -456,18 +453,34 @@ class CompilerService:
                 elif op["operation"]=="ATTACH_CANDIDATE_METADATA":state["metadata"].setdefault(op["candidate_id"],{})[op["id"]]=deepcopy(op["metadata"])
             return state
         catalog.put("receipt",authorization);catalog.put("receipt",preflight)
-        from .ledger import build_ledger
-        lineage=build_ledger(catalog,run_id=plan["run_id"],execution_mode=plan["execution_mode"],created_at=plan["created_at"])
+        from .ledger import build_ledger, references
+        missing_snapshot_refs = {ref for record in catalog.all("graph-snapshot")
+                                 for ref, _ in references(record) if ref not in catalog}
+        erased_refs = frozenset()
+        if missing_snapshot_refs:
+            with self.backend._lock:
+                tombstones = {ref: hash_ for ref, hash_ in self.backend.db.execute("SELECT id,hash FROM trace_erased")
+                              if ref in missing_snapshot_refs}
+                if tombstones:
+                    erased_refs = frozenset(ref for (body,) in self.backend.db.execute("SELECT body FROM trace_journal")
+                                            for ref, hash_ in loads(body)["record_hashes"].items()
+                                            if tombstones.get(ref) == hash_)
+        lineage=build_ledger(catalog,run_id=plan["run_id"],execution_mode=plan["execution_mode"],
+                             created_at=plan["created_at"],erased_snapshot_refs=erased_refs)
         computed_head=lineage[-1]["hash"] if lineage else None
         require(upstream_head is None or upstream_head==computed_head,"LEDGER_BINDING","supplied head differs from verified lineage")
-        def verify_authority_under_lock():
+        def verify_authority_under_lock() -> str:
             if domain_plan:
-                verify_request()
-            # A publication extends the journal's existing classification state.
-            if domain_plan or "classifications" in self.backend.state():
                 audit=self.backend.audit(trust=self.trust)
                 require(audit["classification_replay"]=="PASS","REPLAY_CONTENT_UNAVAILABLE",
-                        "publication cannot extend unauditable classification history")
+                        "classification publication requires replayable classification history")
+            elif erased_refs or "classifications" in self.backend.state():
+                # Ordinary writes preserve the projection. Check historical integrity
+                # without requiring current authority from historical classification issuers.
+                self.backend.audit()
+            accepted_at = at or now()
+            verify_request(accepted_at)
+            return accepted_at
         return self.backend._transaction(key=plan["idempotency_key"],fingerprint=digest(operation),expected_version=plan["graph_version"],
                   operation=operation,catalog=catalog,apply=apply,authorization_hash=digest(authorization),preflight_hash=digest(preflight),
                   upstream_head=computed_head,fault=fault,at=at,lineage_prefix=lineage,authority_check=verify_authority_under_lock)
