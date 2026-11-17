@@ -87,6 +87,14 @@ jobs:
           # Four process-exit cases use POSIX fork and run in the Linux test matrix.
           grep -Eq '^Ran 17 tests in ' "$RUNNER_TEMP/windows-phase-restore.log"
           grep -Eq '^OK \(skipped=4\)[[:space:]]*$' "$RUNNER_TEMP/windows-phase-restore.log"
+      - name: Run the six native Windows domain-index ownership cases
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_research_domain_index_phase_windows.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-domain-index.log"
+          grep -Eq '^Ran 6 tests in ' "$RUNNER_TEMP/windows-domain-index.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-domain-index.log"
       - name: Sanitized Windows trustee serialization diagnostics
         if: always()
         continue-on-error: true
