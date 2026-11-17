@@ -49,7 +49,7 @@ claim scope review_policy overall strata checks missing_representation measured_
 challenge image_counts sample_counts screened_exposure_count all_sampled_case_count primary_n
 challenge_case_count reference_status_counts route_counts costs paid_calls paid_spend_usd graph_writes
 stages stage failure_totals execution_bound rejected_partial_or_absent_accepts_count source_evaluation_sha256
-execution_mode conversion_error_count truncated_case_count
+execution_mode conversion_error_count truncated_case_count reviewer_kind assistant
 """.split())
 CHECKS = {"minimum_accepted", "minimum_resolved_complete", "zero_false_accepts", "strict_precision",
     "strict_complete_recall", "reference_resolution"} | {f"challenge_{name}_{kind}" for name in QUOTAS
@@ -125,7 +125,7 @@ def build_report(evaluation, *, execution=None, execution_mode=None):
         assert_redacted(result)
         return result
     require(e.get("review_policy") == REVIEW_POLICY, "review_policy_required")
-    result.update(execution_mode=execution_mode or "UNVERIFIED", review_policy=REVIEW_POLICY, overall=_redacted_summary(e["primary"]),
+    result.update(execution_mode=execution_mode or "UNVERIFIED", reviewer_kind="assistant", review_policy=REVIEW_POLICY, overall=_redacted_summary(e["primary"]),
         strata=summaries(e["challenge"]))
     require(isinstance(e["checks"], dict) and all(k in CHECKS and type(v) is bool for k, v in e["checks"].items()), "invalid_report_checks")
     result["checks"] = {k: v for k, v in e["checks"].items()}
@@ -244,7 +244,12 @@ def write_report(data_root, output_relative, evaluation_descriptor, *, execution
     assert_redacted(report)
     store.recheck()
     if replay_trust is not None:
+        from src.parallel_source_v4.image_ocr import code_identity
         require(_trust_identity(trust) == replay_trust, "review_trust_changed_during_reporting")
+        require(evaluator_identity() == evaluation["code_sha256"] and
+                code_identity() == evaluation["image_code_sha256"] and
+                runtime_receipt(runtime_lock) == evaluation["runtime"],
+                "evaluation_environment_changed_during_reporting")
     require(not invalidation.exists(), "publication_invalidated_or_not_evaluation")
     return {"relative": output_relative, "sha256": write_once(output, report)}
 

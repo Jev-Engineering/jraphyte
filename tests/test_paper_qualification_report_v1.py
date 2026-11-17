@@ -35,7 +35,7 @@ def evaluation():
         all_sampled_case_count=480, cases={r["work_id"]: r for r in primary+challenge},
         image_counts={k: 0 for k in ("image_proposals", "corrected_image_proposals", "raw_image_matches_final")},
         study_id="CANARY STUDY", invocation={"CANARY": "/private/CANARY"},
-        input_hashes={"/private/CANARY": "CANARY"}, runtime="CANARY", code_sha256="CANARY")
+        input_hashes={"/private/CANARY": "CANARY"}, runtime="CANARY", code_sha256="CANARY", image_code_sha256="CANARY")
     value["measured_arms"] = {method: {"selection": "diagnostic_only",
         "primary": summarize(primary), "challenge": {k: summarize(challenge) for k in QUOTAS},
         "cases": {key: {**row, "status": "error" if index == 0 else "truncated" if index == 1 else "ok"}
@@ -239,7 +239,10 @@ class AggregateTests(unittest.TestCase):
                 current = {**value, "status": status, "qualification_pass": status == "PASS"}
                 ev = published(root, current, status)
                 output = status+".json"
-                with patch("src.paper_qualification_v1.evaluate", return_value=current):
+                with patch("src.paper_qualification_v1.evaluate", return_value=current), \
+                        patch("src.paper_qualification_report_v1.evaluator_identity", return_value="CANARY"), \
+                        patch("src.parallel_source_v4.image_ocr.code_identity", return_value="CANARY"), \
+                        patch("src.paper_qualification_report_v1.runtime_receipt", return_value="CANARY"):
                     with self.assertRaisesRegex(EvidenceError, "execution_not_bound"):
                         write_report(root, output, ev, execution_descriptor=wrong_ex, **anchors)
                     result = write_report(root, output, ev, **anchors)
@@ -248,6 +251,7 @@ class AggregateTests(unittest.TestCase):
                     self.assertEqual(report["source_evaluation_sha256"], ev["sha256"])
                     self.assertEqual(report["status"], status)
                     self.assertEqual(report["execution_mode"], "AUTHORED_CONTRACT_TEST")
+                    self.assertEqual(report["reviewer_kind"], "assistant")
                     for arm in report["measured_arms"].values():
                         self.assertEqual(arm["conversion_error_count"], 1)
                         self.assertEqual(arm["truncated_case_count"], 1)
@@ -262,6 +266,11 @@ class AggregateTests(unittest.TestCase):
                     write_report(root, "new.json", ev, **anchors)
             current = {**value, "status": "FAIL", "qualification_pass": False}
             ev = published(root, current, "replayed")
+            with patch("src.paper_qualification_v1.evaluate", return_value=current), \
+                    patch("src.paper_qualification_report_v1.evaluator_identity", return_value="changed"):
+                with self.assertRaisesRegex(EvidenceError, "evaluation_environment_changed_during_reporting"):
+                    write_report(root, "drifted.json", ev, **anchors)
+            self.assertFalse((root / "drifted.json").exists())
             def bound_input_changed(*args, **kwargs):
                 (root / wrong_ex["relative"]).write_text("{}")
                 return build_report(*args, **kwargs)
