@@ -13,6 +13,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -92,21 +94,61 @@ print(json.dumps(result))
 '''
 
 
+class WheelValidationError(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 def audit_wheel(wheel: Path) -> str:
     if wheel.suffix != ".whl":
-        raise ValueError("expected an actual .whl file")
+        raise WheelValidationError("INVALID_WHEEL_TYPE", "expected an actual .whl file")
     with zipfile.ZipFile(wheel) as archive:
         if archive.testzip() is not None:
-            raise ValueError("wheel CRC failure")
+            raise WheelValidationError("WHEEL_CRC_FAILURE", "wheel CRC failure")
         names = archive.namelist()
     for name in names:
         parts = PurePosixPath(name).parts
         if name.startswith("/") or ".." in parts or "\\" in name:
-            raise ValueError("unsafe wheel member path")
+            raise WheelValidationError("UNSAFE_WHEEL_MEMBER", "unsafe wheel member path")
     missing = [name for name in DOMAIN_SCHEMAS if f"trace_gc/data/schemas/{name}.schema.json" not in names]
     if missing or TAXONOMY not in names:
-        raise ValueError("wheel lacks domain resources: " + ",".join(missing))
-    return hashlib.sha256(wheel.read_bytes()).hexdigest()
+        raise WheelValidationError("MISSING_DOMAIN_RESOURCES", "wheel lacks domain resources")
+    with wheel.open("rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest()
+
+
+def _unique_keys(pairs: list[tuple[str, object]]) -> dict:
+    result = dict(pairs)
+    if len(result) != len(pairs):
+        raise ValueError("duplicate JSON keys")
+    return result
+
+
+def _smoke_result(stdout: str) -> dict:
+    invalid = WheelValidationError("INVALID_SMOKE_RESULT", "invalid installed smoke result")
+    try:
+        result = json.loads(stdout, object_pairs_hook=_unique_keys)
+    except (ValueError, RecursionError):
+        raise invalid from None
+    required = {
+        "status": "PASS",
+        "installed_imports": True,
+        "checkout_imports": False,
+        "domain_contract_lifecycle": "PASS",
+        "reference_taxonomy_review": "PROPOSED",
+    }
+    if not isinstance(result, dict) or set(result) != {*required, "schema_count", "cli_version"}:
+        raise invalid
+    for key, expected in required.items():
+        if type(result[key]) is not type(expected) or result[key] != expected:
+            raise invalid
+    if type(result["schema_count"]) is not int or result["schema_count"] < len(DOMAIN_SCHEMAS):
+        raise invalid
+    version = result["cli_version"]
+    if not isinstance(version, str) or not re.fullmatch(r"TRACE-GC [0-9][0-9A-Za-z.+!-]{0,63}", version):
+        raise invalid
+    return result
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -115,32 +157,53 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args(argv)
     report: dict = {"status": "NOT_RUN", "production_qualified": False, "scope": "installed-wheel-synthetic-reference-only"}
-    code = 1
+    stage = "staging"
     try:
-        wheel = args.wheel.resolve(strict=True)
-        report["wheel_sha256"] = audit_wheel(wheel)
-        report["wheel_bytes"] = wheel.stat().st_size
         with tempfile.TemporaryDirectory(prefix="trace-gc-domain-wheel-") as temporary:
-            target, outside = Path(temporary) / "installed", Path(temporary) / "outside"
+            root = Path(temporary)
+            staged = root / "wheel"
+            staged.mkdir()
+            wheel = staged / args.wheel.name
+            shutil.copyfile(args.wheel, wheel)
+
+            stage = "audit"
+            report["wheel_sha256"] = audit_wheel(wheel)
+            report["wheel_bytes"] = wheel.stat().st_size
+
+            stage = "install"
+            target, outside = root / "installed", root / "outside"
             outside.mkdir()
             install = subprocess.run([sys.executable, "-I", "-m", "pip", "install", "--no-index", "--no-deps",
-                                      "--target", str(target), str(wheel)], cwd=outside, text=True,
-                                     capture_output=True, timeout=300)
+                                      "--target", str(target), str(wheel)], cwd=outside, capture_output=True,
+                                     timeout=300)
             report["pip_returncode"] = install.returncode
             if install.returncode:
-                raise RuntimeError("pip install failed: " + install.stderr[-400:])
+                raise WheelValidationError("PIP_FAILED", "offline wheel installation failed")
+
+            stage = "smoke"
             smoke = subprocess.run([sys.executable, "-I", "-c", SMOKE, str(target), json.dumps(list(DOMAIN_SCHEMAS))],
-                                   cwd=outside, text=True, capture_output=True, timeout=900)
+                                   cwd=outside, capture_output=True, timeout=900)
             report["smoke_returncode"] = smoke.returncode
             if smoke.returncode:
-                raise RuntimeError("installed smoke failed: " + (smoke.stderr or smoke.stdout)[-1200:])
-            report.update(json.loads(smoke.stdout.strip().splitlines()[-1]))
-            code = 0
-    except Exception as exc:  # reported, never converted into a pass
-        report.update(status="FAIL", error=f"{type(exc).__name__}: {exc}")
+                raise WheelValidationError("SMOKE_FAILED", "installed contract smoke failed")
+            try:
+                result = _smoke_result(smoke.stdout.decode("utf-8"))
+            except UnicodeDecodeError:
+                raise WheelValidationError("INVALID_SMOKE_RESULT", "invalid installed smoke result") from None
+        report.update(result)
+    except WheelValidationError as exc:
+        report.update(status="FAIL", error={"stage": stage, "code": exc.code, "message": str(exc)})
+    except subprocess.TimeoutExpired:
+        report.update(status="FAIL", error={"stage": stage, "code": "TIMEOUT", "message": "validation subprocess timed out"})
+    except zipfile.BadZipFile:
+        report.update(status="FAIL", error={"stage": stage, "code": "INVALID_WHEEL_ARCHIVE", "message": "invalid wheel archive"})
+    except OSError:
+        report.update(status="FAIL", error={"stage": stage, "code": "IO_FAILED", "message": "validation I/O failed"})
+    except Exception:
+        report.update(status="FAIL", error={"stage": stage, "code": "VALIDATION_FAILED", "message": "wheel validation failed"})
     args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8", newline="\n")
     print(json.dumps(report, indent=2))
-    return code
+    return 0 if report["status"] == "PASS" else 1
 
 
 if __name__ == "__main__":

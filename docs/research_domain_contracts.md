@@ -64,11 +64,13 @@ the packaged taxonomy is an installed-wheel resource under
 `trace_gc/data/research_domains/`. Schema IDs for old contracts are unchanged;
 new records contain their own explicit contract version.
 
-`tools/validate_domain_wheel.py --wheel <wheel> --report <json>` installs a built
-wheel with `--no-index --no-deps` into a temporary target and, from outside the
-checkout, checks that the domain modules and schema resources come from the
-installed copy and runs a synthetic contract lifecycle. It reports `FAIL`, never
-`PASS`, when the wheel is absent, unsafe or incomplete.
+`tools/validate_domain_wheel.py --wheel <wheel> --report <json>` audits and
+hashes a private temporary copy of a wheel built from trusted project source,
+then installs that same copy with `--no-index --no-deps`. The isolated
+interpreter starts outside the checkout, checks the installed domain modules
+and schema resources, and runs a synthetic contract lifecycle. Missing,
+unsafe or incomplete artifacts produce a structured `FAIL` report with a
+validation stage and error code.
 
 No migration is performed by importing a catalog or opening an existing source.
 Publication, append-only migration, historical selection, and rollback are
