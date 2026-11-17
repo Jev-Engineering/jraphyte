@@ -42,3 +42,18 @@ def extend(schemas):
     schemas["record"]["properties"]["kind"]["enum"].extend(
         ["research-domain-taxonomy", "classification-assignment"])
 
+    projection = obj({"contract_version": {"const": 1}, "revision": positive,
+                      "assignments": {"type": "object", "additionalProperties": deepcopy(s)}})
+    schemas["classification-projection"] = projection
+    schemas["graph-snapshot"]["properties"]["classifications"] = deepcopy(projection)
+    schemas["plan"]["properties"]["classification_revision"] = {"type": "integer", "minimum": 1}
+    operation = obj({"id": s, "operation": {"const": "SET_SOURCE_CLASSIFICATION"}, "risk_class": {"const": "R1"},
+                     "assignment_id": s, "assignment_hash": h, "source_snapshot_id": s, "source_hash": h,
+                     "taxonomy_id": s, "taxonomy_hash": h, "expected_assignment_id": nullable(s),
+                     "expected_assignment_hash": nullable(h)})
+    migration = obj({"id": s, "operation": {"const": "INITIALIZE_RESEARCH_DOMAINS"},
+                     "risk_class": {"const": "R1"}, "reason": s})
+    schemas["plan"]["properties"]["operations"]["items"]["oneOf"].extend([operation, migration])
+    schemas["transaction"]["properties"].update(classification_revision=positive, classification_hash=h)
+    schemas["transaction"]["dependentRequired"] = {"classification_revision": ["classification_hash"],
+                                                     "classification_hash": ["classification_revision"]}

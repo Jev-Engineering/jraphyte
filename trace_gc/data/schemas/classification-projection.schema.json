@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:trace-gc:0.3.0:classification-projection",
+  "title": "TRACE-GC classification-projection v0.3.0",
+  "type": "object",
+  "properties": {
+    "contract_version": {
+      "const": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "assignments": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "required": [
+    "contract_version",
+    "revision",
+    "assignments"
+  ],
+  "additionalProperties": false
+}
