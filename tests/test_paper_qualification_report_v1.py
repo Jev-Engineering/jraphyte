@@ -38,7 +38,8 @@ def evaluation():
         input_hashes={"/private/CANARY": "CANARY"}, runtime="CANARY", code_sha256="CANARY")
     value["measured_arms"] = {method: {"selection": "diagnostic_only",
         "primary": summarize(primary), "challenge": {k: summarize(challenge) for k in QUOTAS},
-        "cases": value["cases"]} for method in METHODS}
+        "cases": {key: {**row, "status": "error" if index == 0 else "truncated" if index == 1 else "ok"}
+            for index, (key, row) in enumerate(value["cases"].items())}} for method in METHODS}
     return value
 
 
@@ -246,6 +247,10 @@ class AggregateTests(unittest.TestCase):
                     report = json.loads((root/output).read_text())
                     self.assertEqual(report["source_evaluation_sha256"], ev["sha256"])
                     self.assertEqual(report["status"], status)
+                    self.assertEqual(report["execution_mode"], "AUTHORED_CONTRACT_TEST")
+                    for arm in report["measured_arms"].values():
+                        self.assertEqual(arm["conversion_error_count"], 1)
+                        self.assertEqual(arm["truncated_case_count"], 1)
                     self.assertTrue(report["execution_bound"])
                     self.assertEqual(report["failure_totals"], {"failures": 6, "retries": 12})
                     self.assertNotIn("CANARY", json.dumps(report))

@@ -31,6 +31,7 @@ REASONS = {REDACTED_REASON, "missing_or_invalid_bound_study_evidence",
     "execution_descriptor_required", "execution_not_bound_to_evaluation", "report_output_exists",
     "publication_invalidated_or_not_evaluation", "publication_completion_required"}
 SHA = re.compile(r"[0-9a-f]{64}")
+STUDY_MODES = {"REAL_LOCAL", "AUTHORED_CONTRACT_TEST"}
 STATUSES = {"PASS", "FAIL", "BLOCKED", "AUTHORED_CONTRACT_PASS_NOT_QUALIFICATION"}
 SELECTIONS = {"automatic_primary_before_review", "diagnostic_only"}
 REFERENCES = {"complete", "partial_on_page_one", "no_abstract_text", "uncertain"}
@@ -48,11 +49,12 @@ claim scope review_policy overall strata checks missing_representation measured_
 challenge image_counts sample_counts screened_exposure_count all_sampled_case_count primary_n
 challenge_case_count reference_status_counts route_counts costs paid_calls paid_spend_usd graph_writes
 stages stage failure_totals execution_bound rejected_partial_or_absent_accepts_count source_evaluation_sha256
+execution_mode conversion_error_count truncated_case_count
 """.split())
 CHECKS = {"minimum_accepted", "minimum_resolved_complete", "zero_false_accepts", "strict_precision",
     "strict_complete_recall", "reference_resolution"} | {f"challenge_{name}_{kind}" for name in QUOTAS
     for kind in ("safety", "utility", "actual_image_route")}
-VOCABULARY = CHECKS | FIELDS | set(STAGES) | set(QUOTAS) | {k+":complete" for k in QUOTAS} | set(METHODS) | STATUSES | SELECTIONS | REFERENCES | ROUTES | {REVIEW_POLICY, VERSION, EVALUATION_VERSION, CLAIM, SCOPE, "unrecognized_reason_redacted"}
+VOCABULARY = CHECKS | FIELDS | set(STAGES) | set(QUOTAS) | {k+":complete" for k in QUOTAS} | set(METHODS) | STATUSES | STUDY_MODES | {"NOT_RUN", "UNVERIFIED"} | SELECTIONS | REFERENCES | ROUTES | {REVIEW_POLICY, VERSION, EVALUATION_VERSION, CLAIM, SCOPE, "unrecognized_reason_redacted"}
 
 
 def integer(value):
@@ -104,7 +106,7 @@ def reason_code(value):
     return value if type(value) is str and value in REASONS else REDACTED_REASON
 
 
-def build_report(evaluation, *, execution=None):
+def build_report(evaluation, *, execution=None, execution_mode=None):
     require(isinstance(evaluation, dict), "evaluation_required")
     e = evaluation
     status = e.get("status")
@@ -113,15 +115,17 @@ def build_report(evaluation, *, execution=None):
         and type(e.get("graph_writes")) is int and e["graph_writes"] == 0
         and type(e.get("paid_calls")) is int and e["paid_calls"] == 0
         and e.get("qualification_pass") is (status == "PASS"), "evaluation_contract_required")
+    require(execution_mode is None or execution_mode in STUDY_MODES, "invalid_study_mode")
     result = {"version": VERSION, "source_evaluation_version": EVALUATION_VERSION,
         "status": status, "qualification_pass": status == "PASS",
         "independent_human_qualification": False, "claim": CLAIM, "scope": SCOPE}
     if status == "BLOCKED" and "primary" not in e:
+        result["execution_mode"] = "NOT_RUN"
         result["reason_code"] = reason_code(e.get("reason"))
         assert_redacted(result)
         return result
     require(e.get("review_policy") == REVIEW_POLICY, "review_policy_required")
-    result.update(review_policy=REVIEW_POLICY, overall=_redacted_summary(e["primary"]),
+    result.update(execution_mode=execution_mode or "UNVERIFIED", review_policy=REVIEW_POLICY, overall=_redacted_summary(e["primary"]),
         strata=summaries(e["challenge"]))
     require(isinstance(e["checks"], dict) and all(k in CHECKS and type(v) is bool for k, v in e["checks"].items()), "invalid_report_checks")
     result["checks"] = {k: v for k, v in e["checks"].items()}
@@ -134,8 +138,14 @@ def build_report(evaluation, *, execution=None):
     for method in METHODS:
         arm = e["measured_arms"][method]
         require(arm["selection"] in SELECTIONS, "invalid_arm_selection")
+        cases = arm["cases"]
+        require(type(cases) is dict and len(cases) == e["all_sampled_case_count"] and
+            all(type(row) is dict and type(row.get("status")) is str for row in cases.values()),
+            "arm_case_status_required")
         result["measured_arms"][method] = {"selection": arm["selection"],
-            "primary": _redacted_summary(arm["primary"]), "challenge": summaries(arm["challenge"])}
+            "primary": _redacted_summary(arm["primary"]), "challenge": summaries(arm["challenge"]),
+            "conversion_error_count": sum(row["status"] == "error" for row in cases.values()),
+            "truncated_case_count": sum(row["status"] == "truncated" for row in cases.values())}
     exact(e["image_counts"], IMAGES, "image_counts_required")
     result["image_counts"] = {k: integer(e["image_counts"][k]) for k in IMAGES}
     total = integer(e["all_sampled_case_count"])
@@ -215,9 +225,10 @@ def write_report(data_root, output_relative, evaluation_descriptor, *, execution
                   "sha256": marker.get("public_summary_sha256")})
     verify_published(root, evaluation_descriptor, expected_preregistration_sha256=expected_preregistration_sha256,
         trust=trust, runtime_lock=runtime_lock, qualification_only=False)
-    execution = None
+    execution = execution_mode = None
     if "input_hashes" in evaluation:
         bundle = read_study_bundle(store, evaluation["invocation"]["bundle_descriptor"])
+        execution_mode = bundle["execution_mode"]
         bound = bundle["execution"]
         require((execution_descriptor is None or execution_descriptor == bound)
             and evaluation["input_hashes"].get(bound["relative"]) == bound["sha256"],
@@ -225,7 +236,7 @@ def write_report(data_root, output_relative, evaluation_descriptor, *, execution
         execution = store.json(bound)
     else:
         require(execution_descriptor is None, "execution_not_bound_to_evaluation")
-    report = build_report(evaluation, execution=execution)
+    report = build_report(evaluation, execution=execution, execution_mode=execution_mode)
     report["source_evaluation_sha256"] = evaluation_descriptor["sha256"]
     assert_redacted(report)
     store.recheck()

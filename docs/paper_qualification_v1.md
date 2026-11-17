@@ -323,7 +323,7 @@ STUDY=validation_v3_private/qualification-UNIQUE
    outside the repository, the bundle hash and descriptor shape, the bound
    preregistration pointer, its externally supplied hash and the required protocol
    and frame descriptors. It also checks that the output path is fresh and has
-   directory ancestors, the optional PDF/image dependencies are importable, and the evaluator
+   directory ancestors, the optional PDF/image dependencies are discoverable, and the evaluator
    identity and runtime receipt compute under the runtime lock.
 
    ```sh
