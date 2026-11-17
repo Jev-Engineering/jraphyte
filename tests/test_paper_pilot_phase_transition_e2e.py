@@ -316,7 +316,9 @@ class PhaseTransitionTests(PhaseFixture, unittest.TestCase):
         for record in self.capsule['catalog_records']:
             self.assertEqual(self.catalog.record(record['id']), record)
         self.assertFalse(any(r['kind'] == 'SEMANTIC_RESPONSE' for r in self.pilot.requests.values()))
-        self.pilot.semantic_execution_context('compile')
+        with self.assertRaises(ContractError) as caught:
+            self.pilot.semantic_execution_context('compile')
+        self.assertEqual(caught.exception.code, 'PHASE_HISTORICAL_REQUEST')
         # An identical replay of the pending COMPILE runs through the phased
         # _step guard and returns the durable result without a second charge.
         self.assertEqual(self.pilot.compile_candidates('compile', candidates=self.candidates),
@@ -339,7 +341,7 @@ class PhaseTransitionTests(PhaseFixture, unittest.TestCase):
 
     def test_historical_compile_cannot_import_but_new_phase_work_survives_reopen(self):
         self.cutover(); self.restore(); self.open_target(); self.import_phase(); self.controller_open()
-        self.activate()
+        activation = self.activate()
         self.reopen_target()
         historical = self.pilot.requests['compile']['result']
         response = fixtures.fixture_response(self.catalog.get(historical['pack_id'], 'pack'))
@@ -356,6 +358,8 @@ class PhaseTransitionTests(PhaseFixture, unittest.TestCase):
 
         compiled = self.pilot.compile_candidates('new-compile', candidates=self.candidates)
         self.assertNotEqual(compiled['request_sha256'], historical['request_sha256'])
+        self.assertEqual(self.pilot.semantic_execution_context('new-compile')['pack_sha256'],
+                         compiled['pack_sha256'])
         response = fixtures.fixture_response(self.catalog.get(compiled['pack_id'], 'pack'))
         result = self.pilot.record_semantic_response('new-response', compile_id='new-compile',
             response=response, execution_receipt=execution(self, 'new-compile', 'SEMANTIC', response))
@@ -375,7 +379,44 @@ class PhaseTransitionTests(PhaseFixture, unittest.TestCase):
         self.assertEqual(self.pilot.requests['compile']['result'], historical)
         self.assertEqual(self.backend.state(), state)
         self.assertEqual(self.budget.snapshot(), budget)
+        self.controller.prepare('paper-page-2', self.pdf)
+        stores = (self.pilot.db, self.backend.db, self.budget.db, self.controller.db)
+        before = [exporter._logical(db) for db in stores]
+        self.assertEqual(self.activate(), activation)
+        self.assertEqual([exporter._logical(db) for db in stores], before)
         self.assertEqual(files(self.archive), self.old_bytes)
+
+    def test_active_budget_rejects_alias_rollback_and_missing_row(self):
+        self.cutover(); self.restore(); self.open_target(); self.import_phase(); self.controller_open()
+        self.activate()
+        run_id = self.config['run_id']
+        original = self.budget.snapshot()
+
+        def open_budget(id_):
+            return RunBudget(self.target / 'budget.sqlite3', id_, original['limits'],
+                             phase_authority=self.authority)
+
+        before = exporter._logical(self.budget.db)
+        with self.assertRaises(ContractError) as caught:
+            open_budget('other-authored-run')
+        self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+        self.assertEqual(exporter._logical(self.budget.db), before)
+
+        for key in ('model_calls', 'request_bytes'):
+            with self.subTest(counter=key):
+                used = {**original['used'], key: original['used'][key] - 1}
+                self.budget.db.execute('UPDATE trace_budgets SET used=? WHERE run_id=?', (dumps(used), run_id))
+                with self.assertRaises(ContractError) as caught:
+                    open_budget(run_id)
+                self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+                with self.assertRaises(ContractError) as caught:
+                    self.activate()
+                self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+        self.budget.db.execute('DELETE FROM trace_budgets WHERE run_id=?', (run_id,))
+        with self.assertRaises(ContractError) as caught:
+            open_budget(run_id)
+        self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+        self.assertEqual(self.budget.db.execute('SELECT * FROM trace_budgets').fetchall(), [])
 
     def test_import_replay_and_activation_reject_missing_or_changed_historical_blob(self):
         self.cutover(); self.restore(); self.open_target(); self.import_phase(); self.controller_open()

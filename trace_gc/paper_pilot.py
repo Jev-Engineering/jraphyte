@@ -733,6 +733,10 @@ class PaperPilot:
         self._fresh(result["stamp"])
         return result, pack
 
+    def _require_current_semantic_compile(self, compile_id):
+        require(compile_id not in self._historical_request_ids,
+                "PHASE_HISTORICAL_REQUEST", "historical compile is held for audit")
+
     @boundary
     def semantic_execution_context(self, compile_id):
         """Fresh application callback for a separately authorized local execution.
@@ -740,6 +744,7 @@ class PaperPilot:
         This does not reserve another model call, sign a response or run a model.
         The durable COMPILE intent must already exist.
         """
+        self._require_current_semantic_compile(compile_id)
         result, pack = self._pack_fresh(compile_id)
         context = {"pack_sha256": self.catalog.hash(result["pack_id"]),
                    "graph_version": pack["graph_version"], "schema_hash": pack["schema_hash"],
@@ -825,8 +830,7 @@ class PaperPilot:
 
     @boundary
     def record_semantic_response(self, id_, *, compile_id, response, execution_receipt, local_execution=None):
-        require(compile_id not in self._historical_request_ids,
-                "PHASE_HISTORICAL_REQUEST", "phase import does not authorize an outcome for a historical compile")
+        self._require_current_semantic_compile(compile_id)
         result, pack = self._pack_fresh(compile_id)
         require(type(response) is bytes, "PILOT_EXECUTION", "original response bytes required")
         self._execution(compile_id, "SEMANTIC", response, execution_receipt, local_execution)
