@@ -16,8 +16,8 @@ import subprocess
 from subprocess import SubprocessError
 
 from trace_gc.canonical import bytes_digest, dumps, loads
-from trace_gc.errors import require
-from trace_gc.phase_authority import (_plain_absolute_path, canonical_dacl_ace, dacl_has_ace,
+from trace_gc.errors import ContractError, require
+from trace_gc.phase_authority import (_dacl_aces, _plain_absolute_path, canonical_dacl_ace, dacl_has_ace,
                                       dacl_has_deny_trustee,
                                       directory_dacl_sddl)
 
@@ -64,9 +64,11 @@ def _denial_problem(parent: Path) -> str | None:
     return TOKEN_NOT_REFUSED
 
 
-def _restore_parent_dacl(parent: Path, backup: Path, original: str) -> str | None:
+def _restore_parent_dacl(parent: Path, backup: Path, original: str, backup_digest: str) -> str | None:
     """Restore the saved DACL, including grants altered by the deny command."""
     try:
+        if bytes_digest(backup.read_bytes()) != backup_digest:
+            return "saved DACL digest differs"
         restored = subprocess.run(["icacls.exe", str(parent.parent), "/restore", str(backup)],
                                   capture_output=True, timeout=30)
     except (OSError, SubprocessError):
@@ -84,8 +86,8 @@ def _restore_parent_dacl(parent: Path, backup: Path, original: str) -> str | Non
 
 def _clear_recovery(backup: Path) -> None:
     try:
-        backup.with_name("expected.json").unlink(missing_ok=True)
         backup.unlink(missing_ok=True)
+        backup.with_name("expected.json").unlink(missing_ok=True)
         backup.parent.rmdir()
     except OSError:
         require(False, "PHASE_FENCE", "parent DACL recovery artifact could not be cleared")
@@ -110,10 +112,14 @@ def _install_parent_deny(parent: Path, deny_sid: str, original: str, recovery: P
     if not saved_ok:
         _clear_recovery(backup)
         require(False, "PHASE_FENCE", "original parent DACL could not be saved")
-    _write_once(backup.with_name("expected.json"), {
-        "original_dacl_sha256": bytes_digest(original.encode("utf-8")),
-        "backup_sha256": bytes_digest(backup.read_bytes()),
-    })
+    try:
+        backup_digest = bytes_digest(backup.read_bytes())
+        _write_once(backup.with_name("expected.json"), {
+            "original_dacl_sha256": bytes_digest(original.encode("utf-8")),
+            "backup_sha256": backup_digest,
+        })
+    except (ContractError, OSError):
+        require(False, "PHASE_FENCE", "original parent DACL recovery digests could not be recorded")
 
     try:
         updated = subprocess.run(["icacls.exe", str(parent), "/deny", "*" + deny_sid + ":(AD)"],
@@ -126,11 +132,12 @@ def _install_parent_deny(parent: Path, deny_sid: str, original: str, recovery: P
         else:
             try:
                 current = directory_dacl_sddl(parent)
-                exact_deny = dacl_has_ace(current, DENY_PARENT_ACE, deny_sid)
-                # Remove exactly one serialized deny from the candidate. All
-                # control flags and every original ACE must compare exactly.
-                unchanged = any(ace in current and current.replace(ace, "", 1) == original
-                                for ace in (deny, DENY_PARENT_ACE.format(sid=deny_sid)))
+                before, after = _dacl_aces(original), _dacl_aces(current)
+                inserted = [index for index, ace in enumerate(after) if canonical_dacl_ace(ace) == deny]
+                exact_deny = bool(inserted)
+                # Compare the complete original entries and control flags without alias rewriting.
+                unchanged = (current.partition("(")[0] == original.partition("(")[0]
+                             and any(after[:index] + after[index + 1:] == before for index in inserted))
             except Exception:
                 problem = DACL_UNVERIFIED
             else:
@@ -147,7 +154,7 @@ def _install_parent_deny(parent: Path, deny_sid: str, original: str, recovery: P
                     _clear_recovery(backup)
                     return current
 
-    why = _restore_parent_dacl(parent, backup, original)
+    why = _restore_parent_dacl(parent, backup, original, backup_digest)
     if why is None:
         _clear_recovery(backup)
     else:

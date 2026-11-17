@@ -131,16 +131,16 @@ def canonical_dacl_trustee(trustee: str) -> str:
 
 
 def canonical_dacl_ace(ace: str) -> str:
-    """Normalize only the trustee field of one six-field ACE; all else stays exact."""
-    fields = ace[1:-1].split(";")
-    if len(fields) != 6:
+    """Normalize the fixed trustee field, preserving any condition verbatim."""
+    fields = ace[1:-1].split(";", 6)
+    if len(fields) < 6:
         return ace
     fields[5] = canonical_dacl_trustee(fields[5])
     return "(" + ";".join(fields) + ")"
 
 
-def canonical_dacl_aces(sddl: str) -> list[str]:
-    """Keep complete ACEs in order, including opaque conditional expressions."""
+def _dacl_aces(sddl: str) -> list[str]:
+    """Read raw top-level ACEs in order, including opaque conditional expressions."""
     flags, opening, tail = sddl.partition("(")
     require(flags.startswith("D:") and ")" not in flags, "PHASE_FENCE", "invalid DACL text")
     entries = opening + tail
@@ -158,9 +158,13 @@ def canonical_dacl_aces(sddl: str) -> list[str]:
         elif not quoted and char == ")":
             depth -= 1
             if not depth:
-                result.append(canonical_dacl_ace(entries[start:index + 1]))
+                result.append(entries[start:index + 1])
     require(not depth and not quoted, "PHASE_FENCE", "incomplete DACL ACE")
     return result
+
+
+def canonical_dacl_aces(sddl: str) -> list[str]:
+    return [canonical_dacl_ace(ace) for ace in _dacl_aces(sddl)]
 
 
 def dacl_has_ace(sddl: str, template: str, sid: str) -> bool:

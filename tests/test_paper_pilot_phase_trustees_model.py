@@ -310,6 +310,10 @@ class ModeledTokenGateTests(ModeledFence):
         self.assertTrue(saved_acl.with_name("expected.json").is_file())
         self.hold("parent DACL recovery is pending")
         self.assertTrue(saved_acl.is_file())
+        with patch.object(v1.subprocess, "run") as restore:
+            self.assertEqual(v1._restore_parent_dacl(self.parent, saved_acl, "", "0" * 64),
+                             "saved DACL digest differs")
+        restore.assert_not_called()
 
     def test_success_status_with_a_removed_grant_holds_and_restores_the_grant(self):
         self.model.set(self.parent, "P", ["(A;;LC;;;BU)", "(A;OICI;FA;;;BA)"])
@@ -336,8 +340,8 @@ class ModeledTokenGateTests(ModeledFence):
 
     def test_acl_comparison_error_rolls_back_the_new_deny(self):
         before = self.model.sddl(self.parent)
-        with patch.object(v1, "dacl_has_ace", side_effect=[
-                False, ContractError("PHASE_FENCE", "private diagnostic")]):
+        with patch.object(v1, "_dacl_aces",
+                          side_effect=ContractError("PHASE_FENCE", "private diagnostic")):
             self.hold(v1.DACL_UNVERIFIED)
         self.assert_no_effect(before)
 
