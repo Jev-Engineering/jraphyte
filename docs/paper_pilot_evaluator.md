@@ -36,7 +36,7 @@ trace-gc paper-pilot evaluate receipts.json --protocol protocol.json \
 ```
 
 It exits 1 with a structured `EVALUATOR_INPUT` error for any extra field,
-free-text value, duplicate row, undeclared scenario or malformed hash. No
+free-text value, duplicate row, undeclared scenario or malformed hash. The public report emits SHA-256 references for caller-supplied identifiers. Keep the receipt inputs and identifier mapping private. No
 report is written in that case.
 
 ## Row rules

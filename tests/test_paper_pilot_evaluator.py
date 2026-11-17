@@ -57,7 +57,7 @@ def receipts():
 
 
 def rows(report, section):
-    return {r.get("question_sha256") or r.get("assertion_id") or r.get("scenario"): r for r in report["rows"][section]}
+    return {r.get("question_sha256") or r.get("assertion_id_sha256") or r.get("scenario_sha256"): r for r in report["rows"][section]}
 
 
 class AggregateEvaluatorTests(unittest.TestCase):
@@ -113,12 +113,12 @@ class AggregateEvaluatorTests(unittest.TestCase):
                            ("transaction_version", None), ("transaction_version", 3), ("observation_ids", [])):
             with self.subTest(field=field):
                 value = receipts(); value["assertions"][0][field] = bad
-                self.assertEqual(rows(evaluate(protocol(), value, []), "assertions")["cand-1"]["reason"],
+                self.assertEqual(rows(evaluate(protocol(), value, []), "assertions")[question_sha256("cand-1")]["reason"],
                                  "INCOMPLETE_GRAPH_CHAIN")
         value = receipts()
         value["assertions"].append({**value["assertions"][0], "assertion_id": "cand-unexpected"})
         report = evaluate(protocol(), value, [])
-        self.assertEqual(rows(report, "assertions")["cand-unexpected"]["reason"], "UNEXPECTED_ASSERTION")
+        self.assertEqual(rows(report, "assertions")[question_sha256("cand-unexpected")]["reason"], "UNEXPECTED_ASSERTION")
 
     def test_answer_version_is_compared_with_receipt_graph_version(self):
         value = receipts()
@@ -150,16 +150,16 @@ class AggregateEvaluatorTests(unittest.TestCase):
         report = evaluate(protocol(), value, [])
         self.assertEqual(report["verdict"], "HOLD")
         self.assertEqual(rows(report, "questions")[QUESTION]["status"], "INVALIDATED")
-        self.assertEqual(rows(report, "assertions")["cand-1"]["status"], "INVALIDATED")
+        self.assertEqual(rows(report, "assertions")[question_sha256("cand-1")]["status"], "INVALIDATED")
         self.assertEqual(report["metrics"]["citation_chains"]["invalidated"], 1)
 
     def test_latest_attempt_per_question_is_scored(self):
         value = receipts()
         later = copy.deepcopy(value["answers"][0])
-        later.update(retrieval_id="retrieve-q1-again", state="ABSTAIN_NO_AUTHORIZED_EVIDENCE",
+        later.update(retrieval_id="retrieve-q1-again", prepare_id="prepare-q1-again", state="ABSTAIN_NO_AUTHORIZED_EVIDENCE",
                      abstention_reason="NO_AUTHORIZED_EVIDENCE", claims=[], response_id=None, review_id=None, reviewer_kind=None)
         value["answers"].append(later)
-        self.assertEqual(rows(evaluate(protocol(), value, []), "questions")[QUESTION]["retrieval_id"], "retrieve-q1-again")
+        self.assertEqual(rows(evaluate(protocol(), value, []), "questions")[QUESTION]["retrieval_id_sha256"], question_sha256("retrieve-q1-again"))
 
     def test_text_fields_undeclared_inputs_and_duplicates_are_rejected(self):
         mutations = [
@@ -168,6 +168,8 @@ class AggregateEvaluatorTests(unittest.TestCase):
             lambda r: r["source_reviews"][0].update(source_id="a free text sentence with spaces"),
             lambda r: r["source_reviews"][0].update(independent_review=True),
             lambda r: r["evidence"].append(copy.deepcopy(r["evidence"][0])),
+            lambda r: r["evidence"][0].update(representation="unknown-representation"),
+            lambda r: r["answers"].append(copy.deepcopy(r["answers"][0])),
             lambda r: r.update(execution_mode="PRODUCTION"),
             lambda r: r["answers"][0].update(state="synthetic-private-state"),
             lambda r: r["answers"][1].update(abstention_reason="synthetic-private-reason"),
