@@ -35,17 +35,25 @@ def empty_projection() -> dict[str, Any]:
     return {"contract_version": 1, "revision": 0, "assignments": {}}
 
 
+def _stored_projection(state: dict[str, Any]) -> dict[str, Any] | None:
+    if "classifications" not in state:
+        return None
+    projection = state["classifications"]
+    validate("classification-projection", projection)
+    return projection
+
+
 def classification_identity(snapshot: dict[str, Any]) -> dict[str, Any]:
-    projection = snapshot.get("classifications", empty_projection())
+    stored = _stored_projection(snapshot)
+    projection = stored if stored is not None else empty_projection()
     return {"contract_version": 1, "revision": projection["revision"],
-            "hash": digest(projection), "migrated": "classifications" in snapshot}
+            "hash": digest(projection), "migrated": stored is not None}
 
 
 def verify_projection(catalog: Catalog, snapshot: dict[str, Any]) -> dict[str, Any]:
-    projection = snapshot.get("classifications")
+    projection = _stored_projection(snapshot)
     if projection is None:
         return empty_projection()
-    validate("classification-projection", projection)
     require(set(projection["assignments"]) <= set(snapshot["source_epochs"]),
             "DOMAIN_SOURCE_NOT_ADMITTED", "assignment source is not present in the snapshot")
     for source_id, assignment_id in projection["assignments"].items():
@@ -90,16 +98,17 @@ def apply_operations(catalog: Catalog, snapshot: dict[str, Any], operations: lis
                      security_scope: str) -> dict[str, Any] | None:
     """Pure prospective projection; every caller must still validate the full graph."""
     domain_ops = [op for op in operations if op["operation"] in OPERATIONS]
-    if not domain_ops:
-        return deepcopy(snapshot.get("classifications"))
     projection = verify_projection(catalog, snapshot)
+    initialized = "classifications" in snapshot
+    if not domain_ops:
+        return projection if initialized else None
     migrations = [op for op in domain_ops if op["operation"] == "INITIALIZE_RESEARCH_DOMAINS"]
     if migrations:
-        require(len(operations) == 1 and "classifications" not in snapshot,
+        require(len(operations) == 1 and not initialized,
                 "DOMAIN_MIGRATION", "initialize exactly once in its own append-only transaction")
         require(migrations[0]["risk_class"] == "R1", "RISK_UNDERCLASSIFIED", "classification migration")
         return {"contract_version": 1, "revision": 1, "assignments": {}}
-    require("classifications" in snapshot, "DOMAIN_MIGRATION_REQUIRED", "publish a reviewed initialization plan first")
+    require(initialized, "DOMAIN_MIGRATION_REQUIRED", "publish a reviewed initialization plan first")
     changed_sources: set[str] = set()
     for op in domain_ops:
         require(op["risk_class"] == "R1", "RISK_UNDERCLASSIFIED", op["id"])
@@ -179,10 +188,12 @@ def audit_history(backend: Any, *, trust: TrustStore | None = None) -> dict[str,
     erasure preserves journal hashes but necessarily makes exact replay unavailable.
     The enclosing backend audit first checks the existing chain/state/record hashes.
     """
+    previous = loads(backend.db.execute("SELECT body FROM trace_meta WHERE id=1").fetchone()[0])["genesis_state"]
+    previous_projection = _stored_projection(previous)
     if backend.db.execute("SELECT 1 FROM trace_erased LIMIT 1").fetchone() is not None:
         return {"classification_replay": "UNAVAILABLE_ERASED_CONTENT", "classification_authority_verified": False}
     catalog = backend.load_catalog()
-    previous = loads(backend.db.execute("SELECT body FROM trace_meta WHERE id=1").fetchone()[0])["genesis_state"]
+    verify_projection(catalog, previous)
     statuses: dict[str, Any] = {}
     domain_events = 0
     receipts = {digest(r["body"]): r["body"] for r in catalog.all("receipt")}
@@ -190,8 +201,9 @@ def audit_history(backend: Any, *, trust: TrustStore | None = None) -> dict[str,
         event = loads(text)
         operation = event["operation"]
         after = event["state_after"]
-        verify_projection(catalog, snapshot_body(after))
-        expected = deepcopy(previous.get("classifications"))
+        verified = verify_projection(catalog, after)
+        current_projection = verified if "classifications" in after else None
+        expected = previous_projection
         if operation.get("action") == "PUBLISH_PLAN":
             plan = catalog.get(operation["plan_id"], "plan")
             domain_ops = [op for op in plan["operations"] if op["operation"] in OPERATIONS]
@@ -201,8 +213,9 @@ def audit_history(backend: Any, *, trust: TrustStore | None = None) -> dict[str,
                         "DOMAIN_AUDIT", "classification plan hash differs")
                 require(catalog.get(plan["snapshot_id"], "graph-snapshot") == snapshot_body(previous),
                         "DOMAIN_AUDIT", "classification plan is not based on the prior authoritative state")
+                previous_revision = previous_projection["revision"] if previous_projection is not None else None
                 require(plan["graph_version"] == previous["graph_version"] and
-                        plan.get("classification_revision") == (previous.get("classifications") or {}).get("revision"),
+                        plan.get("classification_revision") == previous_revision,
                         "DOMAIN_AUDIT", "classification compare-and-swap revision differs")
                 for source_id, epoch in plan["source_epochs"].items():
                     status = statuses.get(source_id)
@@ -211,7 +224,7 @@ def audit_history(backend: Any, *, trust: TrustStore | None = None) -> dict[str,
                             "DOMAIN_AUDIT", "classification used a stale or unauthorized source epoch")
                 from .plans import validate_plan
                 prospective = validate_plan(catalog, plan, source_status=statuses)
-                expected = prospective.get("classifications")
+                expected = _stored_projection(prospective)
                 require(prospective["nodes"] == after["nodes"] and prospective["assertions"] == after["assertions"],
                         "DOMAIN_AUDIT", "classification event differs from the fully validated prospective graph")
                 require(event["authorization_hash"] in receipts and event["preflight_hash"] in receipts,
@@ -232,8 +245,8 @@ def audit_history(backend: Any, *, trust: TrustStore | None = None) -> dict[str,
                                                     at=event["committed_at"], sandbox=backend.sandbox)
                     require(reviewed, "REVIEW_REQUIRED", "classification history is not reviewed")
                     trust.verify(preflight, "PREFLIGHT", at=event["committed_at"])
-        require(after.get("classifications") == expected, "DOMAIN_AUDIT",
+        require(current_projection == expected, "DOMAIN_AUDIT",
                 "classification state changed outside a reviewed classification operation")
-        previous, statuses = after, event["source_status"]
+        previous, previous_projection, statuses = after, current_projection, event["source_status"]
     return {"classification_replay": "PASS", "classification_events": domain_events,
             "classification_authority_verified": trust is not None and domain_events > 0}
