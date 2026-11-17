@@ -38,6 +38,13 @@ def sha(value):
 
 def arm_report(name, result, query_count):
     error = 'trial_metrics_readback_mismatch:' + name
+    dense = name != 'without_dense'
+    page = name not in ('without_page', 'historical_fields_without_page')
+    if (type(result) is not dict or result.get('page_channel_enabled') is not page or
+            result.get('dense_stage') != ('supplied_bound_cache' if dense else 'not_run') or
+            (result.get('dense_cache_sha256') is not None) != dense):
+        raise ValueError(error)
+    disabled = {channel for channel, enabled in (('specter2', dense), ('bm25_page', page)) if not enabled}
     try:
         details, n = result['details'], result['queries']
         if type(n) is not int or n != query_count or type(details) is not list or n != len(details):
@@ -69,7 +76,9 @@ def arm_report(name, result, query_count):
         candidate = {}
         for channel in CHANNELS:
             item = stages[channel]
-            if item['status'] == 'NOT_RUN':
+            if channel in disabled:
+                if item != {'status': 'NOT_RUN'}:
+                    raise ValueError(error)
                 candidate[channel] = {'status': 'NOT_RUN'}
             else:
                 if item['status'] != 'MEASURED' or not all(type(item[k]) is int for k in ('hits', 'queries')):
@@ -137,6 +146,85 @@ def _json_object(raw, error):
     return value
 
 
+def _permutation_file(arm):
+    return 'target_permutation.json' if arm == 'primary' else arm + '_target_permutation.json'
+
+
+def _canonical_hash(value):
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False)
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()
+
+
+def _permuted_queries(data, query_count):
+    error = 'trial_target_permutation_invalid'
+    queries = _json_object(data, error).get('queries')
+    fields = ('id', 'query', 'target_id')
+    if (type(queries) is not list or len(queries) != query_count or
+            any(type(row) is not dict or any(type(row.get(key)) is not str or not row[key] for key in fields)
+                for row in queries) or len({row['id'] for row in queries}) != query_count):
+        raise ValueError(error)
+    return queries
+
+
+def _permutation_check(arm, base, rotated, queries, recorded):
+    error = 'trial_target_permutation_mismatch:' + arm
+    try:
+        input_hash = _canonical_hash([{'id': row['id'], 'query': row['query']} for row in queries])
+        labels = []
+        for result in (base, rotated):
+            if result['dense_cache_sha256'] is not None:
+                sha(result['dense_cache_sha256'])
+            rows = [{'id': row['id'], 'target_id': row['target_id']} for row in result['details']]
+            rankings, candidates = result['rankings'], result['candidates']
+            if ([row['id'] for row in rows] != [row['id'] for row in queries] or
+                    any(type(row['target_id']) is not str or not row['target_id'] for row in rows) or
+                    type(rankings) is not dict or type(candidates) is not dict or
+                    set(rankings) != {row['id'] for row in rows} or set(rankings) != set(candidates) or
+                    result['evaluation_labels_sha256'] != _canonical_hash(rows) or
+                    result['ranking_outputs_sha256'] != _canonical_hash(rankings) or
+                    result['ranking_inputs_sha256'] != input_hash):
+                raise ValueError(error)
+            measured_hits = dict.fromkeys(CHANNELS[:-1], 0)
+            for detail in result['details']:
+                qid, target = detail['id'], detail['target_id']
+                order, candidate = rankings[qid], candidates[qid]
+                pool = candidate['pool']
+                union = {}
+                for channel in measured_hits:
+                    topk = candidate[channel + '_topk']
+                    stage = result['candidate_stage_metrics'][channel]
+                    if (type(topk) is not list or len(topk) > result['candidate_depth'] or
+                            any(type(doc) is not str or not doc for doc in topk) or len(topk) != len(set(topk)) or
+                            (stage['status'] == 'NOT_RUN' and topk)):
+                        raise ValueError(error)
+                    measured_hits[channel] += target in topk
+                    union.update(dict.fromkeys(topk))
+                if (pool != list(union) or type(order) is not list or
+                        len(order) != len(pool) or set(order) != set(pool)):
+                    raise ValueError(error)
+                rank = order.index(target) + 1 if target in pool else None
+                if detail['rank'] != rank:
+                    raise ValueError(error)
+            for channel, hits in measured_hits.items():
+                if result['candidate_stage_metrics'][channel].get('hits', 0) != hits:
+                    raise ValueError(error)
+            labels.append([row['target_id'] for row in rows])
+        before, after = labels
+        if before == after or before[1:] + before[:1] != after or after != [row['target_id'] for row in queries]:
+            raise ValueError(error)
+        checks = {key: base[key] == rotated[key] for key in
+                  ('ranking_inputs_sha256', 'ranking_outputs_sha256', 'candidates', 'dense_cache_sha256')}
+        checks['labels_changed'] = True
+        same_configuration = all(base[key] == rotated[key] for key in ('candidate_depth', 'stage'))
+        if (not same_configuration or not all(checks.values()) or type(recorded) is not dict or
+                recorded != {'status': 'PASS', 'checks': checks} or
+                any(value is not True for value in recorded['checks'].values())):
+            raise ValueError(error)
+    except (KeyError, TypeError, UnicodeError, ValueError):
+        raise ValueError(error) from None
+    return 'PASS'
+
+
 def _manifest(receipt):
     error = 'trial_result_manifest_incomplete'
     manifest, ablations = receipt.get('result_file_sha256'), receipt.get('ablations')
@@ -159,7 +247,7 @@ def _manifest(receipt):
             measured.add('historical_fields_without_page')
     for arm in measured:
         required.add(arm + '.json')
-        required.add('target_permutation.json' if arm == 'primary' else arm + '_target_permutation.json')
+        required.add(_permutation_file(arm))
     listed_arms = {arm for arm in ARMS if arm + '.json' in manifest}
     if not required.issubset(manifest) or listed_arms != measured:
         raise ValueError(error)
@@ -179,11 +267,17 @@ def aggregate(trial_dir: Path) -> dict:
     full = document_count == 10_000 and query_count == 60
     if receipt.get('full_10000_by_60') is not full:
         raise ValueError('trial_receipt_invalid_counts')
-    arms = {}
-    known_arms = {a + '.json': a for a in ARMS}
-    for name, expected in _manifest(receipt).items():
-        arm = known_arms.get(name)
-        error = 'trial_result_hash_mismatch:' + arm + '.json' if arm else 'trial_result_hash_mismatch'
+    arms, results = {}, {}
+    known_arms = {arm + '.json': arm for arm in ARMS}
+    permutations = {_permutation_file(arm): arm for arm in ARMS}
+    manifest = _manifest(receipt)
+    measured = {arm for name, arm in known_arms.items() if name in manifest}
+    if {arm for name, arm in permutations.items() if name in manifest} != measured:
+        raise ValueError('trial_result_manifest_incomplete')
+    queries = None
+    for name, expected in manifest.items():
+        arm = known_arms.get(name) or permutations.get(name)
+        error = 'trial_result_hash_mismatch:' + name if arm else 'trial_result_hash_mismatch'
         if (Path(name).name != name or name in ('', '.', '..') or
                 any(char in name for char in ('/', '\\', ':', '\0'))):
             raise ValueError(error)
@@ -191,15 +285,28 @@ def aggregate(trial_dir: Path) -> dict:
         if hashlib.sha256(data).hexdigest() != expected:
             raise ValueError(error)
         if arm:
-            metric_error = 'trial_metrics_readback_mismatch:' + arm
+            metric_error = ('trial_metrics_readback_mismatch:' if name in known_arms else
+                            'trial_target_permutation_mismatch:') + arm
             payload = _json_object(data, metric_error)
             if payload.get('status') != 'MEASURED_PENDING_FINAL_INTEGRITY':
                 raise ValueError(metric_error)
-            arms[arm] = arm_report(arm, payload.get('result'), query_count)
+            result = payload.get('result')
+            try:
+                metrics = arm_report(arm, result, query_count)
+            except ValueError:
+                raise ValueError(metric_error) from None
+            results[name] = result
+            if name in known_arms:
+                arms[arm] = metrics
+        elif name == 'queries-permuted.json':
+            queries = _permuted_queries(data, query_count)
     checks, permutation = receipt.get('all_arm_target_permutations'), receipt.get('target_permutation')
-    if (type(checks) is not dict or type(permutation) is not dict or
-            any(type(checks.get(arm)) is not dict for arm in arms)):
+    if type(checks) is not dict or set(checks) != set(arms) or permutation != checks['primary']:
         raise ValueError('trial_target_permutation_missing')
+    verified_checks = {
+        arm: _permutation_check(arm, results[arm + '.json'], results[_permutation_file(arm)], queries, checks[arm])
+        for arm in arms
+    }
     return dict(schema_version='retrieval-trial-sanitized-metrics-v1',
         trial_receipt_sha256=hashlib.sha256(raw).hexdigest(), protocol_sha256=sha(receipt['protocol_sha256']),
         **numeric({k: receipt.get(k) for k in ('document_count', 'query_count',
@@ -210,9 +317,7 @@ def aggregate(trial_dir: Path) -> dict:
             ('without_dense', 'without_page_channel', 'historical_field_policy')},
         relevance_judgments=status(receipt.get('relevance_judgments'), ('NOT_PERFORMED',)),
         memory=memory_report(receipt.get('memory')),
-        target_permutation=status(permutation.get('status'), ('PASS', 'FAIL')),
-        all_arm_target_permutations={a: status(checks[a].get('status'), ('PASS', 'FAIL'))
-                                     for a in ARMS if a in checks},
+        target_permutation=verified_checks['primary'], all_arm_target_permutations=verified_checks,
         arms=arms, issue_acceptance_complete=False,
         evidence_note='Certifies arithmetic consistency of a private receipt, not the provenance of its inputs.')
 

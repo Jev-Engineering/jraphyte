@@ -257,9 +257,11 @@ arms contribute statuses, not quality scores. Private IDs, text, paths and
 rankings are excluded.
 
 The reporter requires the primary results and every declared ablation with its
-target-permutation results. It checks the receipt dimensions, every listed
-file's hash, and the consistency of candidate-pool membership, ranks and
-channel metrics. Receipt and result files must be regular files. Input errors
+target-permutation results. For each pair, it checks both results against
+their query details and the frozen target rotation, then verifies unchanged
+rankings, candidate pools and dense-cache binding against the receipt's
+reported check. It checks every listed file's hash and verifies the measured
+channels against each declared page or dense ablation. Receipt and result files must be regular files. Input errors
 use fixed codes and may identify an arm by its predefined name. The report
 certifies arithmetic consistency and always sets `issue_acceptance_complete`
 to false. It is ready to run once the real corpus trial exists.
