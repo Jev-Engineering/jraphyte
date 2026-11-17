@@ -235,7 +235,8 @@ def _validate_receipts(receipts):
     _keys(receipts, {"version", "run_id", "execution_mode", "checkpoint_head", "graph", "source_reviews",
                      "assertions", "evidence", "answers", "provider_calls_by_exporter"}, "receipts")
     require(receipts["version"] == RECEIPTS_VERSION and receipts["execution_mode"] in ("LIVE", "SYNTHETIC") and
-            receipts["provider_calls_by_exporter"] == 0, "EVALUATOR_INPUT", "receipt header", path="receipts")
+            type(receipts["provider_calls_by_exporter"]) is int and receipts["provider_calls_by_exporter"] == 0,
+            "EVALUATOR_INPUT", "receipt header", path="receipts")
     _ident(receipts["run_id"], "receipts.run_id")
     _sha(receipts["checkpoint_head"], "receipts.checkpoint_head")
     _keys(receipts["graph"], {"graph_version", "journal_head", "state_sha256"}, "receipts.graph")
@@ -401,13 +402,14 @@ def _question(q, attempt, evidence):
     return {**row, "status": "PASS", "reason": "SUPPORTED_WITH_COMPLETE_CURRENT_CHAINS"}
 
 
-def _assertion(ref, rows, evidence, graph_version):
+def _assertion(ref, rows, evidence, graph):
     row = rows.get(ref)
     if row is None:
         return {"assertion_id_sha256": text_digest(ref), "status": "NOT_RUN", "reason": "NOT_PUBLISHED"}
     version = row["transaction_version"]
     complete = (row["transaction_event_hash"] is not None and
-                version is not None and 0 < version <= graph_version and
+                version is not None and 0 < version <= graph["graph_version"] and
+                (version < graph["graph_version"] or row["transaction_event_hash"] == graph["journal_head"]) and
                 row["plan_id"] is not None and row["resolution_id"] is not None and bool(row["observation_ids"]) and
                 row["resolution_outcome"] == "SELECTED" and row["observations_ok"] and bool(row["evidence_ids"]) and
                 all(_chain(evidence, e) in {None, "SOURCE_NOT_CURRENTLY_READABLE"} for e in row["evidence_ids"]))
@@ -433,7 +435,7 @@ def evaluate(protocol: dict, receipts: dict, recovery: list) -> dict:
     questions += [{"question_sha256": h, "expectation": None, "status": "FAIL", "reason": "UNDECLARED_QUESTION"}
                   for h in sorted(set(latest) - declared)]
     published = {a["assertion_id"]: a for a in receipts["assertions"]}
-    assertions = [_assertion(ref, published, evidence, receipts["graph"]["graph_version"])
+    assertions = [_assertion(ref, published, evidence, receipts["graph"])
                   for ref in protocol["expected_assertions"]]
     assertions += [{"assertion_id_sha256": text_digest(ref), "status": "FAIL", "reason": "UNEXPECTED_ASSERTION"}
                    for ref in sorted(set(published) - set(protocol["expected_assertions"]))]

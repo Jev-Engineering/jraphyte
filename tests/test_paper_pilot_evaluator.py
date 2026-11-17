@@ -48,7 +48,7 @@ def receipts():
                  "resolution_outcome": "SELECTED", "observation_ids": ["observation:" + "b" * 64],
                  "observations_ok": True}
     return {"version": RECEIPTS_VERSION, "run_id": "authored-pilot", "execution_mode": "SYNTHETIC",
-            "checkpoint_head": H, "graph": {"graph_version": 2, "journal_head": H, "state_sha256": H},
+            "checkpoint_head": H, "graph": {"graph_version": 2, "journal_head": "7" * 64, "state_sha256": H},
             "source_reviews": [{"request_id": "review", "source_snapshot_id": evidence["source_snapshot_id"],
                                 "source_id": "paper-a", "representation": "reviewed-native-pdf-page-v1",
                                 "reviewer_kind": "assistant", "all_checks_passed": True, "independent_review": False}],
@@ -108,7 +108,7 @@ class AggregateEvaluatorTests(unittest.TestCase):
         value["answers"][1].update(state="SUPPORTED", abstention_reason=None)
         self.assertEqual(rows(evaluate(protocol(), value, []), "questions")[UNSUPPORTED]["reason"],
                          "ANSWERED_UNSUPPORTED_QUESTION")
-        for field, bad in (("transaction_event_hash", None), ("resolution_outcome", "REJECTED"),
+        for field, bad in (("transaction_event_hash", None), ("transaction_event_hash", "e" * 64), ("resolution_outcome", "REJECTED"),
                            ("observations_ok", False), ("resolution_id", None),
                            ("transaction_version", None), ("transaction_version", 3), ("observation_ids", [])):
             with self.subTest(field=field):
@@ -179,6 +179,7 @@ class AggregateEvaluatorTests(unittest.TestCase):
             lambda r: r["graph"].update(journal_head=None),
             lambda r: r.update(source_reviews={}),
             lambda r: r.update(execution_mode="PRODUCTION"),
+            lambda r: r.update(provider_calls_by_exporter=False),
             lambda r: r["answers"][0].update(state="synthetic-private-state"),
             lambda r: r["answers"][1].update(abstention_reason="synthetic-private-reason"),
             lambda r: r["answers"][1].update(state="SUPPORTED"),
