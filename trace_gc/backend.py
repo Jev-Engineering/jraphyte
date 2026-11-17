@@ -208,11 +208,13 @@ class SQLiteReferenceBackend:
 
     def admit_sources(self,catalog: Catalog,source_ids: list[str], *, trust: TrustStore,authorization: dict[str,Any],
                       security_scope: str,execution_mode: str,expected_version: int,key: str,at: str | None=None) -> dict[str,Any]:
+        require(type(expected_version) is int and expected_version >= 0,
+                "SOURCE_STATUS", "expected graph version must be a nonnegative integer")
         action={"action":"ADMIT","source_hashes":{ref:catalog.hash(ref) for ref in sorted(source_ids)},
                 "security_scope":security_scope,"execution_mode":execution_mode,"expected_version":expected_version}
         def apply(state,statuses):
             issuer=trust.verify(authorization,"SOURCE_STATUS",at=at)
-            require("SOURCE_ADMIT" in issuer.operations and authorization["payload"]==action,"SOURCE_AUTHORITY","source admission scope")
+            require("SOURCE_ADMIT" in issuer.operations and digest(authorization["payload"])==digest(action),"SOURCE_AUTHORITY","source admission scope")
             for ref in source_ids:
                 source=catalog.get(ref,"source")
                 require(source["security_scope"]==security_scope,"SECURITY_SCOPE",ref)
@@ -230,6 +232,8 @@ class SQLiteReferenceBackend:
                              expected_version: int,key: str,reason: str,authorization: dict[str,Any],trust: TrustStore,
                              tombstone: bool=False,at: str | None=None) -> dict[str,Any]:
         source=catalog.get(source_id,"source")
+        require(type(expected_version) is int and expected_version >= 0 and type(expected_epoch) is int and expected_epoch >= 0,
+                "SOURCE_STATUS", "expected graph version and source epoch must be nonnegative integers")
         require(type(active) is bool and type(tombstone) is bool and permission in {"READ","DENIED"} and bool(reason),"SOURCE_STATUS","invalid change")
         action={"action":"ERASE" if tombstone else "STATUS_CHANGE","source_id":source_id,"source_hash":catalog.hash(source_id),
                 "active":active,"permission":permission,"expected_epoch":expected_epoch,"expected_version":expected_version,
@@ -237,7 +241,7 @@ class SQLiteReferenceBackend:
         def apply(state,statuses):
             issuer=trust.verify(authorization,"SOURCE_STATUS",at=at)
             required="SOURCE_ERASE" if tombstone else "SOURCE_WITHDRAW" if not active else "SOURCE_PERMISSION"
-            require(required in issuer.operations and authorization["payload"]==action,"SOURCE_AUTHORITY","status authority/scope mismatch")
+            require(required in issuer.operations and digest(authorization["payload"])==digest(action),"SOURCE_AUTHORITY","status authority/scope mismatch")
             require(source_id in statuses and statuses[source_id]["epoch"]==expected_epoch,"STALE_SOURCE_EPOCH",source_id)
             require(not statuses[source_id]["tombstone"],"TOMBSTONE_REUSE",source_id)
             require(not tombstone or (not active and permission=="DENIED"),"TOMBSTONE_STATUS","erasure must revoke use")
@@ -378,7 +382,7 @@ class SQLiteReferenceBackend:
             verify_transaction_receipt(event, backend="sqlite-reference-v1")
             previous,after,last_status=hash_,event["after_hash"],event["source_status"]
         state=self.state()
-        require(state["graph_version"]==count and digest(state)==after and self.statuses()==last_status,"BACKEND_AUDIT","current state/status differs from journal")
+        require(state["graph_version"]==count and digest(state)==after and digest(self.statuses())==digest(last_status),"BACKEND_AUDIT","current state/status differs from journal")
         domain_audit=audit_history(self, trust=trust, required_sources=required_sources)
         return {"events":count,"head_hash":previous,"state_hash":after,"sandbox":self.sandbox,**domain_audit,
                 "erased_record_count":self.db.execute("SELECT count(*) FROM trace_erased").fetchone()[0]}

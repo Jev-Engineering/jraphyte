@@ -325,6 +325,9 @@ def audit_history(backend: Any, *, trust: TrustStore | None = None,
                     continue
                 receipt = receipts.get(event["authorization_hash"])
                 require(receipt is not None, "REPLAY_CONTENT_UNAVAILABLE", "source authorization bytes are unavailable")
+                record_hash = digest({"kind": "receipt", "body": receipt})
+                require(event["record_hashes"].get(f"receipt:{record_hash}") == record_hash,
+                        "DOMAIN_AUDIT", "source authorization record is not journal-bound")
                 issuer = trust.verify(receipt, "SOURCE_STATUS", at=event["committed_at"])
                 require(digest(receipt["payload"]) == digest(operation),
                         "DOMAIN_AUDIT", "source authorization differs from the journal")
