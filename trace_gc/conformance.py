@@ -71,6 +71,10 @@ def check_legacy(core_path: str | Path) -> dict[str,Any]:
             require(not fixture.backend.view(fixture.catalog)["edges"],"CONFORMANCE_FAILURE","AND dependency withdrawal")
             fixture.backend.audit();checks.append("and_dependency_withdrawal")
         finally:fixture.close()
+    from .domain_conformance import run_domain_conformance
+    classification = run_domain_conformance(backend_factory=backend_factory, backend_label="pinned-legacy-v1")
+    checks.extend("domain:" + check for check in classification["checks"])
     return {"status":"PASS","core_blob":PINNED_CORE_BLOB,"checks":checks,"checks_run":len(checks),
+            "classification_conformance": classification,
             "execution_mode":"SYNTHETIC","provider_calls":0,"production_graph_writes":0,
             "scope":"Pinned single-host legacy adapter lifecycle and atomicity tests; not empirical semantic qualification."}
