@@ -26,7 +26,8 @@ class TrialReportTests(unittest.TestCase):
                                      for c in CHANNELS}, index_seconds=1, candidate_seconds=2,
             rerank_seconds=3, wall_seconds=6, process_cpu_seconds=5,
             rankings={}, candidates={}, fields_sha256='c'*64,
-            page_channel_enabled=True, dense_stage='supplied_bound_cache', dense_cache_sha256='b'*64,
+            page_channel_enabled=True, dense_stage='supplied_bound_cache', dense_cache_binding='ranking_inputs_only_v2',
+            dense_cache_sha256='b'*64, reranker_model_manifest_sha256='a'*64,
             private_path='secret/model/path')
         for detail in self.result['details']:
             order = ['DISTRACTOR' + str(i) for i in range(11)]
@@ -54,7 +55,7 @@ class TrialReportTests(unittest.TestCase):
             result = json.loads(json.dumps(self.result))
             if name.startswith('without_dense'):
                 result['candidate_stage_metrics']['specter2'] = {'status': 'NOT_RUN'}
-                result.update(dense_stage='not_run', dense_cache_sha256=None)
+                result.update(dense_stage='not_run', dense_cache_sha256=None, dense_cache_binding='not_run')
                 for candidates in result['candidates'].values():
                     candidates['specter2_topk'] = []
             if name.endswith('target_permutation'):
@@ -74,7 +75,7 @@ class TrialReportTests(unittest.TestCase):
         (self.root/'receipt.json').write_text(json.dumps(self.receipt), encoding='utf-8')
 
     def write_arm(self, name, result):
-        result = {**result,
+        result = {'field_condition': 'historical' if name.startswith('historical_fields') else 'current', **result,
                   'ranking_outputs_sha256': _canonical_hash(result['rankings']),
                   'ranking_inputs_sha256': _canonical_hash([{k: d[k] for k in ('id', 'query')} for d in result['details']]),
                   'evaluation_labels_sha256': _canonical_hash([{k: d[k] for k in ('id', 'target_id')} for d in result['details']])}
@@ -238,6 +239,7 @@ class TrialReportTests(unittest.TestCase):
         for baseline, name in (('primary', 'historical_fields'),
                                ('target_permutation', 'historical_fields_target_permutation')):
             result = json.loads((self.root/(baseline+'.json')).read_bytes())['result']
+            result['field_condition'] = 'historical'
             self.write_arm(name, result)
         ids = ['DISTRACTOR' + str(i) for i in range(11)] + ['SECRETDOC' + str(i) for i in range(4)]
         rows = [{'id': doc, 'title': 'authored'} for doc in ids]
@@ -294,6 +296,20 @@ class TrialReportTests(unittest.TestCase):
         self.write_receipt()
         with self.assertRaisesRegex(ValueError, '^trial_arm_configuration_mismatch$'):
             aggregate(self.root)
+
+    def test_arms_bind_the_producer_field_dense_and_reranker_conditions(self):
+        name = 'without_dense_target_permutation'
+        original = json.loads((self.root/(name+'.json')).read_bytes())['result']
+        for field, value, expected in (
+            ('field_condition', 'historical', 'trial_target_permutation_mismatch:without_dense'),
+            ('dense_cache_binding', 'legacy_target_bound_v1', 'trial_target_permutation_mismatch:without_dense'),
+            ('reranker_model_manifest_sha256', 'd'*64, 'trial_arm_configuration_mismatch'),
+        ):
+            with self.subTest(field=field):
+                self.write_arm(name, {**original, field: value})
+                self.write_receipt()
+                with self.assertRaisesRegex(ValueError, expected):
+                    aggregate(self.root)
 
     def test_cli_exclusive_output(self):
         output = self.root/'report.json'

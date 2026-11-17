@@ -7,9 +7,8 @@ import json
 import math
 import os
 import stat
+import tempfile
 from pathlib import Path
-
-from src.parallel_source_v4.common import write_once
 
 ARMS = ('primary', 'without_page', 'without_dense', 'historical_fields',
         'historical_fields_without_page')
@@ -44,6 +43,8 @@ def arm_report(name, result, query_count):
     page = name not in ('without_page', 'historical_fields_without_page')
     if (type(result) is not dict or result.get('page_channel_enabled') is not page or
             result.get('dense_stage') != ('supplied_bound_cache' if dense else 'not_run') or
+            result.get('dense_cache_binding') != ('ranking_inputs_only_v2' if dense else 'not_run') or
+            result.get('field_condition') != ('historical' if name.startswith('historical_fields') else 'current') or
             (result.get('dense_cache_sha256') is not None) != dense):
         raise ValueError(error)
     disabled = {channel for channel, enabled in (('specter2', dense), ('bm25_page', page)) if not enabled}
@@ -342,10 +343,15 @@ def aggregate(trial_dir: Path) -> dict:
            for result in results.values()):
         raise ValueError('trial_document_count_mismatch')
     primary = results['primary.json']
-    for arm in arms:
-        result = results[arm + '.json']
-        if any(result[key] != primary[key] for key in ('candidate_depth', 'stage')):
-            raise ValueError('trial_arm_configuration_mismatch')
+    config_keys = ('candidate_depth', 'stage')
+    if primary['stage'] == 'local_cross_encoder':
+        config_keys += ('reranker_model_manifest_sha256',)
+        try:
+            sha(primary.get('reranker_model_manifest_sha256'))
+        except ValueError:
+            raise ValueError('trial_arm_configuration_mismatch') from None
+    if any(result.get(key) != primary.get(key) for result in results.values() for key in config_keys):
+        raise ValueError('trial_arm_configuration_mismatch')
     checks, permutation = receipt.get('all_arm_target_permutations'), receipt.get('target_permutation')
     if type(checks) is not dict or set(checks) != set(arms) or permutation != checks['primary']:
         raise ValueError('trial_target_permutation_missing')
@@ -400,10 +406,20 @@ def main():
         report = aggregate(args.trial_dir)
     except ValueError as exc:
         parser.exit(1, str(exc) + '\n')
-    if args.output.exists() or args.output.is_symlink():
-        parser.exit(1, 'trial_report_output_exists\n')
     try:
-        write_once(args.output, report)
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=args.output.parent,
+                                         prefix='.trial-report-', delete=False) as handle:
+            temporary = Path(handle.name)
+            try:
+                handle.write(json.dumps(report, sort_keys=True, allow_nan=False) + '\n')
+                handle.flush()
+                os.fsync(handle.fileno())
+                handle.close()
+                os.link(temporary, args.output)
+            finally:
+                temporary.unlink(missing_ok=True)
+    except FileExistsError:
+        parser.exit(1, 'trial_report_output_exists\n')
     except (OSError, ValueError):
         parser.exit(1, 'trial_report_output_write_failed\n')
 
