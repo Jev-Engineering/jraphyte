@@ -99,6 +99,8 @@ def verify_taxonomy(catalog: Catalog, taxonomy_id: str) -> dict[str, Any]:
         require(catalog.hash(previous_id) == current["supersedes_hash"], "DOMAIN_TAXONOMY_HASH", previous_id)
         require(previous["taxonomy_key"] == current["taxonomy_key"] and
                 previous["version"] + 1 == current["version"], "DOMAIN_REVISION", "taxonomy lineage gap")
+        require(current["review"]["status"] != "APPROVED" or previous["review"]["status"] == "APPROVED",
+                "DOMAIN_REVIEW", "an approved taxonomy must supersede an approved taxonomy version")
         verify_review_order(current["review"], previous["review"], relationship="taxonomy successor")
         before = {term["id"]: term for term in previous["domains"]}
         after = {term["id"]: term for term in current["domains"]}

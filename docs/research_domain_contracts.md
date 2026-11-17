@@ -25,7 +25,8 @@ field is added to source or evidence bodies and no older hash is recalculated.
 A taxonomy has a stable `taxonomy_key`, an integer version, and sorted, unique
 `research:*` identifiers with definitions, display labels, active/retired status,
 and an optional acyclic parent graph. A successor binds its predecessor's exact
-ID/hash and increments the version by one. Existing IDs cannot be removed,
+ID/hash and increments the version by one. Every predecessor in an approved
+taxonomy lineage must also claim approval. Existing IDs cannot be removed,
 repurposed, or reused after retirement. Names and parent links can evolve in a
 new taxonomy version without changing the semantic identity of a domain.
 
@@ -53,6 +54,26 @@ time. These fields alone are not authentication. Models may produce proposals;
 acceptance of a reviewed assignment is reserved for an application-enrolled
 transaction service that verifies a signature binding the immutable action.
 That publication boundary is #6 work and is not part of this contract.
+
+## Derived assertion membership
+
+For a selected graph and classification revision, resolve each assertion's
+supporting evidence to its exact source snapshot IDs. For each source, use
+the effective assignment selected by the authoritative projection at that
+revision. Check current source authorization before using evidence or labels in
+a read. Collect the sorted, unique union of explicit labels from classified
+assignments that bind the selected taxonomy ID and hash. Evidence order and
+repeated sources have no effect. Labels in other taxonomy versions contribute
+no labels to that selection, even when their IDs are spelled the same. A
+missing, unclassified, or retired assignment contributes no labels and counts
+as unclassified for an explicit unclassified selection. Parent links affect
+selection only when descendant expansion is requested.
+
+Membership is revision-specific metadata. Reclassification can change where an
+assertion appears while preserving its global assertion ID and the associated
+entity, source, and evidence IDs and hashes. A historical read uses its pinned
+classification projection and applies current authorization. The projection and
+read behavior are downstream work under #6 through #8.
 
 ## Catalog, bundles, and packaging
 

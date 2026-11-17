@@ -199,6 +199,22 @@ class DomainContractTests(unittest.TestCase):
             validate_bundle(loads(dumps(self.bundle())))
         self.assertEqual(caught.exception.code, "DOMAIN_REVISION")
 
+    def test_complete_bundle_accepts_proposed_and_approved_taxonomy_lineages(self):
+        for root in (self.catalog.add(reference_taxonomy()), self.taxonomy):
+            self.altered(root, version=2, supersedes=root, supersedes_hash=self.catalog.hash(root))
+        self.assertEqual(validate_bundle(loads(dumps(self.bundle())))["status"], "PASS")
+
+    def test_complete_bundle_rejects_approved_taxonomy_with_proposed_ancestor(self):
+        proposed_root = self.catalog.add(reference_taxonomy())
+        invalid_revision = self.altered(proposed_root, version=2, supersedes=proposed_root,
+                                        supersedes_hash=self.catalog.hash(proposed_root), review=REVIEW)
+        newest = self.altered(invalid_revision, version=3, supersedes=invalid_revision,
+                              supersedes_hash=self.catalog.hash(invalid_revision))
+        bundle = loads(dumps(self.bundle()))
+        self.rejects(lambda: validate_bundle(bundle), "DOMAIN_REVIEW")
+        self.rejects(lambda: verify_taxonomy(self.catalog, invalid_revision), "DOMAIN_REVIEW")
+        self.rejects(lambda: verify_taxonomy(self.catalog, newest), "DOMAIN_REVIEW")
+
     def test_ambiguous_approved_taxonomy_version_rejected(self):
         body = self.catalog.get(self.taxonomy)
         body["provenance"]["basis"] = "A different curation of the same taxonomy version."
