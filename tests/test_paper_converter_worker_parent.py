@@ -14,6 +14,20 @@ import venv
 from src import paper_converter_worker as worker
 
 
+def _windows_os(parent_pid):
+    """``os`` as only the worker module sees it: Windows-named, with a fixed parent pid."""
+    class WindowsOs:
+        name = 'nt'
+
+        def __getattr__(self, attribute):
+            return getattr(os, attribute)
+
+        @staticmethod
+        def getppid():
+            return parent_pid
+    return WindowsOs()
+
+
 class WorkerParentTests(unittest.TestCase):
     def test_direct_parent_and_invalid_pid(self):
         self.assertTrue(worker.controller_parent_matches(os.getppid(), sys.executable, '0' * 64))
@@ -55,6 +69,62 @@ class WorkerParentTests(unittest.TestCase):
             self.assertNotEqual(row['ppid'], os.getpid())
             self.assertTrue(row['matches'])
             self.assertFalse(row['wrong_hash'])
+
+    def test_an_extra_hop_between_controller_and_redirector_is_rejected(self):
+        # controller -> intermediate -> pinned redirector -> worker: the redirector's parent is
+        # not the controller, so the single permitted hop does not reach it.
+        executable = str(Path(sys.executable).resolve())
+        chain = dict(parent_parent_pid=789, parent_executable=executable,
+                     parent_executable_sha256='a' * 64, controller_created=1,
+                     parent_created=3, worker_created=4, controller_alive=True, parent_alive=True)
+        with patch.object(worker, 'os', _windows_os(456)), \
+                patch.object(worker, '_windows_parent_info', return_value=chain):
+            self.assertFalse(worker.controller_parent_matches(123, executable, 'a' * 64))
+            # The same chain is accepted only when its recorded controller is the real grandparent.
+            self.assertTrue(worker.controller_parent_matches(789, executable, 'a' * 64))
+
+    def test_reordered_creation_and_unavailable_metadata_fail_closed(self):
+        executable = str(Path(sys.executable).resolve())
+        base = dict(parent_parent_pid=123, parent_executable=executable,
+                    parent_executable_sha256='a' * 64, controller_created=1,
+                    parent_created=2, worker_created=3, controller_alive=True, parent_alive=True)
+        cases = [dict(base, controller_created=2), dict(base, parent_created=1, controller_created=1),
+                 dict(base, worker_created=1)]
+        missing = dict(base)
+        del missing['parent_created']
+        for info in cases:
+            with self.subTest(info=info):
+                self.assertFalse(worker._redirector_chain_matches(info, 123, executable, 'a' * 64))
+        for effect in (OSError('denied'), ValueError('bad'), KeyError('parent_created')):
+            with self.subTest(effect=type(effect).__name__), patch.object(worker, 'os', _windows_os(456)), \
+                    patch.object(worker, '_windows_parent_info', side_effect=effect):
+                self.assertFalse(worker.controller_parent_matches(123, executable, 'a' * 64))
+        with patch.object(worker, 'os', _windows_os(456)), \
+                patch.object(worker, '_windows_parent_info', return_value=missing):
+            self.assertFalse(worker.controller_parent_matches(123, executable, 'a' * 64))
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows venv redirector regression')
+    def test_genuine_grandparent_chain_through_an_intermediate_process_is_rejected(self):
+        repo = str(Path(worker.__file__).resolve().parents[1])
+        with tempfile.TemporaryDirectory() as temporary:
+            venv.EnvBuilder(with_pip=False).create(temporary)
+            executable = Path(temporary) / 'Scripts' / 'python.exe'
+            sha = hashlib.sha256(executable.read_bytes()).hexdigest()
+            check = ('import json,os,sys;sys.path.insert(0,' + repr(repo) + ');'
+                     'from src.paper_converter_worker import controller_parent_matches as m;'
+                     'c=int(sys.argv[1]);i=int(sys.argv[2]);'
+                     'print(json.dumps(dict(controller=m(c,sys.argv[3],sys.argv[4]),'
+                     'intermediate=m(i,sys.argv[3],sys.argv[4]))))')
+            # The intermediate process launches the pinned redirector, so the real chain is
+            # test (controller) -> intermediate -> redirector -> interpreter: one hop too many.
+            intermediate = ('import os,subprocess,sys;'
+                            'sys.stdout.write(subprocess.check_output([sys.argv[1],"-I","-B","-c",sys.argv[2],'
+                            'sys.argv[3],str(os.getpid()),sys.argv[1],sys.argv[4]],timeout=30).decode())')
+            row = json.loads(subprocess.check_output(
+                [sys.executable, '-I', '-B', '-c', intermediate, str(executable), check,
+                 str(os.getpid()), sha], timeout=60))
+            self.assertFalse(row['controller'])
+            self.assertTrue(row['intermediate'])
 
     def test_failure_reports_bounded_contract_code(self):
         args = ['worker', '--data-root', 'unused', '--plan', 'unused',

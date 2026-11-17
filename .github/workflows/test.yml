@@ -18,6 +18,11 @@ jobs:
       - run: python tools/run_validation.py
       - run: python -m pip install --no-deps .
       - run: trace-gc --version
+      - name: Installed-package trustee helpers, portable checks from outside the checkout
+        run: |
+          workspace="$PWD"
+          cd "$RUNNER_TEMP"
+          python "$workspace/tools/installed_phase_authority_check.py"
   windows-fence:
     runs-on: windows-latest
     strategy:
@@ -102,6 +107,28 @@ jobs:
           python -m unittest discover -s tests -p "test_paper_pilot_phase_trustees_model.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-phase-trustees-model.log"
           grep -Eq '^Ran 17 tests in ' "$RUNNER_TEMP/windows-phase-trustees-model.log"
           grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-phase-trustees-model.log"
+      - name: Run the nine converter worker parent-process cases (genuine venv redirector, extra-hop grandparent chain, exit code 259)
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p "test_paper_converter_worker_parent.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-converter-worker-parent.log"
+          grep -Eq '^Ran 9 tests in ' "$RUNNER_TEMP/windows-converter-worker-parent.log"
+          grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-converter-worker-parent.log"
+      - name: Installed wheel trustee helpers, native checks from outside the checkout
+        if: always()
+        shell: bash
+        run: |
+          set -o pipefail
+          workspace="$PWD"
+          temp="$(cygpath -u "$RUNNER_TEMP")"
+          python -m pip wheel --no-deps -w "$temp/dist" .
+          python -m venv "$temp/installed"
+          "$temp/installed/Scripts/python.exe" -m pip install -r requirements.txt
+          "$temp/installed/Scripts/python.exe" -m pip install --no-deps "$temp"/dist/trace_gc-*.whl
+          cd "$temp"
+          "$temp/installed/Scripts/python.exe" "$workspace/tools/installed_phase_authority_check.py" | tee "$temp/installed-phase-authority.log"
+          grep -q '"native_windows": "RUN"' "$temp/installed-phase-authority.log"
       - name: Sanitized Windows trustee serialization diagnostics
         if: always()
         continue-on-error: true
