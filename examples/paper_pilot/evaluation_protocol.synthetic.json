@@ -1,0 +1,29 @@
+{
+  "version": "paper-pilot-evaluation-protocol-v1",
+  "protocol_id": "authored-synthetic-example-protocol-v1",
+  "questions": [
+    {
+      "question_sha256": "c826e70454c780a1e4ba71c4fd87966a597abe1f95cc34ce41d6b3570c88bf7c",
+      "expectation": "SUPPORTED",
+      "required_source_ids": [
+        "authored-paper"
+      ]
+    },
+    {
+      "question_sha256": "235ba1c1d8e967c523f33c25ec7269e160aa916f6150e02efc876444c8036cfd",
+      "expectation": "ABSTAIN",
+      "required_source_ids": []
+    }
+  ],
+  "expected_assertions": [
+    "authored-pilot:compile:candidate:0"
+  ],
+  "required_recovery": [
+    "fresh_reopen_replay",
+    "interrupted_publication",
+    "missing_provider_output",
+    "stale_review_rejected",
+    "source_withdrawal",
+    "permission_denial"
+  ]
+}

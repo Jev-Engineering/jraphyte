@@ -56,6 +56,12 @@ def parser() -> argparse.ArgumentParser:
     r=sub.add_parser("replay-policy",help="Append an unsigned analysis-only policy branch without inference")
     r.add_argument("bundle",type=Path);r.add_argument("--policy",type=Path,required=True);r.add_argument("--output",type=Path,required=True)
     r.add_argument("--trust",type=Path);r.add_argument("--at")
+    pp=sub.add_parser("paper-pilot",help="Offline paper-pilot receipt tools; no model call, review or graph write")
+    pps=pp.add_subparsers(dest="pilot_command",required=True)
+    pe=pps.add_parser("evaluate",help="Aggregate exported pilot receipts against a frozen protocol; emits no source text")
+    pe.add_argument("receipts",type=Path);pe.add_argument("--protocol",type=Path,required=True)
+    pe.add_argument("--recovery",type=Path,help="Application-attested recovery scenario rows (default: none run)")
+    pe.add_argument("--output",type=Path,required=True)
     return p
 
 
@@ -94,6 +100,14 @@ def main(argv: list[str] | None=None) -> int:
             from .conformance import check_legacy
             result=check_legacy(args.core)
             if args.output:write(args.output,result)
+        elif args.command=="paper-pilot":
+            from .paper_pilot_evaluator import evaluate
+            report=evaluate(load(args.protocol),load(args.receipts),load(args.recovery) if args.recovery else [])
+            write(args.output,report)
+            result={k:report[k] for k in ("version","verdict","evidence_class","protocol_sha256","receipts_sha256",
+                    "qualifies_issue_23","authorization_granted","provider_calls")}
+            result["metrics"]=report["metrics"]
+            result["output"]=str(args.output)
         else:
             from .replay import replay_analysis_policy
             bundle=replay_analysis_policy(load(args.bundle),load(args.policy),trust=read_trust(args.trust) if args.trust else None,at=args.at);write(args.output,bundle)
