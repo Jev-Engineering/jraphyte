@@ -331,8 +331,8 @@ class PaperPilot:
 
     def _verify_active_budget(self):
         self._verify_active_budget_floor()
-        require(all("result" in row or row["kind"] not in _BUDGET_CHARGING_STAGES
-                    for row in self.requests.values()),
+        require(all(id_ in self._historical_request_ids or "result" in row or
+                    row["kind"] not in _BUDGET_CHARGING_STAGES for id_, row in self.requests.items()),
                 "PHASE_BUDGET", "interrupted stage has unreconciled budget usage")
 
     def _step(self, id_, kind, args, action):
@@ -354,11 +354,15 @@ class PaperPilot:
             args = loads(dumps(args))
             existing = id_ in self.requests
             if not existing:
+                if self.phase_import is not None:
+                    self._verify_active_budget()
                 self._append("INTENT", {"id": id_, "kind": kind, "args": args, "created_at": now()})
             intent = self.requests[id_]
             require(intent["kind"] == kind and intent["args"] == args,
                     "PILOT_IDEMPOTENCY_CONFLICT", "same request ID has different immutable input")
             if "result" not in intent:
+                if self.phase_import is not None and existing:
+                    self._verify_active_budget()
                 require(not (self._phase_imported and existing and kind in _BUDGET_CHARGING_STAGES),
                         "PHASE_BUDGET", "interrupted stage has unreconciled budget usage")
                 result = action(intent["created_at"])
@@ -779,7 +783,7 @@ class PaperPilot:
         """
         with self._mutex, (self._phase_authority.write() if self._phase_authority is not None else nullcontext()):
             if self._phase_authority is not None:
-                self._verify_active_budget_floor()
+                self._verify_active_budget()
             self._require_current_semantic_compile(compile_id)
             result, pack = self._pack_fresh(compile_id)
             context = {"pack_sha256": self.catalog.hash(result["pack_id"]),
@@ -868,7 +872,7 @@ class PaperPilot:
     def record_semantic_response(self, id_, *, compile_id, response, execution_receipt, local_execution=None):
         with self._mutex, (self._phase_authority.write() if self._phase_authority is not None else nullcontext()):
             if self._phase_authority is not None:
-                self._verify_active_budget_floor()
+                self._verify_active_budget()
             self._require_current_semantic_compile(compile_id)
             result, _ = self._pack_fresh(compile_id)
             require(type(response) is bytes, "PILOT_EXECUTION", "original response bytes required")

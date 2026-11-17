@@ -427,6 +427,14 @@ class PhaseTransitionTests(PhaseFixture, unittest.TestCase):
             self.pilot.compile_candidates('interrupted-compile', candidates=self.candidates)
         self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
         self.assertEqual(self.budget.snapshot(), charged)
+        before = exporter._logical(self.pilot.db)
+        graph = self.pilot.backend.state()
+        with self.assertRaises(ContractError) as caught:
+            self.pilot.compile_candidates('separate-compile', candidates=self.candidates)
+        self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+        self.assertEqual(exporter._logical(self.pilot.db), before)
+        self.assertEqual(self.pilot.backend.state(), graph)
+        self.assertEqual(self.budget.snapshot(), charged)
         with self.assertRaises(ContractError) as caught:
             self.reopen_target()
         self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
