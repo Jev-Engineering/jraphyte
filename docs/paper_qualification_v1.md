@@ -53,6 +53,10 @@ releases execute those exact bytes. The separate external-verifier closure gate
 in issue #97 remains HOLD until those boundaries and its real prerequisites are
 verified. Statistical criteria and the evaluation record schema are unchanged.
 
+The public closure-pinned loader for external verifiers is described in
+`docs/verifier_closure_loader.md`. It is tested only with authored synthetic
+verifiers and does not change this evaluator's identity, receipts or criteria.
+
 Primary selection takes the first 400 eligible recent work IDs by the frozen
 `primary` rank. The next 600 form the recent screen; 600 historical works use
 `historical-screen`. All 1,200 screen outcomes must exist. Source-only tags select
