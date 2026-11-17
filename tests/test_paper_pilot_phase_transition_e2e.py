@@ -408,6 +408,21 @@ class PhaseTransitionTests(PhaseFixture, unittest.TestCase):
             self.reopen_target()
         self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
 
+    def test_inactive_image_preparation_cannot_write_checkpoint_blobs(self):
+        self.cutover(); self.restore(); self.open_target(); self.import_phase()
+        before = exporter._logical(self.pilot.db)
+        text = 'authored image review fixture before phase activation'
+        with patch.object(self.pilot, "_blob", wraps=self.pilot._blob) as store:
+            with self.assertRaises(ContractError) as caught:
+                self.pilot.prepare_image_page('inactive-image', pdf_bytes=self.pdf,
+                    source_id='authored-paper', version='v1', physical_page=2,
+                    crop_bbox=[0, 0, 1, 1], transcription=text, producer='authored-fixture',
+                    raw_output=text.encode(), fallback_reason='native_corrupt',
+                    native_defect_note='authored test')
+            self.assertEqual(caught.exception.code, 'PHASE_INACTIVE')
+            store.assert_not_called()
+        self.assertEqual(exporter._logical(self.pilot.db), before)
+
     def test_active_budget_holds_unreconciled_interrupted_reservation(self):
         self.cutover(); self.restore(); self.open_target(); self.import_phase(); self.controller_open()
         self.activate()

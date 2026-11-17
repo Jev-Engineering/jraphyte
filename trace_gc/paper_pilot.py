@@ -481,8 +481,7 @@ class PaperPilot:
         require(allowed is not None and allowed["version"] == version and
                 allowed["document_sha256"] == bytes_digest(pdf_bytes) and physical_page in allowed["physical_pages"],
                 "PILOT_COHORT", "source or physical page outside frozen frame")
-        blob = self._blob(pdf_bytes)
-        args = dict(pdf_sha256=blob, source_id=source_id, version=version, physical_page=physical_page, start=start, end=end)
+        args = dict(pdf_sha256=bytes_digest(pdf_bytes), source_id=source_id, version=version, physical_page=physical_page, start=start, end=end)
         def prepare(_):
             metadata, png, _ = render_source(pdf_bytes, physical_page=physical_page, dpi=144)
             native = _native_text(pdf_bytes, physical_page)
@@ -490,6 +489,7 @@ class PaperPilot:
                     "PILOT_SPAN", "nonempty exact native span required")
             packet = {**args, "render": metadata["render"], "native_text_sha256": text_digest(native),
                       "excerpt": native[start:end], "excerpt_sha256": text_digest(native[start:end])}
+            self._blob(pdf_bytes)
             return {"state": "WAIT_SOURCE_REVIEW", "packet": packet, "packet_sha256": digest(packet),
                     "page_png_blob": self._blob(png)}
         return self._step(id_, "PREPARE_SOURCE", args, prepare)
@@ -534,7 +534,7 @@ class PaperPilot:
                 ((fallback_reason == "native_absent" and native_defect_note is None) or
                  (fallback_reason == "native_corrupt" and type(native_defect_note) is str and
                   native_defect_note.strip())), "PILOT_IMAGE_ROUTE", "explicit native defect required")
-        pdf_hash, raw_hash = self._blob(pdf_bytes), self._blob(raw_output)
+        pdf_hash, raw_hash = bytes_digest(pdf_bytes), bytes_digest(raw_output)
         args = dict(pdf_sha256=pdf_hash, raw_output_sha256=raw_hash, source_id=source_id,
                     version=version, physical_page=physical_page, crop_bbox=crop_bbox,
                     transcription=transcription, producer=producer,
@@ -556,6 +556,8 @@ class PaperPilot:
                 input_crop_sha256=metadata["crop"]["png_sha256"], fallback_reason=fallback_reason)
             verify_artifacts(candidate, pdf_bytes=pdf_bytes, raw_output=raw_output,
                              page_png=page_png, crop_png=crop_png)
+            self._blob(pdf_bytes)
+            self._blob(raw_output)
             return {"state": "WAIT_IMAGE_SOURCE_REVIEW", "candidate": candidate,
                     "candidate_sha256": candidate_hash(candidate),
                     "page_png_blob": self._blob(page_png), "crop_png_blob": self._blob(crop_png)}
@@ -1024,6 +1026,8 @@ class PaperPilot:
     @boundary
     def record_answer_response(self, id_, *, prepared_id, response, execution_receipt):
         from .paper_answer import draft_answer
+        require(prepared_id not in self._historical_request_ids,
+                "PHASE_HISTORICAL_REQUEST", "historical answer preparation is held for audit")
         prepared = self._result(prepared_id, "PREPARE_ANSWER")
         args = self.requests[prepared_id]["args"]
         answer_args = self._answer_args(**args)
@@ -1035,10 +1039,11 @@ class PaperPilot:
                 require(bytes_digest(prompt) == prepared["request_sha256"], "PILOT_PROMPT_CHANGED", "answer request differs")
                 return response
             draft = draft_answer(self.catalog, self.backend, generate=actual, **answer_args)
+            self._blob(response)
             return {"state": "WAIT_ANSWER_REVIEW" if draft["review_required"] else draft["status"],
                     "draft": draft, "prepared_id": prepared_id}
         return self._step(id_, "ANSWER_RESPONSE", {"prepared_id": prepared_id,
-            "response_blob": self._blob(response), "execution_receipt": execution_receipt}, record)
+            "response_blob": bytes_digest(response), "execution_receipt": execution_receipt}, record)
 
     def answer_review_payload(self, response_id, *, reviewer, reviewer_kind, reviewed_at, claim_support):
         draft = self._result(response_id, "ANSWER_RESPONSE")["draft"]
