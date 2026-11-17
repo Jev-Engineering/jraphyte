@@ -79,21 +79,32 @@ def contract_sha256(contract: dict) -> str:
     return hashlib.sha256(_canonical_json(contract, "invalid_verifier_contract")).hexdigest()
 
 
-def _approved_root(root, approved_roots) -> Path:
-    def checked_path(item):
-        raw = Path(item).absolute()
-        if any(path.is_symlink() for path in (*raw.parents, raw)):
-            _fail("symlinked_verifier_root")
-        return raw.resolve()
+def _checked_root_path(item) -> Path:
+    raw = Path(item).absolute()
+    if any(path.is_symlink() for path in (*raw.parents, raw)):
+        _fail("symlinked_verifier_root")
+    return raw.resolve()
 
+
+def _approved_root(root, approved_roots) -> Path:
     try:
-        resolved = checked_path(root)
-        approved = {checked_path(item) for item in approved_roots}
+        resolved = _checked_root_path(root)
+        approved = {_checked_root_path(item) for item in approved_roots}
     except (OSError, RuntimeError, TypeError) as exc:
         _fail("unapproved_verifier_root", type(exc).__name__)
     if resolved not in approved or not resolved.is_dir():
         _fail("unapproved_verifier_root")
     return resolved
+
+
+def _root_identity(supplied: Path, resolved: Path) -> tuple:
+    try:
+        if _checked_root_path(supplied) != resolved or not resolved.is_dir():
+            _fail("verifier_root_changed")
+        identities = tuple(path.stat() for path in (*resolved.parents, resolved))
+    except OSError:
+        _fail("verifier_root_changed")
+    return tuple((entry.st_dev, entry.st_ino) for entry in identities)
 
 
 def _module_file(root: Path, module: str):
@@ -358,7 +369,7 @@ class _PrivateImporter:
         if name in self.loaded:
             return self.loaded[name]
         if name not in self.modules:
-            raise ImportError("unpinned_import_at_runtime:" + name)
+            self.reject_import(VerifierClosureError("unpinned_import_at_runtime"))
         parent = name.rpartition(".")[0]
         if parent:
             self.module(parent)
@@ -384,10 +395,17 @@ class _PrivateImporter:
             setattr(self.loaded[parent], name.rpartition(".")[2], module)
         return module
 
+    def reject_import(self, error: VerifierClosureError) -> None:
+        self.violation = self.violation or error
+        raise ImportError(error.code) from None
+
     def import_(self, name, globals=None, locals=None, fromlist=(), level=0):
         if level:
             package = (globals or {}).get("__package__") or ""
-            name = importlib.util.resolve_name("." * level + name, package)
+            try:
+                name = importlib.util.resolve_name("." * level + name, package)
+            except (ImportError, TypeError, ValueError):
+                self.reject_import(VerifierClosureError("invalid_relative_import"))
         fromlist = fromlist or ()
         try:
             if "*" in fromlist:
@@ -396,8 +414,7 @@ class _PrivateImporter:
                 _external(name, self.external, fromlist)
                 return self.external[name]
         except VerifierClosureError as exc:
-            self.violation = self.violation or exc
-            raise ImportError(exc.code) from None
+            self.reject_import(exc)
         module = self.module(name)
         for item in fromlist:
             if name + "." + item in self.modules:
@@ -436,7 +453,12 @@ def run_verifier(root, contract: dict, inputs, *, approved_roots) -> dict:
     _validate_contract(contract)
     input_bytes = _canonical_json(inputs, "invalid_verifier_inputs")
     snapshot = json.loads(input_bytes)
-    root = _approved_root(root, approved_roots)
+    try:
+        supplied = Path(root).absolute()
+    except (OSError, TypeError):
+        _fail("unapproved_verifier_root")
+    root = _approved_root(supplied, approved_roots)
+    root_identity = _root_identity(supplied, root)
     modules, payloads = _read_closure(root, contract, check_ambiguity=True)
     actual = {relative: hashlib.sha256(raw).hexdigest() for relative, raw in payloads.items()}
     if actual != contract["closure"]:
@@ -464,7 +486,11 @@ def run_verifier(root, contract: dict, inputs, *, approved_roots) -> dict:
         outcome, error = "HOLD", error or "unrecognized_verifier_result"
     if importer.violation is not None:
         raise importer.violation
+    if _root_identity(supplied, root) != root_identity:
+        _fail("verifier_root_changed")
     _, after = _read_closure(root, contract, check_ambiguity=False)
+    if _root_identity(supplied, root) != root_identity:
+        _fail("verifier_root_changed")
     if after != payloads:
         _fail("closure_changed_during_execution")
     if any(_canonical_json(value, "inputs_changed_during_execution") != input_bytes
