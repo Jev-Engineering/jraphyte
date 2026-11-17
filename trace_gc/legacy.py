@@ -287,7 +287,7 @@ class PinnedLegacyBackend(SQLiteReferenceBackend):
                     erased=self.db.execute("SELECT hash FROM trace_erased WHERE id=?",(ref,)).fetchone()
                     require(erased and erased[0]==hash_,"BACKEND_AUDIT","record missing without tombstone")
             previous,after,last_status=h,event["after_hash"],event["source_status"]
-        require(count==upstream["events"] and digest(self.state())==after and last_status==self.statuses(),"BACKEND_AUDIT","unmediated graph/status write")
+        require(count==upstream["events"] and digest(self.state())==after and digest(last_status)==digest(self.statuses()),"BACKEND_AUDIT","unmediated graph/status write")
         domain_audit=audit_history(self, trust=trust, required_sources=required_sources)
         return {"events":count,"head_hash":previous,"state_hash":after,"sandbox":self.sandbox,"upstream":upstream,**domain_audit,
                 "core_blob":PINNED_CORE_BLOB,"erased_record_count":self.db.execute("SELECT COUNT(*) FROM trace_erased").fetchone()[0]}
