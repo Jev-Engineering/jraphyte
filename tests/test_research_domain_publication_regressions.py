@@ -155,6 +155,34 @@ class PublicationRegressions:
         self.assertEqual(self.b.db.execute("SELECT id FROM trace_records WHERE id IN (?,?,?)",
                                             (other, evidence, prior_snapshot)).fetchall(), [])
 
+    def test_erased_shared_admission_holds_classification_without_blocking_ordinary_audit(self):
+        workspace = TemporaryDirectory()
+        self.addCleanup(workspace.cleanup)
+        f = DomainFixture(workspace.name, backend_factory=self.backend_factory, admit_initial=False)
+        self.addCleanup(f.close)
+        catalog = f.catalog
+        other = catalog.source("authored-batch-sibling", "1", "Authored batch admission.", scope="test")
+        refs = [f.source, other]
+        action = {"action": "ADMIT", "source_hashes": {ref: catalog.hash(ref) for ref in refs},
+                  "security_scope": "test", "execution_mode": "SYNTHETIC", "expected_version": 0}
+        authorization = f.source_admin.issue("SOURCE_STATUS", action)
+        receipt_id = catalog.put("receipt", authorization)
+        f.backend.admit_sources(catalog, refs, trust=f.trust, authorization=authorization, security_scope="test",
+                                execution_mode="SYNTHETIC", expected_version=0, key="authored-batch")
+        f.migrate()
+        assignment = f.assign()
+        f.publish(f.assignment_plan(assignment))
+        self.assertTrue(f.backend.audit(trust=f.trust)["classification_authority_verified"])
+        f.status_change(source=other, permission="DENIED", tombstone=True)
+        erased = set(f.backend.erase_cached_content(other, reason="Authored batch case")["erased_ids"])
+        self.assertIn(receipt_id, erased)
+        self.assertNotIn(f.source, erased)
+        ordinary = f.backend.audit()
+        authenticated = f.backend.audit(trust=f.trust)
+        self.assertEqual(ordinary["classification_replay"], "PASS")
+        self.assertEqual(authenticated["classification_replay"], "UNAVAILABLE_ERASED_CONTENT")
+        self.assertFalse(authenticated["classification_authority_verified"])
+
     def test_erased_classification_proof_leaves_ordinary_writes_and_retry_available(self):
         self.f.migrate()
         classification = self.f.assignment_plan(self.f.assign())

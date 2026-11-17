@@ -89,8 +89,8 @@ def validate_plan(catalog: Catalog, plan: dict[str,Any], *, source_status: dict[
     require(set(policy["required_checks"])==REQUIRED_CHECKS,"UNSUPPORTED_CAPABILITY","policy cannot omit required checks")
     require(all(int(op["risk_class"][1:])<=int(policy["maximum_risk"][1:]) for op in plan["operations"]),"POLICY_RISK","policy risk ceiling")
     snapshot=catalog.get(plan["snapshot_id"],"graph-snapshot")
-    require(plan["graph_version"]==snapshot["graph_version"] and plan["schema_hash"]==snapshot["schema_hash"],"STALE_GRAPH_VERSION","plan snapshot")
-    require(plan.get("classification_revision")==snapshot.get("classifications",{}).get("revision"),"DOMAIN_REVISION","plan classification revision differs")
+    require(digest(plan["graph_version"])==digest(snapshot["graph_version"]) and plan["schema_hash"]==snapshot["schema_hash"],"STALE_GRAPH_VERSION","plan snapshot")
+    require(digest(plan.get("classification_revision"))==digest(snapshot.get("classifications",{}).get("revision")),"DOMAIN_REVISION","plan classification revision differs")
     require(catalog.hash(snapshot["schema_id"])==snapshot["schema_hash"],"SCHEMA_HASH","snapshot schema binding")
     ids=[op["id"] for op in plan["operations"]]
     require(len(ids)==len(set(ids)),"DUPLICATE_OPERATION_ID","operation IDs must be unique")
@@ -100,7 +100,7 @@ def validate_plan(catalog: Catalog, plan: dict[str,Any], *, source_status: dict[
         for ref in expected_sources:
             require(ref in source_status,"SOURCE_STATUS_MISSING",ref)
             status=source_status[ref]
-            require(status["epoch"]==plan["source_epochs"][ref],"STALE_SOURCE_EPOCH",ref)
+            require(digest(status["epoch"])==digest(plan["source_epochs"][ref]),"STALE_SOURCE_EPOCH",ref)
             require(status["active"] and status["permission"]=="READ" and not status["tombstone"],"STALE_EVIDENCE",ref)
     facts=deepcopy(snapshot["assertions"]);nodes=deepcopy(snapshot["nodes"])
     relations=deepcopy(catalog.get(snapshot["schema_id"],"schema")["relations"])

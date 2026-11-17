@@ -44,6 +44,8 @@ def _stored_projection(state: dict[str, Any]) -> dict[str, Any] | None:
         return None
     projection = state["classifications"]
     validate("classification-projection", projection)
+    require(type(projection["contract_version"]) is int and type(projection["revision"]) is int,
+            "SCHEMA_ERROR", "classification versions must be integers")
     return projection
 
 
@@ -165,13 +167,20 @@ def receipt_projection(state: dict[str, Any]) -> dict[str, Any]:
 
 
 
+def _require_committed_receipt(event, receipt):
+    record_hash = digest({"kind": "receipt", "body": receipt})
+    require(event["record_hashes"].get(f"receipt:{record_hash}") == record_hash,
+            "DOMAIN_AUDIT", "authorization or preflight record is not journal-bound")
+
+
 def verify_transaction_receipt(event: dict[str, Any], *, backend: str) -> None:
     operation = event["operation"]
     expected = {key: event[key] for key in ("version", "idempotency_key", "before_hash", "after_hash", "previous_hash",
                                             "authorization_hash", "preflight_hash", "upstream_head", "committed_at")}
     expected.update(backend=backend, plan_hash=operation.get("plan_hash", digest(operation)),
                     event_hash=event["hash"], operation_hash=digest(operation), **receipt_projection(event["state_after"]))
-    require(event["transaction_receipt"] == expected, "BACKEND_AUDIT", "receipt was altered independently of the journal")
+    require(digest(event["transaction_receipt"]) == digest(expected),
+            "BACKEND_AUDIT", "receipt was altered independently of the journal")
 
 
 def verify_preflight_payload(preflight: dict[str, Any], plan: dict[str, Any], plan_hash: str, *,
@@ -210,6 +219,8 @@ def _verify_classification_event(catalog, event, plan, previous, previous_projec
     require(event["authorization_hash"] in receipts and event["preflight_hash"] in receipts,
             "DOMAIN_AUDIT", "classification approvals are missing")
     authorization, preflight = receipts[event["authorization_hash"]], receipts[event["preflight_hash"]]
+    _require_committed_receipt(event, authorization)
+    _require_committed_receipt(event, preflight)
     policy = catalog.get(plan["policy_id"], "policy")
     require(operation["policy_version"] == policy["version"] and operation["population"] == policy["population"]
             and operation["security_scope"] == plan["security_scope"],
@@ -228,12 +239,12 @@ def _verify_classification_event(catalog, event, plan, previous, previous_projec
     require(digest(catalog.get(plan["snapshot_id"], "graph-snapshot")) == digest(snapshot_body(previous)),
             "DOMAIN_AUDIT", "classification plan is not based on the prior authoritative state")
     previous_revision = previous_projection["revision"] if previous_projection is not None else None
-    require(plan["graph_version"] == previous["graph_version"] and
-            plan.get("classification_revision") == previous_revision,
+    require(digest(plan["graph_version"]) == digest(previous["graph_version"]) and
+            digest(plan.get("classification_revision")) == digest(previous_revision),
             "DOMAIN_AUDIT", "classification compare-and-swap revision differs")
     for source_id, epoch in plan["source_epochs"].items():
         status = statuses.get(source_id)
-        require(status is not None and status["epoch"] == epoch and status["active"] and
+        require(status is not None and type(epoch) is int and status["epoch"] == epoch and status["active"] and
                 status["permission"] == "READ" and not status["tombstone"],
                 "DOMAIN_AUDIT", "classification used a stale or unauthorized source epoch")
     prospective = apply_publication_state(catalog, deepcopy(previous), plan, statuses)
@@ -296,6 +307,8 @@ def audit_history(backend: Any, *, trust: TrustStore | None = None,
     require(previous_projection is None, "DOMAIN_AUDIT",
             "classification genesis must be unmigrated; initialization requires a reviewed transaction")
     erased = dict(backend.db.execute("SELECT id,hash FROM trace_erased"))
+    erased_receipts = {ref for (ref,) in backend.db.execute("SELECT id FROM trace_erased")
+                       if ref.startswith("receipt:")}
     if erased:
         from .catalog import Catalog
         catalog = Catalog({"id": ref, "hash": hash_, "kind": kind, "body": loads(body)}
@@ -324,10 +337,14 @@ def audit_history(backend: Any, *, trust: TrustStore | None = None,
                 if event["hash"] in checked_authority:
                     continue
                 receipt = receipts.get(event["authorization_hash"])
-                require(receipt is not None, "REPLAY_CONTENT_UNAVAILABLE", "source authorization bytes are unavailable")
-                record_hash = digest({"kind": "receipt", "body": receipt})
-                require(event["record_hashes"].get(f"receipt:{record_hash}") == record_hash,
-                        "DOMAIN_AUDIT", "source authorization record is not journal-bound")
+                if receipt is None and action == "ADMIT":
+                    recorded = event["record_hashes"]
+                    sibling_erased = any(recorded.get(sibling) == sibling_hash == erased.get(sibling)
+                                         for sibling, sibling_hash in operation["source_hashes"].items())
+                    if sibling_erased and any(recorded[ref] == erased[ref] for ref in erased_receipts & recorded.keys()):
+                        raise ContractError("REPLAY_CONTENT_UNAVAILABLE", "shared source admission proof was erased")
+                require(receipt is not None, "DOMAIN_AUDIT", "source authorization bytes are missing")
+                _require_committed_receipt(event, receipt)
                 issuer = trust.verify(receipt, "SOURCE_STATUS", at=event["committed_at"])
                 require(digest(receipt["payload"]) == digest(operation),
                         "DOMAIN_AUDIT", "source authorization differs from the journal")
@@ -347,7 +364,7 @@ def audit_history(backend: Any, *, trust: TrustStore | None = None,
         current_projection = _stored_projection(after)
         for ref in _source_status_changes(event, previous, statuses):
             source_history.setdefault(ref, []).append(event)
-        changed = current_projection != previous_projection
+        changed = digest(current_projection) != digest(previous_projection)
         expected = previous_projection
         if operation.get("action") == "PUBLISH_PLAN":
             plan_id = operation["plan_id"]
@@ -380,17 +397,22 @@ def audit_history(backend: Any, *, trust: TrustStore | None = None,
                         expected = _verify_classification_event(catalog, event, plan, previous, previous_projection,
                             statuses, receipts, trust=trust, sandbox=backend.sandbox)
                     except ContractError as exc:
-                        if exc.code != "MISSING_REFERENCE" or exc.detail not in erased or (
-                            event["record_hashes"].get(exc.detail) != erased[exc.detail]
-                        ):
+                        missing_reference = (exc.code == "MISSING_REFERENCE" and exc.detail in erased and
+                                             event["record_hashes"].get(exc.detail) == erased[exc.detail])
+                        if exc.code != "REPLAY_CONTENT_UNAVAILABLE" and not missing_reference:
                             raise
                         missing_proof = True
                         expected = current_projection
-        require(current_projection == expected, "DOMAIN_AUDIT",
+        require(digest(current_projection) == digest(expected), "DOMAIN_AUDIT",
                 "classification state changed outside a reviewed classification operation")
         previous, previous_projection, statuses = after, current_projection, event["source_status"]
     if missing_proof:
         return {"classification_replay": "UNAVAILABLE_ERASED_CONTENT", "classification_authority_verified": False}
-    authenticate_sources(required_sources)
+    try:
+        authenticate_sources(required_sources)
+    except ContractError as exc:
+        if exc.code == "REPLAY_CONTENT_UNAVAILABLE":
+            return {"classification_replay": "UNAVAILABLE_ERASED_CONTENT", "classification_authority_verified": False}
+        raise
     return {"classification_replay": "PASS", "classification_events": domain_events,
             "classification_authority_verified": trust is not None and domain_events > 0}
