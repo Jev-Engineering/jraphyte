@@ -231,6 +231,165 @@ class ReassessmentTests(unittest.TestCase):
             self.assertIs(pending_row["new_model_call"], False)
             self.assertFalse((output / "attempts").exists())
 
+class ResumeGuardTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.origin, self.output = self.root/'origin', self.root/'new'
+        self.checkout, self.interpreter = self.root/'checkout', self.root/'python'
+        self.old_sha = write_once(self.origin/'protocol.json', {})
+        self.record = {'sample_id':'a','origin_row_sha256':'1'*64}
+        self.pending = {'sample_id':'b'}
+        self.plan = dict(schema_version=migration.VERSION, origin_run_relative='origin',
+            origin_protocol_sha256=self.old_sha, origin_head='a'*40,
+            origin_checkout=str(self.checkout.resolve()), origin_interpreter=str(self.interpreter.resolve()),
+            imported_prefix_count=1, new_max_documents_per_session=64, imports=[self.record],
+            pending_sealed_conversion=self.pending, new_code_sha256={'code':'new'},
+            new_evaluator_runtime={'runtime':'new'}, manifest_relative='manifest.json',
+            profile_relative='profile.json', source_root=None)
+        self.path = self.root/'new.mixed-pending-migration-v3.json'
+        self.audit = {'completed_rows':1,'row_hashes':[['a','1'*64]]}
+        self.gate = dict(receipt='gate.json',receipt_sha256=write_once(self.root/'gate.json',
+            {'base_method_hashes':self.plan['new_code_sha256']}), policy='policy.json',
+            policy_sha256='0'*64, configuration='config.json',source_map='map.json')
+
+    def run_plan(self, gate=None):
+        return migration.run(self.root,self.origin,self.output,self.checkout,self.interpreter,
+                             'a'*40,self.old_sha,1,64,gate=gate)
+
+    def patches(self):
+        from contextlib import ExitStack
+        stack = ExitStack()
+        stack.enter_context(patch.object(migration.migration_v1,'_origin_audit',return_value=self.audit))
+        stack.enter_context(patch.object(migration,'_prefix',return_value=([self.record],self.pending)))
+        stack.enter_context(patch.object(migration,'method_hashes',return_value={'code':'new'}))
+        stack.enter_context(patch.object(migration,'runtime_receipt',return_value={'runtime':'new'}))
+        return stack
+
+    def test_existing_plan_changed(self):
+        for key in ('origin_run_relative','origin_protocol_sha256','origin_head','origin_checkout',
+                    'origin_interpreter','imported_prefix_count','new_max_documents_per_session','schema_version'):
+            self.path.write_text(json.dumps(dict(self.plan, **{key:'changed'})))
+            with self.subTest(key=key), patch.object(migration,'prepare_plan',side_effect=AssertionError), \
+                    patch.object(producer,'_run',side_effect=AssertionError):
+                with self.assertRaisesRegex(ValueError,'existing_sealed_prefix_plan_changed'):
+                    self.run_plan()
+
+    def test_resumed_origin_changed(self):
+        write_once(self.path,self.plan)
+        for change in ('completed_rows','row_hashes','imports','pending'):
+            with self.subTest(change=change), self.patches(), patch.object(producer,'_run',side_effect=AssertionError):
+                if change in self.audit:
+                    context = patch.object(migration.migration_v1,'_origin_audit',return_value=dict(self.audit,**{change:None}))
+                else:
+                    context = patch.object(migration,'_prefix',return_value=([],self.pending) if change=='imports' else ([self.record],{}))
+                with context, self.assertRaisesRegex(ValueError,'resumed_sealed_prefix_origin_changed'):
+                    self.run_plan()
+
+    def test_code_runtime_drift_resumed_and_fresh(self):
+        for fresh, key in ((False,'new_code_sha256'),(False,'new_evaluator_runtime'),(True,'new_code_sha256')):
+            plan = dict(self.plan, **{key:{'stale':True}})
+            if self.path.exists(): self.path.unlink()
+            if not fresh: write_once(self.path,plan)
+            with self.subTest(fresh=fresh,key=key), self.patches(), \
+                    patch.object(migration,'prepare_plan',return_value=(self.path,plan)), \
+                    patch.object(producer,'_run',side_effect=AssertionError):
+                with self.assertRaisesRegex(ValueError,'sealed_prefix_new_code_or_runtime_changed'):
+                    self.run_plan()
+
+    def test_gate_refusals_and_positive_control(self):
+        write_once(self.path,self.plan)
+        from src import paper_selector_acceptance_v2 as acceptance
+        for status, included in (('FAIL',True),('PASS',False),('PASS',True)):
+            with self.subTest(status=status,included=included), self.patches(), \
+                    patch.object(acceptance,'verify',return_value={'status':status,'source_verified_original_91_included':included}), \
+                    patch.object(producer,'_run',return_value={'status':'fixture'}) as run:
+                if status=='PASS' and included:
+                    self.run_plan(self.gate)
+                    run.assert_called_once()
+                    self.assertEqual(run.call_args.kwargs['migration'],
+                        {'relative':self.path.name,'sha256':digest(self.path)})
+                    self.assertIs(run.call_args.kwargs['migration_initializer'],migration._initialize)
+                else:
+                    with self.assertRaisesRegex(ValueError,'current_source_verified_gate_required_before_model_run'):
+                        self.run_plan(self.gate)
+                    run.assert_not_called()
+        (self.root/'gate.json').unlink()
+        self.gate['receipt_sha256'] = write_once(self.root/'gate.json',{'base_method_hashes':{'stale':True}})
+        with self.patches(), patch.object(acceptance,'verify',return_value={'status':'PASS','source_verified_original_91_included':True}), \
+                patch.object(producer,'_run',side_effect=AssertionError) as run:
+            with self.assertRaisesRegex(ValueError,'current_source_gate_method_closure_required_before_model_run'):
+                self.run_plan(self.gate)
+            run.assert_not_called()
+
+    def test_pending_origin_native_identity(self):
+        runtime = {'python':'3.12','executable_sha256':'0'*64,'packages':{}}
+        write_once(self.root/'profile.json',{'runtime':runtime})
+        row = {'sample_id':'b',**{k+'_sha256':'0'*64 for k in ('source','page','image','native')}}
+        intent = dict(row, protocol_sha256=self.old_sha, native_sha256='f'*64)
+        document_sha = write_once(self.origin/'attempts/b/document.json', {'texts':[]})
+        record = dict(sample_id='b', origin_receipt_sha256=None, origin_document_sha256=document_sha,
+            origin_intent_sha256=write_once(self.origin/'attempts/b/intent.json',intent),
+            origin_conversion_sha256=write_once(self.origin/'attempts/b/conversion.json',
+                {'model_called':True,'status':'success','document_sha256':document_sha,
+                 'docling_status':'ConversionStatus.SUCCESS','error_class':None,'runtime':runtime}))
+        self.plan['pending_sealed_conversion'] = record
+        with self.assertRaisesRegex(ValueError,'migration_origin_attempt_identity_mismatch:b'):
+            migration._pending_origin(self.root,self.plan,row)
+
+
+@unittest.skipUnless(fitz, 'PyMuPDF required for actual source geometry')
+class SourceChangeTests(unittest.TestCase):
+    def test_import_and_pending_source_changes(self):
+        for mode in ('import', 'after', 'native_hash'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                output = root/'new'
+                with fitz.open() as pdf:
+                    pdf.new_page(width=100,height=100)
+                    payload = pdf.tobytes()
+                (root/'source.pdf').write_bytes(payload)
+                row = {'sample_id':'b','source_relative':'source.pdf','source_root_id':'data_root',
+                       **{k+'_sha256':hashlib.sha256(payload).hexdigest() for k in ('source','page','image','native')}}
+                record = {'sample_id':'b','eligibility':'ineligible','state':'ineligible',
+                    'origin_row_sha256':'0'*64,'assessment_relative':None,'assessment_sha256':None,
+                    'origin_intent_sha256':'1'*64,'origin_conversion_sha256':'2'*64,
+                    'origin_document_sha256':'3'*64}
+                plan = dict(schema_version=migration.VERSION,ids=['b'],new_evaluator_runtime={'runtime':'new'},
+                    imports=[record] if mode=='import' else [],
+                    pending_sealed_conversion=record,new_code_sha256={'code':'new'},manifest_sha256='4'*64,
+                    profile_sha256='5'*64,source_root=None,new_max_documents_per_session=64,
+                    origin_protocol_sha256='6'*64)
+                plan_sha = write_once(root/'plan.json',plan)
+                protocol = dict(ids=['b'],evaluator_runtime=plan['new_evaluator_runtime'],
+                    code_sha256=plan['new_code_sha256'],manifest_sha256=plan['manifest_sha256'],
+                    profile_sha256=plan['profile_sha256'],source_root=None,converter_session={'max_documents':64},
+                    migration={'relative':'plan.json','sha256':plan_sha})
+                write_once(output/'protocol.json',protocol)
+                values = [([], [100,100], 'eligible'), ([{'text':'changed'}],[100,100],'eligible')]
+                effect = values
+                # The native-hash case uses the real verifier on bound files, not an error mock.
+                if mode=='native_hash':
+                    for key in ('page','image','native'):
+                        (root/(key+'.json')).write_bytes(payload)
+                        row[key+'_relative'] = key+'.json'
+                    row['physical_page'] = 1
+                    row['native_sha256'] = 'f'*64
+                with patch.object(producer,'_check_code'), \
+                        patch.object(migration,'_origin_receipt',return_value=({'eligibility':'ineligible'},{})), \
+                        patch.object(migration,'_pending_origin',return_value=(
+                            {'status':'success','session_start':{},'wall_seconds':.1},{'texts':[]})):
+                    from contextlib import nullcontext
+                    verifier = nullcontext() if mode=='native_hash' else patch.object(producer,'_verified_row',side_effect=effect)
+                    code = {'import':'sealed_prefix_current_source_eligibility_changed:b',
+                            'after':'pending_conversion_source_changed_during_reassessment',
+                            'native_hash':'field_source_hash_mismatch:native'}[mode]
+                    with verifier, self.assertRaisesRegex(ValueError,code):
+                        migration._initialize(root,output,{'pdfs':[row]},protocol,None)
+                self.assertFalse((output/'rows/b.json').exists())
+                self.assertFalse((output/'assessments').exists())
+
 
 if __name__ == "__main__":
     unittest.main()
