@@ -956,8 +956,10 @@ def _evaluate(root, bundle_descriptor, *, expected_preregistration_sha256, trust
     require(times["references_frozen"] < instant(execution["started_at"]) <= instant(execution["completed_at"])
         <= times["predictions_frozen"] <= instant(at), "predictions_precede_reference_seal")
     require(set(execution["cases"]) == evaluated_ids, "all_sampled_predictions_required")
-    require(execution["costs"].get("paid_calls") == 0 and execution["costs"].get("paid_spend_usd") == 0
-        and execution["costs"].get("graph_writes") == 0, "unauthorized_paid_or_graph_execution")
+    costs = execution["costs"]
+    require(type(costs) is dict and all(type(costs.get(k)) is int and costs[k] == 0
+        for k in ("paid_calls", "graph_writes")) and type(costs.get("paid_spend_usd")) in (int, float)
+        and costs["paid_spend_usd"] == 0, "unauthorized_paid_or_graph_execution")
     require(isinstance(execution["stage_reports"], list) and execution["stage_reports"], "timing_failure_and_review_reports_required")
     stage_names = set()
     for stage in execution["stage_reports"]:

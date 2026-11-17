@@ -184,11 +184,13 @@ class AggregateTests(unittest.TestCase):
         value = dict(version=VERSION, status="BLOCKED", qualification_pass=False,
             independent_human_qualification=False, graph_writes=0, paid_calls=0)
         for reason, expected in (("missing_or_invalid_bound_study_evidence", "missing_or_invalid_bound_study_evidence"),
+                ("code_or_runtime_changed_during_evaluation", "code_or_runtime_changed_during_evaluation"),
                 ("private_identifier:source", "unrecognized_reason_redacted"),
                 ("arxiv:2501.00001 /private/path", "unrecognized_reason_redacted")):
             value["reason"] = reason
             report = build_report(value)
             self.assertEqual(report["reason_code"], expected)
+            self.assertEqual(report["execution_mode"], "UNVERIFIED")
             self.assertNotIn("overall", report)
         with self.assertRaises(EvidenceError):
             assert_redacted({"reason_code": "private_identifier:source"})
@@ -289,6 +291,10 @@ class AggregateTests(unittest.TestCase):
             with self.assertRaisesRegex(EvidenceError, "publication_completion_required"):
                 write_report(root, "new.json", bare)
             self.assertFalse((root/"new.json").exists())
+
+    def test_report_rejects_data_root_containing_checkout(self):
+        with self.assertRaisesRegex(EvidenceError, "private_test_data_must_be_outside_repository"):
+            write_report(REPO.parent, f"{REPO.name}/authored-report.json", {})
 
     def test_report_rejects_reserved_output_and_changed_publication(self):
         with tempfile.TemporaryDirectory() as directory:

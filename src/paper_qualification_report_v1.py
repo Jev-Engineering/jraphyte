@@ -13,7 +13,7 @@ from src.paper_qualification_v1 import (Artifacts, EvidenceError, METHODS, PHASE
     REQUIRED_PREREGISTRATION_DOCUMENTS, REVIEW_POLICY, VERSION as EVALUATION_VERSION,
     evaluator_identity, exact, read_preregistration,
     _trust_identity, read_study_bundle, require, summarize, verify_published)
-from src.parallel_source_v4.common import child, data_root as authorized_root, write_once
+from src.parallel_source_v4.common import REPO, child, data_root, write_once
 from src.parallel_source_v4.runtime import DEFAULT_RUNTIME_LOCK, runtime_receipt
 from trace_gc.cli import read_trust
 from trace_gc.pdf_source_parallel_v4 import digest_value
@@ -54,7 +54,7 @@ execution_mode conversion_error_count truncated_case_count reviewer_kind assista
 CHECKS = {"minimum_accepted", "minimum_resolved_complete", "zero_false_accepts", "strict_precision",
     "strict_complete_recall", "reference_resolution"} | {f"challenge_{name}_{kind}" for name in QUOTAS
     for kind in ("safety", "utility", "actual_image_route")}
-VOCABULARY = CHECKS | FIELDS | set(STAGES) | set(QUOTAS) | {k+":complete" for k in QUOTAS} | set(METHODS) | STATUSES | STUDY_MODES | {"NOT_RUN", "UNVERIFIED"} | SELECTIONS | REFERENCES | ROUTES | {REVIEW_POLICY, VERSION, EVALUATION_VERSION, CLAIM, SCOPE, "unrecognized_reason_redacted"}
+VOCABULARY = CHECKS | FIELDS | set(STAGES) | set(QUOTAS) | {k+":complete" for k in QUOTAS} | set(METHODS) | STATUSES | STUDY_MODES | {"UNVERIFIED"} | SELECTIONS | REFERENCES | ROUTES | {REVIEW_POLICY, VERSION, EVALUATION_VERSION, CLAIM, SCOPE, "unrecognized_reason_redacted"}
 
 
 def integer(value):
@@ -119,7 +119,7 @@ def build_report(evaluation, *, execution=None):
         "status": status, "qualification_pass": False,
         "independent_human_qualification": False, "claim": CLAIM, "scope": SCOPE}
     if status == "BLOCKED" and "primary" not in e:
-        result["execution_mode"] = "NOT_RUN"
+        result["execution_mode"] = "UNVERIFIED"
         result["reason_code"] = reason_code(e.get("reason"))
         assert_redacted(result)
         return result
@@ -200,6 +200,12 @@ def assert_redacted(report):
             valid = value is None or type(value) in (int, bool)
         require(valid, "report_redaction_violation")
     walk(report)
+
+
+def authorized_root(explicit):
+    root = data_root(explicit)
+    require(root not in REPO.resolve().parents, "private_test_data_must_be_outside_repository")
+    return root
 
 
 def write_report(data_root, output_relative, evaluation_descriptor, *, execution_descriptor=None,
