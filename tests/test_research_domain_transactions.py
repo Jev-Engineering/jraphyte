@@ -31,7 +31,7 @@ class DomainFixture:
         self.trust = TrustStore()
         self.reviewer, self.validator, self.source_admin = [Signer.ephemeral(ref) for ref in ("reviewer", "validator", "source-admin")]
         self.trust.enroll("reviewer", IssuerPolicy(self.reviewer.public_key(), "fixture-reviewer", frozenset({"AUTHORIZATION"}),
-                          frozenset({"INITIALIZE_RESEARCH_DOMAINS", "SET_SOURCE_CLASSIFICATION"}),
+                          frozenset({"INITIALIZE_RESEARCH_DOMAINS", "SET_SOURCE_CLASSIFICATION", "PROPOSE_SCHEMA_MIGRATION"}),
                           frozenset({"test"}), frozenset({"SYNTHETIC", "RECORDED"}), can_review=True))
         self.trust.enroll("validator", IssuerPolicy(self.validator.public_key(), "fixture-validator", frozenset({"PREFLIGHT"}),
                           frozenset(), frozenset({"test"}), frozenset({"SYNTHETIC", "RECORDED"})))

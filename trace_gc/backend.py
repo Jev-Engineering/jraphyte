@@ -23,7 +23,7 @@ from .qualification import QualificationRegistry,context_for,evaluate_policy
 from .trust import TrustStore,Signer,verify_authorization,verify_observation_attestation
 from .domain_publication import (
     OPERATIONS as DOMAIN_OPERATIONS,
-    audit_history, classification_only_plan, receipt_projection, snapshot_body, verify_preflight_payload,
+    apply_publication_state, audit_history, has_classification_operations, receipt_projection, snapshot_body, verify_preflight_payload,
     verify_review_attribution,
     verify_transaction_receipt,
 )
@@ -273,7 +273,7 @@ class SQLiteReferenceBackend:
                 from .ledger import receipt_bound_hash_field
                 lost={source_id}
                 classification_plans = {record["id"] for record in records
-                                        if record["kind"] == "plan" and classification_only_plan(record["body"])}
+                                        if record["kind"] == "plan" and has_classification_operations(record["body"])}
                 committed_plans = set()
                 if classification_plans:
                     for (text,) in self.db.execute("SELECT body FROM trace_journal"):
@@ -450,7 +450,7 @@ class CompilerService:
     def publish(self,catalog: Catalog,plan_id: str,*,authorization: dict[str,Any],preflight: dict[str,Any],
                 upstream_head: str | None=None,fault: Callable[[str],None] | None=None,at: str | None=None) -> dict[str,Any]:
         plan=catalog.get(plan_id,"plan");plan_hash=catalog.hash(plan_id)
-        domain_plan=any(op["operation"] in DOMAIN_OPERATIONS for op in plan["operations"])
+        domain_plan=has_classification_operations(plan)
         def verify_request(accepted_at: str) -> None:
             # Current capability and application policy; independent of graph
             # state, so it is valid for first commit and idempotent retry alike.
@@ -474,20 +474,13 @@ class CompilerService:
         def apply(state,statuses):
             snapshot=catalog.get(plan["snapshot_id"],"graph-snapshot")
             require(state["schema_hash"]==plan["schema_hash"] and snapshot==snapshot_body(state),"SNAPSHOT_BINDING","commit snapshot differs")
-            prospective=validate_plan(catalog,plan,source_status=statuses)
-            state["nodes"],state["assertions"]=prospective["nodes"],prospective["assertions"]
-            if "classifications" in prospective:state["classifications"]=prospective["classifications"]
-            for op in plan["operations"]:
-                if op["operation"]=="APPLY_SCHEMA_MIGRATION":state["schema_id"]=op["target_schema_id"];state["schema_hash"]=catalog.hash(op["target_schema_id"])
-                elif op["operation"]=="PROPOSE_SCHEMA_MIGRATION":state["schema_proposals"][op["id"]]=deepcopy(op)
-                elif op["operation"]=="ATTACH_CANDIDATE_METADATA":state["metadata"].setdefault(op["candidate_id"],{})[op["id"]]=deepcopy(op["metadata"])
-            return state
+            return apply_publication_state(catalog, state, plan, statuses)
         catalog.put("receipt",authorization);catalog.put("receipt",preflight)
         from .ledger import build_ledger, references
         missing_snapshot_refs = {ref for record in catalog.all("graph-snapshot")
                                  for ref, _ in references(record) if ref not in catalog}
         retained_plans = {record["id"]: record for record in catalog.all("plan")
-                          if classification_only_plan(record["body"]) and record["body"]["snapshot_id"] not in catalog}
+                          if has_classification_operations(record["body"]) and record["body"]["snapshot_id"] not in catalog}
         missing_snapshot_refs.update(record["body"]["snapshot_id"] for record in retained_plans.values())
         erased_refs = set()
         erased_plan_links = set()

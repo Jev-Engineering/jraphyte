@@ -10,7 +10,7 @@ from trace_gc.canonical import digest, dumps, loads
 from trace_gc.catalog import Catalog
 from trace_gc.compiler import now
 from trace_gc.conformance import legacy_test_policy
-from trace_gc.domain_publication import migration_operation
+from trace_gc.domain_publication import _verify_classification_event, classification_operation, migration_operation
 from trace_gc.errors import ContractError
 from trace_gc.ledger import make_bundle
 from trace_gc.legacy import PinnedLegacyBackend
@@ -95,6 +95,24 @@ class PublicationRegressions:
         self.f.migrate()
         self.assertTrue(self.b.audit(trust=self.f.trust)["classification_authority_verified"])
 
+    def test_classification_replay_checks_the_entire_poststate(self):
+        previous, statuses = self.b.state(), self.b.statuses()
+        published = self.f.migrate()["event"]
+        plan = self.f.catalog.get(published["operation"]["plan_id"], "plan")
+        receipts = {digest(r["body"]): r["body"] for r in self.f.catalog.all("receipt")}
+        for change in (
+            lambda event: event["state_after"]["metadata"].update(unreviewed={"note": "authored"}),
+            lambda event: event["state_after"]["source_epochs"].update({self.f.source: 99}),
+            lambda event: event["source_status"][self.f.source].update(permission="DENIED"),
+            lambda event: event["state_after"].update(schema_hash="0" * 64),
+        ):
+            with self.subTest(change=change):
+                candidate = deepcopy(published)
+                change(candidate)
+                with self.assertRaisesRegex(ContractError, "DOMAIN_AUDIT.*complete"):
+                    _verify_classification_event(self.f.catalog, candidate, plan, previous, None, statuses,
+                                                 receipts, trust=self.f.trust, sandbox=True)
+
     def test_first_admission_preserves_configured_nodes_after_initialization(self):
         workspace = TemporaryDirectory()
         self.addCleanup(workspace.cleanup)
@@ -115,7 +133,8 @@ class PublicationRegressions:
         self.f.admit(other, key="admit-other")
         migration = self.f.migrate()
         assignment = self.f.assign()
-        classified_plan = self.f.assignment_plan(assignment)
+        proposal = catalog.get(self.ordinary_plan(), "plan")["operations"][0]
+        classified_plan = self.f.plan([classification_operation(catalog, assignment, operation_id="assign"), proposal])
         prior_snapshot = catalog.get(classified_plan, "plan")["snapshot_id"]
         self.f.publish(classified_plan)
         self.f.status_change(source=other, permission="DENIED", tombstone=True)
@@ -130,6 +149,7 @@ class PublicationRegressions:
         successor = self.f.assign(previous=assignment)
         self.f.publish(self.f.assignment_plan(successor))
         self.assertEqual(self.b.state()["classifications"]["assignments"], {self.f.source: successor})
+        self.assertEqual(self.b.state()["schema_proposals"], {proposal["id"]: proposal})
         self.assertTrue(self.b.audit(trust=self.f.trust)["classification_authority_verified"])
         self.assertEqual(self.b.db.execute("SELECT id FROM trace_records WHERE id IN (?,?,?)",
                                             (other, evidence, prior_snapshot)).fetchall(), [])

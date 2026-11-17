@@ -22,8 +22,8 @@ OPERATIONS = frozenset({"INITIALIZE_RESEARCH_DOMAINS", "SET_SOURCE_CLASSIFICATIO
 SNAPSHOT_FIELDS = ("graph_version", "schema_id", "schema_hash", "nodes", "assertions", "source_epochs")
 
 
-def classification_only_plan(plan: dict[str, Any]) -> bool:
-    return bool(plan["operations"]) and all(op["operation"] in OPERATIONS for op in plan["operations"])
+def has_classification_operations(plan: dict[str, Any]) -> bool:
+    return any(op["operation"] in OPERATIONS for op in plan["operations"])
 
 
 def snapshot_body(state: dict[str, Any]) -> dict[str, Any]:
@@ -185,6 +185,25 @@ def verify_preflight_payload(preflight: dict[str, Any], plan: dict[str, Any], pl
     require(type(required) is bool and preflight["payload"] == expected and (not required or reviewed),
             "PREFLIGHT_FAILED", "invalid/missing checks or required review")
 
+def apply_publication_state(catalog, state, plan, statuses):
+    from .plans import validate_plan
+
+    prospective = validate_plan(catalog, plan, source_status=statuses)
+    state["nodes"] = prospective["nodes"]
+    state["assertions"] = prospective["assertions"]
+    if "classifications" in prospective:
+        state["classifications"] = prospective["classifications"]
+    for op in plan["operations"]:
+        if op["operation"] == "APPLY_SCHEMA_MIGRATION":
+            state["schema_id"] = op["target_schema_id"]
+            state["schema_hash"] = catalog.hash(op["target_schema_id"])
+        elif op["operation"] == "PROPOSE_SCHEMA_MIGRATION":
+            state["schema_proposals"][op["id"]] = deepcopy(op)
+        elif op["operation"] == "ATTACH_CANDIDATE_METADATA":
+            state["metadata"].setdefault(op["candidate_id"], {})[op["id"]] = deepcopy(op["metadata"])
+    return state
+
+
 def _verify_classification_event(catalog, event, plan, previous, previous_projection, statuses, receipts, *, trust, sandbox):
     operation = event["operation"]
     after = event["state_after"]
@@ -217,12 +236,12 @@ def _verify_classification_event(catalog, event, plan, previous, previous_projec
         require(status is not None and status["epoch"] == epoch and status["active"] and
                 status["permission"] == "READ" and not status["tombstone"],
                 "DOMAIN_AUDIT", "classification used a stale or unauthorized source epoch")
-    from .plans import validate_plan
-    prospective = validate_plan(catalog, plan, source_status=statuses)
-    expected = _stored_projection(prospective)
-    require(prospective["nodes"] == after["nodes"] and prospective["assertions"] == after["assertions"],
-            "DOMAIN_AUDIT", "classification event differs from the fully validated prospective graph")
-    return expected
+    prospective = apply_publication_state(catalog, deepcopy(previous), plan, statuses)
+    prospective["graph_version"] = previous["graph_version"] + 1
+    prospective["source_epochs"] = {ref: status["epoch"] for ref, status in statuses.items()}
+    require(prospective == after and event["source_status"] == statuses,
+            "DOMAIN_AUDIT", "classification event differs from the complete validated publication state")
+    return _stored_projection(prospective)
 
 
 def audit_history(backend: Any, *, trust: TrustStore | None = None) -> dict[str, Any]:
@@ -269,10 +288,10 @@ def audit_history(backend: Any, *, trust: TrustStore | None = None) -> dict[str,
                 require(catalog.hash(plan_id) == plan_hash, "DOMAIN_AUDIT", "publication plan hash differs")
                 require(event["idempotency_key"] == plan["idempotency_key"] == event["transaction_receipt"]["idempotency_key"],
                         "DOMAIN_AUDIT", "publication event and receipt key differ from the signed plan")
-                if any(op["operation"] in OPERATIONS for op in plan["operations"]):
+                if has_classification_operations(plan):
                     domain_events += 1
                     snapshot_id = plan["snapshot_id"]
-                    if snapshot_id not in catalog and snapshot_id in erased and classification_only_plan(plan):
+                    if snapshot_id not in catalog and snapshot_id in erased and has_classification_operations(plan):
                         # The signed plan retains the snapshot reference. The
                         # journal already retains exactly these metadata bytes.
                         snapshot = snapshot_body(previous)
