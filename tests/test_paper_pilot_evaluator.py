@@ -37,11 +37,11 @@ def receipts():
     answer = {"retrieval_id": "retrieve-q1", "prepare_id": "prepare-q1", "response_id": "answer-q1",
               "review_id": "review-q1", "question_sha256": QUESTION, "state": "SUPPORTED", "abstention_reason": None,
               "claims": [{"claim_sha256": "5" * 64, "evidence_ids": [evidence["evidence_id"]], "support": True}],
-              "reviewer_kind": "assistant", "answer_graph_version": 2, "graph_version_current": True}
+              "reviewer_kind": "assistant", "answer_graph_version": 2, "graph_version_current": True, "retrieval_context_current": True}
     abstain = {"retrieval_id": "retrieve-q2", "prepare_id": "prepare-q2", "response_id": None, "review_id": None,
                "question_sha256": UNSUPPORTED, "state": "ABSTAIN_NO_AUTHORIZED_EVIDENCE",
                "abstention_reason": "NO_AUTHORIZED_EVIDENCE", "claims": [], "reviewer_kind": None,
-               "answer_graph_version": 2, "graph_version_current": True}
+               "answer_graph_version": 2, "graph_version_current": True, "retrieval_context_current": True}
     assertion = {"assertion_id": "cand-1", "claim_id": "claim:" + "6" * 64, "active": True,
                  "evidence_ids": [evidence["evidence_id"]], "transaction_event_hash": "7" * 64,
                  "transaction_version": 2, "plan_id": "plan:" + "8" * 64, "resolution_id": "resolution:" + "9" * 64,
@@ -87,7 +87,7 @@ class AggregateEvaluatorTests(unittest.TestCase):
         cases = {
             "REVIEW_REJECTED_CLAIM": lambda r: r["answers"][0].update(state="REJECTED_UNSUPPORTED_CLAIM"),
             "ABSTAINED_ON_SUPPORTED_QUESTION:MODEL_ABSTAINED": lambda r: r["answers"][0].update(
-                state="ABSTAIN_MODEL", abstention_reason="MODEL_ABSTAINED", claims=[]),
+                state="ABSTAIN_MODEL", abstention_reason="MODEL_ABSTAINED", claims=[], review_id=None, reviewer_kind=None),
             "SUPPORT_JUDGMENT_INCOMPLETE": lambda r: r["answers"][0]["claims"][0].update(support=None),
             "REQUIRED_SOURCE_NOT_CITED": lambda r: r["evidence"][0].update(source_id="paper-b"),
             "INCOMPLETE_CITATION_CHAIN:MISSING_PAGE_LINEAGE": lambda r: r["evidence"][0].update(page_png_sha256=None),
@@ -126,6 +126,23 @@ class AggregateEvaluatorTests(unittest.TestCase):
         question = rows(evaluate(protocol(), value, []), "questions")[QUESTION]
         self.assertEqual(question["reason"], "GRAPH_CHANGED_AFTER_ANSWER_REFRESH_REQUIRED")
 
+    def test_abstention_requires_current_context_and_completed_stage(self):
+        for changes, status, reason in (
+            ({"answer_graph_version": 1, "graph_version_current": False}, "HOLD", "ABSTENTION_CONTEXT_REFRESH_REQUIRED"),
+            ({"retrieval_context_current": False}, "HOLD", "ABSTENTION_CONTEXT_REFRESH_REQUIRED"),
+            ({"prepare_id": None}, "FAIL", "INCOMPLETE_ABSTENTION_STAGE"),
+            ({"response_id": "unexpected-response"}, "FAIL", "INCOMPLETE_ABSTENTION_STAGE"),
+            ({"state": "ABSTAIN_MODEL", "abstention_reason": "MODEL_ABSTAINED"},
+             "FAIL", "INCOMPLETE_ABSTENTION_STAGE"),
+            ({"state": "ABSTAIN_MODEL", "abstention_reason": "MODEL_ABSTAINED", "response_id": "model-response"},
+             "PASS", "MODEL_ABSTAINED"),
+        ):
+            with self.subTest(changes=changes):
+                value = receipts()
+                value["answers"][1].update(changes)
+                question = rows(evaluate(protocol(), value, []), "questions")[UNSUPPORTED]
+                self.assertEqual((question["status"], question["reason"]), (status, reason))
+
     def test_withdrawn_source_invalidates_supported_answer_and_assertion(self):
         value = receipts()
         value["evidence"][0]["currently_readable"] = False
@@ -140,7 +157,7 @@ class AggregateEvaluatorTests(unittest.TestCase):
         value = receipts()
         later = copy.deepcopy(value["answers"][0])
         later.update(retrieval_id="retrieve-q1-again", state="ABSTAIN_NO_AUTHORIZED_EVIDENCE",
-                     abstention_reason="NO_AUTHORIZED_EVIDENCE", claims=[], response_id=None, review_id=None)
+                     abstention_reason="NO_AUTHORIZED_EVIDENCE", claims=[], response_id=None, review_id=None, reviewer_kind=None)
         value["answers"].append(later)
         self.assertEqual(rows(evaluate(protocol(), value, []), "questions")[QUESTION]["retrieval_id"], "retrieve-q1-again")
 
@@ -249,6 +266,26 @@ class PilotExportTests(unittest.TestCase):
         self.assertNotIn(self.f.native.strip(), json.dumps(report))
         self.f.reopen()
         self.assertEqual(export_receipts(self.f.pilot), exported)
+
+    def test_export_abstention_binds_retrieval_graph_and_access(self):
+        f = self.f
+        text = f.config["questions"][0]
+        request = base.query(requesting_component="downstream-pilot-test", security_scope="pilot-test",
+                             text=text, focus_entities=[f.claim])
+        f.pilot.retrieve("retrieve", request=request)
+        empty = export_receipts(f.pilot)["answers"][0]
+        self.assertEqual(empty["state"], "CONTEXT_ONLY")
+        self.assertEqual(empty["answer_graph_version"], 0)
+
+        f.pilot.prepare_answer("prepare-answer", retrieval_id="retrieve", question_text=text)
+        frozen = protocol(questions=[{"question_sha256": question_sha256(text), "expectation": "ABSTAIN",
+                                      "required_source_ids": []}], assertions=[])
+        self.assertEqual(evaluate(frozen, export_receipts(f.pilot), [])["verdict"], "PASS")
+        f.acl_revision = "synthetic-changed-access"
+        exported = export_receipts(f.pilot)
+        self.assertTrue(exported["answers"][0]["graph_version_current"])
+        self.assertFalse(exported["answers"][0]["retrieval_context_current"])
+        self.assertEqual(evaluate(frozen, exported, [])["verdict"], "HOLD")
 
     def test_export_before_answers_holds_with_not_run_rows(self):
         self.f.compiled()

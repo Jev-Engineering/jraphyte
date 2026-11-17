@@ -126,7 +126,7 @@ def _assertion_row(pilot, assertion_id, state, journal):
             "evidence_ids": list(row["evidence_ids"]), **chain}
 
 
-def _answer_rows(pilot, statuses, graph_version):
+def _answer_rows(pilot, current_stamp, graph_version):
     by_arg = {}
     for request in pilot.requests.values():
         for field in ("retrieval_id", "prepared_id", "response_id"):
@@ -145,7 +145,10 @@ def _answer_rows(pilot, statuses, graph_version):
             last = following[-1]
             chain[slot] = last["id"]
         state = last.get("result", {}).get("state", "INTENT_PENDING")
-        claims, reviewer_kind, answer_version = [], None, None
+        retrieved = retrieval.get("result")
+        claims, reviewer_kind = [], None
+        answer_version = (pilot.catalog.get(retrieved["context_id"], "graphrag-answer")["graph_version"]
+                          if retrieved is not None else None)
         response = pilot.requests.get(chain["response_id"] or "", {}).get("result")
         if response is not None:
             answer_version = response["draft"]["graph_version"]
@@ -160,6 +163,7 @@ def _answer_rows(pilot, statuses, graph_version):
         rows.append({**chain, "question_sha256": text_digest(retrieval["args"]["request"]["text"]), "state": state,
                      "abstention_reason": _ABSTAIN.get(state), "claims": claims, "reviewer_kind": reviewer_kind,
                      "answer_graph_version": answer_version,
+                     "retrieval_context_current": retrieved is not None and retrieved["stamp"] == current_stamp,
                      "graph_version_current": answer_version is not None and answer_version == graph_version})
     return rows
 
@@ -179,7 +183,7 @@ def export_receipts(pilot) -> dict:
                         "reviewer_kind": payload["reviewer_kind"],
                         "all_checks_passed": all(v is True for v in payload["checks"].values()),
                         "independent_review": False})
-    answers = _answer_rows(pilot, statuses, state["graph_version"])
+    answers = _answer_rows(pilot, pilot._stamp(), state["graph_version"])
     cited = sorted({e for a in answers for c in a["claims"] for e in c["evidence_ids"]} |
                    {e for row in state["assertions"].values() for e in row["evidence_ids"]})
     return {"version": RECEIPTS_VERSION, "run_id": pilot.config["run_id"],
@@ -262,9 +266,12 @@ def _validate_receipts(receipts):
         _bool(e["currently_readable"], path)
     for i, a in enumerate(receipts["answers"]):
         path = f"receipts.answers[{i}]"
-        _keys(a, {"retrieval_id", "prepare_id", "response_id", "review_id", "question_sha256", "state",
-                  "abstention_reason", "claims", "reviewer_kind", "answer_graph_version",
-                  "graph_version_current"}, path)
+        fields = {"retrieval_id", "prepare_id", "response_id", "review_id", "question_sha256", "state",
+                  "abstention_reason", "claims", "reviewer_kind", "answer_graph_version", "graph_version_current"}
+        if type(a) is dict and "retrieval_context_current" in a:
+            fields.add("retrieval_context_current")
+            _bool(a["retrieval_context_current"], f"{path}.retrieval_context_current")
+        _keys(a, fields, path)
         _ident(a["retrieval_id"], path)
         for field in ("prepare_id", "response_id", "review_id"):
             _opt(a[field], _ident, f"{path}.{field}")
@@ -333,14 +340,21 @@ def _question(q, attempt, evidence):
         return {**row, "status": "NOT_RUN", "reason": "NO_ANSWER_ATTEMPT"}
     row.update(retrieval_id=attempt["retrieval_id"], state=attempt["state"])
     state = attempt["state"]
+    if state in _ABSTAIN:
+        expected_response = state == "ABSTAIN_MODEL"
+        if (attempt["prepare_id"] is None or (attempt["response_id"] is not None) != expected_response or
+                attempt["review_id"] is not None or attempt["reviewer_kind"] is not None):
+            return {**row, "status": "FAIL", "reason": "INCOMPLETE_ABSTENTION_STAGE"}
+        if not attempt["graph_version_current"] or attempt.get("retrieval_context_current") is not True:
+            return {**row, "status": "HOLD", "reason": "ABSTENTION_CONTEXT_REFRESH_REQUIRED"}
+        reason = _ABSTAIN[state]
+        if q["expectation"] == "ABSTAIN":
+            return {**row, "status": "PASS", "reason": reason}
+        return {**row, "status": "FAIL", "reason": "ABSTAINED_ON_SUPPORTED_QUESTION:" + reason}
     if q["expectation"] == "ABSTAIN":
-        if attempt["abstention_reason"] is not None:
-            return {**row, "status": "PASS", "reason": attempt["abstention_reason"]}
         if state in {"SUPPORTED", "WAIT_ANSWER_REVIEW", "REJECTED_UNSUPPORTED_CLAIM"}:
             return {**row, "status": "FAIL", "reason": "ANSWERED_UNSUPPORTED_QUESTION"}
         return {**row, "status": "HOLD", "reason": "PENDING:" + state}
-    if attempt["abstention_reason"] is not None:
-        return {**row, "status": "FAIL", "reason": "ABSTAINED_ON_SUPPORTED_QUESTION:" + attempt["abstention_reason"]}
     if state == "REJECTED_UNSUPPORTED_CLAIM":
         return {**row, "status": "FAIL", "reason": "REVIEW_REJECTED_CLAIM"}
     if state != "SUPPORTED":
@@ -358,7 +372,7 @@ def _question(q, attempt, evidence):
     missing = sorted(set(q["required_source_ids"]) - cited)
     if missing:
         return {**row, "status": "FAIL", "reason": "REQUIRED_SOURCE_NOT_CITED", "missing_source_ids": missing}
-    if not attempt["graph_version_current"]:
+    if not attempt["graph_version_current"] or attempt.get("retrieval_context_current") is False:
         return {**row, "status": "HOLD", "reason": "GRAPH_CHANGED_AFTER_ANSWER_REFRESH_REQUIRED"}
     return {**row, "status": "PASS", "reason": "SUPPORTED_WITH_COMPLETE_CURRENT_CHAINS"}
 

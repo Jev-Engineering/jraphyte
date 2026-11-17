@@ -44,7 +44,7 @@ report is written in that case.
 | Section | PASS | Not PASS |
 |---|---|---|
 | `questions` (SUPPORTED) | Latest attempt has a complete preparation, response and attributed review chain with state `SUPPORTED`; every claim judged `true`; every citation resolves to evidence → source → original PDF hash → physical page (and crop for image sources); every cited source currently readable; each `required_source_ids` entry cited; graph version unchanged since the answer | `FAIL`: rejected claim, abstention, missing judgment, missing evidence, page or crop lineage, required source not cited. `INVALIDATED`: cited source withdrawn or denied. `HOLD`: pending stage or graph changed. `NOT_RUN`: no attempt |
-| `questions` (ABSTAIN) | Latest attempt abstained (`NO_AUTHORIZED_EVIDENCE` or `MODEL_ABSTAINED`) | `FAIL`: an answer was drafted or reviewed. `HOLD`/`NOT_RUN` as above |
+| `questions` (ABSTAIN) | Latest attempt abstained at its completed preparation or model-response stage with a current retrieval context and graph version | `FAIL`: an answer was drafted or reviewed. `HOLD`/`NOT_RUN` as above |
 | `assertions` | Expected assertion active, with a journal transaction at a recorded version whose plan hash matches, an identified `SELECTED` resolution and one or more identified `OK` observations | `FAIL`: incomplete chain or unexpected assertion. `INVALIDATED`: complete chain, now inactive. `NOT_RUN`: not published |
 | `citation_chains` | Each claim of each latest answer has complete, currently readable chains | `FAIL` / `INVALIDATED` as above |
 | `recovery` | Supplied row says `PASS` | Supplied `FAIL`/`HOLD`, or `NOT_RUN` |
@@ -53,10 +53,12 @@ report is written in that case.
 its denominator and counts for every status. The verdict is `FAIL` if any row
 fails, `PASS` only if every row passes, and `HOLD` otherwise.
 
-The latest attempt for a question, in checkpoint order, is the one scored. A
-withdrawal therefore shows up twice: the original answer's citations become
-`INVALIDATED`, and a fresh retrieval for the same question is expected to
-abstain.
+Question and citation rows score the latest attempt in checkpoint order. If
+that attempt cites a withdrawn or denied source, its citation rows are
+`INVALIDATED`. A fresh attempt replaces those rows in the evaluation. Use the
+exported attempt history and predeclared recovery rows to review the withdrawal
+sequence. Older exports without a retrieval-context check yield `HOLD` for
+abstention until a current receipt is exported.
 
 ## Boundaries
 
