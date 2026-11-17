@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import math
@@ -20,7 +21,12 @@ CLAIM = ("Redacted aggregate only; internally attributed source-first review, no
     "first-page abstract scope only, not validation of later-page ingestion, graph publication or generated answers; "
     "synthetic or authored inputs are not empirical evidence.")
 SCOPE = "first_page_abstract_extraction_only"
-REASON = re.compile(r"[a-z][a-z0-9_]{0,95}(:[a-z_]{1,32})?")
+REDACTED_REASON = "unrecognized_reason_redacted"
+REASONS = {REDACTED_REASON, "missing_or_invalid_bound_study_evidence",
+    "external_review_trust_required", "artifact_bytes_changed",
+    "regression_prerequisite_changed_during_qualification", "code_or_runtime_changed_during_evaluation",
+    "execution_descriptor_required", "execution_not_bound_to_evaluation", "report_output_exists",
+    "publication_invalidated_or_not_evaluation", "publication_completion_required"}
 SHA = re.compile(r"[0-9a-f]{64}")
 STATUSES = {"PASS", "FAIL", "BLOCKED", "AUTHORED_CONTRACT_PASS_NOT_QUALIFICATION"}
 SELECTIONS = {"automatic_primary_before_review", "diagnostic_only"}
@@ -92,7 +98,7 @@ def summaries(values):
 
 
 def reason_code(value):
-    return value if type(value) is str and REASON.fullmatch(value) else "unrecognized_reason_redacted"
+    return value if type(value) is str and value in REASONS else REDACTED_REASON
 
 
 def build_report(evaluation, *, execution=None):
@@ -107,7 +113,7 @@ def build_report(evaluation, *, execution=None):
     result = {"version": VERSION, "source_evaluation_version": EVALUATION_VERSION,
         "status": status, "qualification_pass": status == "PASS",
         "independent_human_qualification": False, "claim": CLAIM, "scope": SCOPE}
-    if status == "BLOCKED":
+    if status == "BLOCKED" and "primary" not in e:
         result["reason_code"] = reason_code(e.get("reason"))
         assert_redacted(result)
         return result
@@ -175,7 +181,7 @@ def assert_redacted(report):
                 walk(item, path)
         elif type(value) is str:
             valid = (bool(SHA.fullmatch(value)) if path == ("source_evaluation_sha256",) else
-                bool(REASON.fullmatch(value)) if path == ("reason_code",) else value in VOCABULARY)
+                value in REASONS if path == ("reason_code",) else value in VOCABULARY)
         elif type(value) is float:
             valid = math.isfinite(value)
         else:
@@ -195,7 +201,10 @@ def write_report(data_root, output_relative, evaluation_descriptor, *, execution
     folder = child(root, evaluation_descriptor["relative"]).parent
     require(Path(evaluation_descriptor["relative"]).name == "evaluation.json"
         and not (folder/"publication-invalidated.json").exists(), "publication_invalidated_or_not_evaluation")
-    marker = store.parse((folder/"publication-complete.json").read_bytes())
+    marker_relative = (folder/"publication-complete.json").relative_to(root).as_posix()
+    marker_raw = child(root, marker_relative).read_bytes()
+    marker = store.parse(marker_raw)
+    store.seen[marker_relative] = hashlib.sha256(marker_raw).hexdigest()
     require(isinstance(marker, dict) and marker.get("version") == "paper-evaluation-publication-v1"
         and marker.get("evaluation_sha256") == evaluation_descriptor["sha256"]
         and marker.get("status") == evaluation.get("status")
@@ -210,6 +219,7 @@ def write_report(data_root, output_relative, evaluation_descriptor, *, execution
     report["source_evaluation_sha256"] = evaluation_descriptor["sha256"]
     assert_redacted(report)
     store.recheck()
+    require(not (folder/"publication-invalidated.json").exists(), "publication_invalidated_or_not_evaluation")
     return {"relative": output_relative, "sha256": write_once(output, report)}
 
 
@@ -261,7 +271,7 @@ def main(argv=None):
             result = write_report(args.data_root, args.output,
                 {"relative": args.evaluation, "sha256": args.evaluation_sha256}, execution_descriptor=execution)
             code = 0
-    except (ValueError, OSError, KeyError, TypeError, AttributeError) as error:
+    except (ValueError, OSError, KeyError, TypeError, AttributeError, OverflowError) as error:
         result = {"status": "BLOCKED", "reason_code": reason_code(str(error)) if isinstance(error, EvidenceError)
             else "missing_or_invalid_input"}
         code = 2

@@ -370,8 +370,10 @@ built from an allowlist and contains:
 
 Every string must belong to a fixed vocabulary, so work IDs, paths, study
 identity, source text and review audit membership cannot be emitted. Partial or
-absent accepts appear only as a count. A BLOCKED reason is kept only when it is a
-plain code. The write is once-only. Exit 2 with `BLOCKED` reports invalid input
+absent accepts appear only as a count. A completed evaluation with missing
+representation retains its aggregate measurements under `BLOCKED`. An early
+evidence failure reports a fixed diagnostic code or a generic redaction code
+and has no execution descriptor. The write is once-only. Exit 2 with `BLOCKED` reports invalid input
 without echoing it. The report inherits the evaluation's scope: first-page
 abstract extraction only, internally attributed review, no independent human
 validation.

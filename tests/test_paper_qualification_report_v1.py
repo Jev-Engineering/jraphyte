@@ -137,12 +137,26 @@ class AggregateTests(unittest.TestCase):
     def test_blocked(self):
         value = dict(version=VERSION, status="BLOCKED", qualification_pass=False,
             independent_human_qualification=False, graph_writes=0, paid_calls=0)
-        for reason, expected in (("missing_evidence:partial", "missing_evidence:partial"),
+        for reason, expected in (("missing_or_invalid_bound_study_evidence", "missing_or_invalid_bound_study_evidence"),
+                ("private_identifier:source", "unrecognized_reason_redacted"),
                 ("arxiv:2501.00001 /private/path", "unrecognized_reason_redacted")):
             value["reason"] = reason
             report = build_report(value)
             self.assertEqual(report["reason_code"], expected)
             self.assertNotIn("overall", report)
+        with self.assertRaises(EvidenceError):
+            assert_redacted({"reason_code": "private_identifier:source"})
+
+    def test_statistical_blocked_keeps_aggregates(self):
+        value = evaluation()
+        value.update(status="BLOCKED", qualification_pass=False,
+            missing_representation=["image_only:complete"])
+        report = build_report(value, execution=execution())
+        self.assertEqual(report["status"], "BLOCKED")
+        self.assertFalse(report["qualification_pass"])
+        self.assertEqual(report["missing_representation"], ["image_only:complete"])
+        self.assertEqual(report["overall"]["n"], 400)
+        self.assertEqual(report["failure_totals"], {"failures": 6, "retries": 12})
 
     def test_execution(self):
         e = execution()
