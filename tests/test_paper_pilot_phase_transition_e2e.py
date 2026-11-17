@@ -392,7 +392,20 @@ class PhaseTransitionTests(PhaseFixture, unittest.TestCase):
         state, budget = self.backend.state(), self.budget.snapshot()
         self.assertEqual(budget['used']['review_actions'], before_publish['used']['review_actions'] + 1)
         self.assertNotIn('result', self.pilot.requests['new-publish'])
+        version = state['graph_version']
+        actual_event = self.backend.db.execute('SELECT * FROM trace_journal WHERE version=?', (version,)).fetchone()
+        self.backend.db.execute('DELETE FROM trace_journal WHERE version=?', (version,))
+        self.backend.db.execute('UPDATE trace_state SET body=? WHERE id=1', (dumps(graph_before_publish),))
+        try:
+            with self.assertRaises(ContractError) as caught:
+                self.pilot.publish_plan('new-publish', **publish_args)
+            self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+            self.assertNotIn('result', self.pilot.requests['new-publish'])
+        finally:
+            self.backend.db.execute('INSERT INTO trace_journal VALUES(?,?,?,?,?)', actual_event)
+            self.backend.db.execute('UPDATE trace_state SET body=? WHERE id=1', (dumps(state),))
         self.reopen_target()
+        self.assertEqual(self.activate(), activation)
         with self.assertRaises(ContractError) as caught:
             self.pilot.compile_candidates('unrelated-while-publication-pending', candidates=self.candidates)
         self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
@@ -413,6 +426,16 @@ class PhaseTransitionTests(PhaseFixture, unittest.TestCase):
         self.assertEqual(self.activate(), activation)
         self.assertEqual([exporter._logical(db) for db in stores], before)
         self.assertEqual(files(self.archive), self.old_bytes)
+
+        response_sha = self.pilot.requests['new-response']['args']['response_blob']
+        self.assertNotIn(response_sha, self.capsule['blobs'])
+        self.pilot.db.execute('DELETE FROM blobs WHERE hash=?', (response_sha,))
+        try:
+            with self.assertRaises(ContractError) as caught:
+                self.activate()
+            self.assertEqual(caught.exception.code, 'PILOT_BLOB_CHANGED')
+        finally:
+            self.pilot.db.execute('INSERT INTO blobs VALUES (?,?)', (response_sha, response))
 
         # The internally consistent pre-publication graph lacks a completed
         # checkpoint transaction. Active verification must detect the rollback.
@@ -518,6 +541,14 @@ class PhaseTransitionTests(PhaseFixture, unittest.TestCase):
             open_budget('other-authored-run')
         self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
         self.assertEqual(exporter._logical(self.budget.db), before)
+
+        # No pending intent accounts for the extra persisted use.
+        untracked = {**original['used'], 'review_actions': original['used']['review_actions'] + 1}
+        self.budget.db.execute('UPDATE trace_budgets SET used=? WHERE run_id=?', (dumps(untracked), run_id))
+        with self.assertRaises(ContractError) as caught:
+            self.activate()
+        self.assertEqual(caught.exception.code, 'PHASE_BUDGET')
+        self.budget.db.execute('UPDATE trace_budgets SET used=? WHERE run_id=?', (dumps(original['used']), run_id))
 
         for key in ('model_calls', 'request_bytes'):
             with self.subTest(counter=key):
@@ -684,6 +715,28 @@ class PhaseTransitionTests(PhaseFixture, unittest.TestCase):
         rows = self.controller.db.execute('SELECT body FROM events').fetchall()
         self.assertEqual([loads(r[0])['kind'] for r in rows], ['FREEZE', 'APPLICATION_PHASE_IMPORT'])
         self.preserved()
+
+    def test_first_activation_requires_the_signed_graph_journal_prefix(self):
+        self.cutover(); self.restore(); self.open_target(); self.import_phase(); self.controller_open()
+        version = self.backend.state()["graph_version"]
+        body, original_hash = self.backend.db.execute(
+            "SELECT body,hash FROM trace_journal WHERE version=?", (version,)).fetchone()
+        alternate = loads(body)
+        alternate["lineage_prefix"] = [{"authored_fixture": "different history"}]
+        alternate_hash = digest({key: value for key, value in alternate.items()
+                                 if key not in {"hash", "transaction_receipt"}})
+        alternate["hash"] = alternate_hash
+        alternate["transaction_receipt"]["event_hash"] = alternate_hash
+        self.backend.db.execute("UPDATE trace_journal SET body=?,hash=? WHERE version=?",
+                                (dumps(alternate), alternate_hash, version))
+        self.assertEqual(self.backend.audit()["head_hash"], alternate_hash)
+        with self.assertRaises(ContractError) as caught:
+            self.activate()
+        self.assertEqual(caught.exception.code, "PHASE_GRAPH")
+        self.assertFalse(Path(self.authority.binding["activation_path"]).exists())
+        self.backend.db.execute("UPDATE trace_journal SET body=?,hash=? WHERE version=?",
+                                (body, original_hash, version))
+        self.activate()
 
     def test_activation_interruptions_resume(self):
         self.cutover(); self.restore(); self.open_target(); self.import_phase(); self.controller_open()

@@ -201,6 +201,7 @@ class PaperPilot:
                 budget.bind_phase_guard(phase_authority.write)
             if self.phase_import is not None and active_phase:
                 self._verify_active_graph()
+                self._verify_completed_phase_blobs()
             else:
                 backend.audit()
             for record in backend.load_catalog().all():
@@ -329,6 +330,21 @@ class PaperPilot:
         for sha in capsule["blobs"]:
             self._read_blob(sha)
 
+    def _verify_completed_phase_blobs(self):
+        refs = set()
+        for id_, request in self.requests.items():
+            if id_ in self._historical_request_ids or "result" not in request:
+                continue
+            args, result, kind = request["args"], request["result"], request["kind"]
+            if kind in {"PREPARE_SOURCE", "PREPARE_SOURCE_IMAGE"}:
+                refs.update((args["pdf_sha256"], result["page_png_blob"]))
+                if kind == "PREPARE_SOURCE_IMAGE":
+                    refs.update((args["raw_output_sha256"], result["crop_png_blob"]))
+            elif kind in {"SEMANTIC_RESPONSE", "ANSWER_RESPONSE"}:
+                refs.add(args["response_blob"])
+        for sha in sorted(refs):
+            self._read_blob(sha)
+
     def _inherited_graph_origin(self, capsule):
         from .phase_transition import _read_once
         graph = capsule["graph_state"]
@@ -379,7 +395,7 @@ class PaperPilot:
         floor = self._phase_budget_floor["used"]
         pending = [row for id_, row in self.requests.items() if id_ not in self._historical_request_ids
                    and "result" not in row and row["kind"] in _BUDGET_CHARGING_STAGES]
-        if not pending or used == floor:
+        if used == floor:
             return
         if (opening or recovering_id is not None) and used == {**floor, "review_actions": floor["review_actions"] + 1}:
             proven = []
@@ -779,11 +795,11 @@ class PaperPilot:
         return max(a[0], b[0]) < min(a[2], b[2]) and max(a[1], b[1]) < min(a[3], b[3])
 
     def _committed(self, key, *, authorization, operation_hash=None, plan_hash=None, preflight_hash=None):
-        self.backend.audit()
-        rows = [r["body"] for r in self.backend.load_catalog().all("transaction") if r["body"]["idempotency_key"] == key]
-        require(len(rows) <= 1, "PILOT_TRANSACTION", "duplicate backend receipt")
-        if rows:
-            receipt = rows[0]
+        with self.backend._lock:
+            self.backend.audit()
+            row = self.backend.db.execute("SELECT body FROM trace_journal WHERE key=?", (key,)).fetchone()
+        if row is not None:
+            receipt = loads(row[0])["transaction_receipt"]
             require(receipt["authorization_hash"] == digest(authorization) and
                     (operation_hash is None or receipt["operation_hash"] == operation_hash) and
                     (plan_hash is None or receipt["plan_hash"] == plan_hash) and

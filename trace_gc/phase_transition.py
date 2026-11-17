@@ -432,17 +432,15 @@ def activate_imported_phase(*, pilot, controller, phase_authority,
                 all(pilot.requests.get(id_) == row for id_, row in imported.items()),
                 "PHASE_ACTIVATION", "imported phase history changed")
         if active:
-            pilot._verify_active_budget()
+            pilot._verify_active_budget(opening=True)
+            pilot._verify_completed_phase_blobs()
         else:
             require(len(checkpoint) == len(journal) == 2 and pilot.requests == imported and
                     pilot._matches_imported_state(capsule),
                     "PHASE_ACTIVATION", "inactive imported state changed")
         pilot._verify_imported_blobs(capsule)
         controller._check_actions()
-        if active:
-            pilot._verify_active_graph()
-        else:
-            pilot.backend.audit()
+        pilot._verify_active_graph()
         if not active:
             temporary = pointer.parent / ("." + pointer.name + "." + uuid.uuid4().hex + ".tmp")
             with temporary.open("xb") as stream:
