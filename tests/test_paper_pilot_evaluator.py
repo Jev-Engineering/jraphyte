@@ -36,13 +36,13 @@ def receipts():
                 "physical_page": 2, "page_png_sha256": "4" * 64, "crop_png_sha256": None, "currently_readable": True}
     answer = {"retrieval_id": "retrieve-q1", "prepare_id": "prepare-q1", "response_id": "answer-q1",
               "review_id": "review-q1", "question_sha256": QUESTION, "state": "SUPPORTED", "abstention_reason": None,
-              "claims": [{"claim_sha256": "5" * 64, "evidence_ids": [evidence["evidence_id"]], "support": True}],
+              "claims": [{"evidence_ids": [evidence["evidence_id"]], "support": True}],
               "reviewer_kind": "assistant", "answer_graph_version": 2, "graph_version_current": True, "retrieval_context_current": True}
     abstain = {"retrieval_id": "retrieve-q2", "prepare_id": "prepare-q2", "response_id": None, "review_id": None,
                "question_sha256": UNSUPPORTED, "state": "ABSTAIN_NO_AUTHORIZED_EVIDENCE",
                "abstention_reason": "NO_AUTHORIZED_EVIDENCE", "claims": [], "reviewer_kind": None,
                "answer_graph_version": 2, "graph_version_current": True, "retrieval_context_current": True}
-    assertion = {"assertion_id": "cand-1", "claim_id": "claim:" + "6" * 64, "active": True,
+    assertion = {"assertion_id": "cand-1", "currently_readable": True, "active": True,
                  "evidence_ids": [evidence["evidence_id"]], "transaction_event_hash": "7" * 64,
                  "transaction_version": 2, "plan_id": "plan:" + "8" * 64, "resolution_id": "resolution:" + "9" * 64,
                  "resolution_outcome": "SELECTED", "observation_ids": ["observation:" + "b" * 64],
@@ -151,7 +151,7 @@ class AggregateEvaluatorTests(unittest.TestCase):
 
     def test_withdrawn_source_invalidates_supported_answer_and_assertion(self):
         value = receipts()
-        value["evidence"][0]["currently_readable"] = False
+        value["evidence"][0] = {"evidence_id": value["evidence"][0]["evidence_id"], "currently_readable": False}
         value["assertions"][0]["active"] = False
         report = evaluate(protocol(), value, [])
         self.assertEqual(report["verdict"], "HOLD")
@@ -292,7 +292,7 @@ class PilotExportTests(unittest.TestCase):
         for text in (self.f.native.strip(), "The authored result is 17 units.", self.f.config["questions"][0]):
             self.assertNotIn(text, encoded)
         self.assertEqual(exported["answers"][0]["state"], "SUPPORTED")
-        self.assertEqual(exported["answers"][0]["claims"][0]["claim_sha256"], text_digest("The authored result is 17 units."))
+        self.assertNotIn(text_digest("The authored result is 17 units."), encoded)
         self.assertEqual(exported["evidence"][0]["physical_page"], 2)
         report = evaluate(self.frozen(), exported, [])
         self.assertEqual(report["verdict"], "PASS", report["rows"])
@@ -303,9 +303,29 @@ class PilotExportTests(unittest.TestCase):
         source_ref = exported["evidence"][0]["source_snapshot_id"]
         self.f.grants.pop("source:" + source_ref)
         self.assertEqual(self.f.pilot.backend.statuses()[source_ref]["permission"], "READ")
-        denied = evaluate(self.frozen(), export_receipts(self.f.pilot), [])
+        denied_receipts = export_receipts(self.f.pilot)
+        denied = evaluate(self.frozen(), denied_receipts, [])
         self.assertEqual(denied["metrics"]["questions"]["invalidated"], 1)
         self.assertEqual(denied["metrics"]["citation_chains"]["invalidated"], 1)
+        self.assertEqual(denied["metrics"]["assertions"]["invalidated"], 1)
+        self.assertEqual(set(denied_receipts["evidence"][0]), {"evidence_id", "currently_readable"})
+        for secret in (source_ref, exported["evidence"][0]["raw_document_sha256"],
+                       text_digest("The authored result is 17 units.")):
+            self.assertNotIn(secret, json.dumps(denied_receipts))
+            self.assertNotIn(secret, json.dumps(denied))
+
+    def test_edge_grant_removal_holds_citation_even_with_readable_source(self):
+        self.supported()
+        before = export_receipts(self.f.pilot)
+        edge = before["assertions"][0]["assertion_id"]
+        self.f.grants.pop("edge:" + edge)
+        after = export_receipts(self.f.pilot)
+        self.assertTrue(after["evidence"][0]["currently_readable"])
+        self.assertFalse(after["assertions"][0]["currently_readable"])
+        report = evaluate(self.frozen(), after, [])
+        self.assertEqual(report["metrics"]["questions"]["hold"], 1)
+        self.assertEqual(report["metrics"]["citation_chains"]["hold"], 1)
+        self.assertEqual(report["metrics"]["assertions"]["invalidated"], 1)
 
     def test_export_abstention_binds_retrieval_graph_and_access(self):
         f = self.f

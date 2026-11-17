@@ -19,7 +19,9 @@ public, reproducible way to count its rows.
    callbacks and backend) and call `export_receipts(pilot)`. The exporter reads
    the verified checkpoint, the backend journal and the **current** source and
    assertion status. It emits identifiers, hashes, page numbers, review kinds and
-   states. Claims and questions appear only as SHA-256 of their UTF-8 text.
+   states. Claims are identified by position within their answer. Questions
+   use the frozen protocol's SHA-256 references. The exporter replaces denied
+   source lineage with local markers and omits denied assertion provenance.
 2. Freeze the evaluation protocol before inspecting answers. See
    [`examples/paper_pilot/evaluation_protocol.synthetic.json`](../examples/paper_pilot/evaluation_protocol.synthetic.json).
    `question_sha256(text)` gives the question identifier.
@@ -45,8 +47,8 @@ report is written in that case.
 |---|---|---|
 | `questions` (SUPPORTED) | Latest attempt has a complete preparation, response and attributed review chain with state `SUPPORTED`; every claim judged `true`; every citation resolves to evidence → source → original PDF hash → physical page (and crop for image sources); every cited source currently readable; each `required_source_ids` entry cited; graph version unchanged since the answer | `FAIL`: rejected claim, abstention, missing judgment, missing evidence, page or crop lineage, required source not cited. `INVALIDATED`: cited source withdrawn or denied. `HOLD`: pending stage or graph changed. `NOT_RUN`: no attempt |
 | `questions` (ABSTAIN) | Latest attempt abstained at its completed preparation or model-response stage with a current retrieval context and graph version | `FAIL`: an answer was drafted or reviewed. `HOLD`/`NOT_RUN` as above |
-| `assertions` | Expected assertion active, with a journal transaction at a recorded version whose plan hash matches, an identified `SELECTED` resolution and one or more identified `OK` observations | `FAIL`: incomplete chain or unexpected assertion. `INVALIDATED`: complete chain, now inactive. `NOT_RUN`: not published |
-| `citation_chains` | Each claim of each latest answer has complete, currently readable chains | `FAIL` / `INVALIDATED` as above |
+| `assertions` | Expected assertion active and currently authorized, with a journal transaction at a recorded version whose plan hash matches, an identified `SELECTED` resolution and one or more identified `OK` observations | `FAIL`: incomplete chain or unexpected assertion. `INVALIDATED`: inactive or currently denied. `NOT_RUN`: not published |
+| `citation_chains` | Each claim of each latest answer has complete, currently readable chains and a current retrieval context | `FAIL` / `INVALIDATED` as above. `HOLD`: context refresh required |
 | `recovery` | Supplied row says `PASS` | Supplied `FAIL`/`HOLD`, or `NOT_RUN` |
 
 `abstention` summarizes the ABSTAIN questions on their own. Each section reports
