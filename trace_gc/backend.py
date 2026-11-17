@@ -138,7 +138,8 @@ class SQLiteReferenceBackend:
                      authorization_hash: str, preflight_hash: str, upstream_head: str | None = None,
                      fault: Callable[[str],None] | None = None, at: str | None = None,
                      lineage_prefix: list[dict[str,Any]] | None = None,
-                     authority_check: Callable[[],str] | None = None) -> dict[str,Any]:
+                     authority_check: Callable[[],str] | None = None,
+                     validate_fresh: Callable[[dict[str,Any],str],None] | None = None) -> dict[str,Any]:
         require(bool(key) and type(expected_version) is int and expected_version>=0,"TRANSACTION_INPUT","explicit version/key required")
         with (self._phase_guard() if self._phase_guard is not None else nullcontext()):
             return self._transaction_locked(key=key, fingerprint=fingerprint,
@@ -146,11 +147,11 @@ class SQLiteReferenceBackend:
                 apply=apply, authorization_hash=authorization_hash,
                 preflight_hash=preflight_hash, upstream_head=upstream_head,
                 fault=fault, at=at, lineage_prefix=lineage_prefix,
-                authority_check=authority_check)
+                authority_check=authority_check, validate_fresh=validate_fresh)
 
     def _transaction_locked(self, *, key, fingerprint, expected_version, operation,
                             catalog, apply, authorization_hash, preflight_hash,
-                            upstream_head, fault, at, lineage_prefix, authority_check):
+                            upstream_head, fault, at, lineage_prefix, authority_check, validate_fresh=None):
         def checkpoint(name: str) -> None:
             if fault is not None:fault(name)
         with self._lock:
@@ -168,6 +169,9 @@ class SQLiteReferenceBackend:
                 state=self.state();statuses=self.statuses()
                 require(state["graph_version"]==expected_version,"STALE_GRAPH_VERSION","optimistic version mismatch")
                 before=digest(state)
+                # Fresh validation uses the journal timestamp after receipt lookup.
+                if validate_fresh is not None:
+                    validate_fresh(deepcopy(state),when)
                 resulting=apply(deepcopy(state),deepcopy(statuses))
                 require(resulting["graph_version"]==expected_version,"TRANSACTION_INPUT","apply may not forge graph version")
                 resulting["graph_version"]+=1
@@ -477,13 +481,13 @@ class CompilerService:
             verify_request(at or now())
         operation={"action":"PUBLISH_PLAN","plan_id":plan_id,"plan_hash":plan_hash,"policy_version":self.policy_version,
                    "population":self.population,"security_scope":self.scope}
+        def validate_ordinary_fresh(state,accepted_at):
+            if erased_refs or "classifications" in state:
+                # Check continuity before an ordinary write while allowing
+                # an existing receipt to remain readable after revocation.
+                self.backend.audit()
+            verify_request(accepted_at)
         def apply(state,statuses):
-            if not domain_plan:
-                if erased_refs or "classifications" in state:
-                    # Check continuity before an ordinary write while allowing
-                    # an existing receipt to remain readable after revocation.
-                    self.backend.audit()
-                verify_request(at or now())
             snapshot=catalog.get(plan["snapshot_id"],"graph-snapshot")
             require(state["schema_hash"]==plan["schema_hash"] and digest(snapshot)==digest(snapshot_body(state)),"SNAPSHOT_BINDING","commit snapshot differs")
             return apply_publication_state(catalog, state, plan, statuses)
@@ -528,4 +532,6 @@ class CompilerService:
             return accepted_at
         return self.backend._transaction(key=plan["idempotency_key"],fingerprint=digest(operation),expected_version=plan["graph_version"],
                   operation=operation,catalog=catalog,apply=apply,authorization_hash=digest(authorization),preflight_hash=digest(preflight),
-                  upstream_head=computed_head,fault=fault,at=at,lineage_prefix=lineage,authority_check=verify_classification_under_lock if domain_plan else None)
+                  upstream_head=computed_head,fault=fault,at=at,lineage_prefix=lineage,
+                  authority_check=verify_classification_under_lock if domain_plan else None,
+                  validate_fresh=None if domain_plan else validate_ordinary_fresh)
