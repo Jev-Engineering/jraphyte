@@ -1,6 +1,7 @@
 """Reference read projections: authority parity, current revocation and index tampering."""
 from copy import deepcopy
 import os
+import sqlite3
 import tempfile
 import unittest
 from time import monotonic
@@ -129,6 +130,49 @@ class DomainReadTests(unittest.TestCase):
         with self.assertRaises(ContractError) as caught:
             self.adapter.read(self.request(graph_version=1))
         self.assertEqual(caught.exception.code, "REPLAY_CONTENT_UNAVAILABLE")
+
+    def test_authorized_erasure_clears_current_and_historical_index_rows(self):
+        self.f.migrate()
+        first = self.f.assign(["research:biology"])
+        event = self.f.publish(self.f.assignment_plan(first))
+        second = self.f.assign(["research:physics"], previous=first)
+        self.f.publish(self.f.assignment_plan(second))
+        historical = self.adapter.materialize_classification_index(self.request(graph_version=event["receipt"]["version"]))
+        current = self.adapter.materialize_classification_index(self.request())
+        self.assertEqual(historical.classification_rows[self.f.source]["assignment_id"], first)
+        self.assertEqual(current.classification_rows[self.f.source]["assignment_id"], second)
+
+        db = self.f.backend.db
+        tables = ("trace_domain_index_membership", "trace_domain_index_sources", "trace_domain_index_meta")
+        snapshot_hashes = {historical.catalog.hash(historical.snapshot_id), current.catalog.hash(current.snapshot_id)}
+        self.assertEqual(len(snapshot_hashes), 2)
+        for table in tables:
+            self.assertEqual({row[0] for row in db.execute(f"SELECT DISTINCT snapshot_hash FROM {table}")}, snapshot_hashes)
+
+        with self.assertRaises(ContractError) as caught:
+            self.f.backend.erase_cached_content(self.f.source, reason="synthetic erasure")
+        self.assertEqual(caught.exception.code, "ERASURE_AUTHORITY")
+        for table in tables:
+            self.assertEqual({row[0] for row in db.execute(f"SELECT DISTINCT snapshot_hash FROM {table}")}, snapshot_hashes)
+
+        self.f.status_change(active=False, permission="DENIED", tombstone=True)
+        db.set_authorizer(lambda action, table, *_: sqlite3.SQLITE_DENY
+                          if action == sqlite3.SQLITE_DELETE and table == "trace_domain_index_meta"
+                          else sqlite3.SQLITE_OK)
+        try:
+            with self.assertRaises(sqlite3.DatabaseError):
+                self.f.backend.erase_cached_content(self.f.source, reason="synthetic erasure")
+        finally:
+            db.set_authorizer(None)
+        self.assertIn(self.f.source, self.f.backend.load_catalog())
+        for table in tables:
+            self.assertEqual({row[0] for row in db.execute(f"SELECT DISTINCT snapshot_hash FROM {table}")}, snapshot_hashes)
+
+        for _ in range(2):
+            result = self.f.backend.erase_cached_content(self.f.source, reason="synthetic erasure")
+            self.assertEqual(result["status"], "EXACT_REPLAY_UNAVAILABLE")
+            for table in tables:
+                self.assertEqual(db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 0)
 
     def test_uncommitted_working_catalog_cannot_invent_membership(self):
         self.f.migrate()

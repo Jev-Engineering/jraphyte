@@ -42,6 +42,11 @@ unchanged. Their transaction order is phase write authority, backend lock, then
 `BEGIN IMMEDIATE`. Construction and ordinary reads are read-only. Index writes
 and reads both reject a caller-owned SQL transaction.
 
+After a committed source tombstone, `erase_cached_content` discards all stored
+classification index entries in the same transaction as the cached record
+deletions. This includes entries for historical snapshots. Exact replay still
+reports `REPLAY_CONTENT_UNAVAILABLE` after erasure.
+
 ## Adapter requirements
 
 An adapter must expose a consistent graph and classification snapshot, apply

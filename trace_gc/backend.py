@@ -322,6 +322,8 @@ class SQLiteReferenceBackend:
                     if r["id"] in lost:
                         self.db.execute("INSERT OR IGNORE INTO trace_erased VALUES(?,?,?,?,?)",(r["id"],r["hash"],r["kind"],reason,now()))
                         self.db.execute("DELETE FROM trace_records WHERE id=?",(r["id"],))
+                from .retrieval.domain_index import SQLiteClassificationIndex
+                SQLiteClassificationIndex.purge_for_erasure(self.db)
                 self.db.execute("COMMIT")
                 return {"status":"EXACT_REPLAY_UNAVAILABLE","source_id":source_id,"erased_ids":sorted(lost),"scope":"this backend's cached records only"}
             except BaseException:

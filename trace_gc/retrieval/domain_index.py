@@ -48,6 +48,17 @@ class SQLiteClassificationIndex:
     """
     TABLES = ("trace_domain_index_meta", "trace_domain_index_sources", "trace_domain_index_membership")
 
+    @classmethod
+    def purge_for_erasure(cls, db: Any) -> None:
+        """Discard derived rows inside the backend's authorized erasure transaction."""
+        require(db.in_transaction, "DOMAIN_INDEX_CORRUPT", "index erasure requires a transaction")
+        for table in reversed(cls.TABLES):
+            entry = db.execute("SELECT type FROM main.sqlite_master WHERE name=? COLLATE NOCASE",
+                               (table,)).fetchone()
+            if entry is not None:
+                require(entry[0] == "table", "DOMAIN_INDEX_CORRUPT", "unexpected index schema object")
+                db.execute(f"DELETE FROM main.{table}")
+
     def __init__(self, db: Any, *, scope_required: bool = False):
         self.db = db
         # A phase-bound database may be mutated only inside a write scope that
