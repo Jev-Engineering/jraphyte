@@ -436,8 +436,11 @@ class _PrivateImporter:
             self.reject_import(exc)
         module = self.module(name)
         for item in fromlist:
-            if name + "." + item in self.modules:
-                self.module(name + "." + item)
+            submodule = name + "." + item
+            # Python loads a from-list submodule only if the package has not
+            # already bound that name. Retain the full conservative pin set.
+            if item not in module.__dict__ and submodule in self.modules:
+                self.module(submodule)
         return module if fromlist else self.loaded[self.local_top]
 
 
