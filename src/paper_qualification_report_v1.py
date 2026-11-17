@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import math
@@ -200,8 +201,18 @@ def write_report(data_root, output_relative, evaluation_descriptor, *, execution
     store = Artifacts(root)
     evaluation = store.json(evaluation_descriptor)
     folder = child(root, evaluation_descriptor["relative"]).parent
-    require(Path(evaluation_descriptor["relative"]).name == "evaluation.json",
+    invalidation = folder / "publication-invalidated.json"
+    require(Path(evaluation_descriptor["relative"]).name == "evaluation.json"
+            and output != invalidation and not invalidation.exists(),
             "publication_invalidated_or_not_evaluation")
+    marker_relative = (folder / "publication-complete.json").relative_to(root).as_posix()
+    marker_path = child(root, marker_relative)
+    require(marker_path.is_file(), "publication_completion_required")
+    marker_digest = hashlib.sha256(marker_path.read_bytes()).hexdigest()
+    marker = store.json({"relative": marker_relative, "sha256": marker_digest})
+    require(isinstance(marker, dict), "publication_completion_required")
+    store.verify({"relative": (folder / "public-summary.json").relative_to(root).as_posix(),
+                  "sha256": marker.get("public_summary_sha256")})
     verify_published(root, evaluation_descriptor, expected_preregistration_sha256=expected_preregistration_sha256,
         trust=trust, runtime_lock=runtime_lock, qualification_only=False)
     execution = None
@@ -218,17 +229,19 @@ def write_report(data_root, output_relative, evaluation_descriptor, *, execution
     report["source_evaluation_sha256"] = evaluation_descriptor["sha256"]
     assert_redacted(report)
     store.recheck()
-    require(not (folder/"publication-invalidated.json").exists(), "publication_invalidated_or_not_evaluation")
+    require(not invalidation.exists(), "publication_invalidated_or_not_evaluation")
     return {"relative": output_relative, "sha256": write_once(output, report)}
 
 
-def _validate_preregistration_descriptors(root, pointer_relative, pointer):
-    directory = child(root, Path(pointer_relative).parent.as_posix())
+def _validate_preregistration_descriptors(store, pointer_relative, pointer):
+    directory = child(store.root, Path(pointer_relative).parent.as_posix())
 
     def validate(relative, sha256):
         require(isinstance(relative, str) and relative and isinstance(sha256, str) and SHA.fullmatch(sha256),
                 "artifact_descriptor_required")
-        require(child(directory, relative) != directory, "artifact_descriptor_required")
+        path = child(directory, relative)
+        require(path.suffix.lower() in {".json", ".jsonl", ".md", ".txt"}, "artifact_descriptor_required")
+        store.verify({"relative": path.relative_to(store.root).as_posix(), "sha256": sha256})
 
     documents = pointer.get("base_protocol_and_additive_amendments")
     require(isinstance(documents, dict) and REQUIRED_PREREGISTRATION_DOCUMENTS <= documents.keys(),
@@ -277,7 +290,7 @@ def preflight(args):
             return False
         require(json_path(bundle["preregistration"]["relative"]), "frozen_preregistration_pointer_required")
         pointer = read_preregistration(store, bundle, args.preregistration_sha256)
-        _validate_preregistration_descriptors(store.root, bundle["preregistration"]["relative"], pointer)
+        _validate_preregistration_descriptors(store, bundle["preregistration"]["relative"], pointer)
         store.recheck()
     check("bundle", load_bundle)
     check("preregistration", load_preregistration)

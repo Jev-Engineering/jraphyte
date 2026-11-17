@@ -260,6 +260,20 @@ class AggregateTests(unittest.TestCase):
                 write_report(root, "new.json", bare)
             self.assertFalse((root/"new.json").exists())
 
+    def test_report_rejects_reserved_output_and_changed_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ev = published(root, early_block(), "pub")
+            with self.assertRaisesRegex(EvidenceError, "publication_invalidated"):
+                write_report(root, "pub/publication-invalidated.json", ev)
+            self.assertFalse((root / "pub" / "publication-invalidated.json").exists())
+            def public_summary_changed(*args, **kwargs):
+                (root / "pub" / "public-summary.json").write_text("{}")
+            with patch("src.paper_qualification_report_v1.verify_published", side_effect=public_summary_changed):
+                with self.assertRaisesRegex(EvidenceError, "artifact_changed_during_evaluation"):
+                    write_report(root, "report.json", ev)
+            self.assertFalse((root / "report.json").exists())
+
     def cli(self, *args):
         result = subprocess.run([sys.executable, "-m", "src.paper_qualification_report_v1", *args],
             cwd=REPO, text=True, capture_output=True)
@@ -303,6 +317,11 @@ class AggregateTests(unittest.TestCase):
                     patch("src.paper_qualification_report_v1.importlib.util.find_spec", return_value=object()), \
                     patch.object(Path, "read_bytes", guarded):
                 self.assertEqual(preflight(args)["status"], "READY")
+                protocol_file = root / "prereg" / "protocol.md"
+                protocol_bytes = b"Authored fixture for preflight."
+                protocol_file.write_bytes(b"Changed protocol.")
+                self.assertFalse(preflight(args)["checks"]["preregistration"])
+                protocol_file.write_bytes(protocol_bytes)
                 args.output = "missing/directory/new.json"
                 self.assertEqual(preflight(args)["status"], "READY")
                 (root/"ancestor").write_bytes(b"not a directory")
