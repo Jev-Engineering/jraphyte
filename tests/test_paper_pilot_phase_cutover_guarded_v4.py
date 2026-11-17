@@ -1,7 +1,7 @@
 """Owned Windows fixture for one held quiescence-to-fence transaction."""
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import hashlib
 import json
 import os
@@ -13,10 +13,13 @@ import unittest
 from unittest.mock import patch
 
 from src import paper_pilot_phase_cutover_guarded_v4 as guarded
-from src.paper_pilot_phase_cutover import _current_sid
+from src.paper_pilot_phase_cutover import TOKEN_NOT_REFUSED, _current_sid
+from tests.test_paper_pilot_phase_fence import fixture_icacls_exit, token_creates_beneath_own_deny
+from tests.windows_privilege_scope import privileges_disabled
 from tools import windows_fixture_acl
 from trace_gc.budget import RunBudget
 from trace_gc.canonical import bytes_digest, dumps
+from trace_gc.errors import ContractError
 from trace_gc.trust import IssuerPolicy, Signer, TrustStore
 
 
@@ -93,29 +96,30 @@ class ContinuousFenceTests(unittest.TestCase):
 
     def _cleanup(self):
         if hasattr(self, "parent") and self.parent.exists():
-            invoke("icacls.exe", str(self.parent), "/remove:d", "*" + self.sid)
+            fixture_icacls_exit(str(self.parent), "/remove:d", "*" + self.sid)
         for root in (getattr(self, "old", None), getattr(self, "archive", None)):
             if root is not None and root.exists():
                 for name in guarded.NAMES:
-                    invoke("icacls.exe", str(root / name), "/remove:d", "*" + self.sid)
+                    fixture_icacls_exit(str(root / name), "/remove:d", "*" + self.sid)
         self.temp.cleanup()
 
-    def call(self, observer=None):
-        return guarded.quiescence_then_fence_guarded(
-            old_root=self.old, archived_root=self.archive,
-            expected_file_sha256=self.files,
-            source_stage_lock=self.parent / "source-stage.lock",
-            phase_stage_lock=self.parent / "phase-stage.lock",
-            deny_sid=self.sid,
-            expected_parent_dacl_sha256=self.parent_acl,
-            expected_file_dacl_sha256=self.file_acl,
-            quiescence_authorization_sha256=self.auth["quiescence"],
-            fence_authorization_sha256=self.auth["fence"],
-            quiescence_receipt_path=self.out / "quiescence.json",
-            expected_quiescence_receipt_sha256=self.quiescence_sha,
-            barrier_receipt_path=self.out / "barrier.json",
-            fence_receipt_path=self.out / "fence.json",
-            observer=observer)
+    def call(self, observer=None, *, full_token=False):
+        with nullcontext() if full_token else privileges_disabled():
+            return guarded.quiescence_then_fence_guarded(
+                old_root=self.old, archived_root=self.archive,
+                expected_file_sha256=self.files,
+                source_stage_lock=self.parent / "source-stage.lock",
+                phase_stage_lock=self.parent / "phase-stage.lock",
+                deny_sid=self.sid,
+                expected_parent_dacl_sha256=self.parent_acl,
+                expected_file_dacl_sha256=self.file_acl,
+                quiescence_authorization_sha256=self.auth["quiescence"],
+                fence_authorization_sha256=self.auth["fence"],
+                quiescence_receipt_path=self.out / "quiescence.json",
+                expected_quiescence_receipt_sha256=self.quiescence_sha,
+                barrier_receipt_path=self.out / "barrier.json",
+                fence_receipt_path=self.out / "fence.json",
+                observer=observer)
 
     def test_observer_lease_stays_until_five_denies_then_closes_before_rename(self):
         state = {"observed": False, "entered": False, "closed": False,
@@ -163,6 +167,25 @@ class ContinuousFenceTests(unittest.TestCase):
             result = self.call(observer=observe)
         self.assertTrue(state["observed"] and state["closed"])
         self.assertEqual(result["status"], "OLD_PATH_FENCED_NEW_PHASE_ALLOWED")
+
+    def test_parent_deny_blocks_recreation_and_full_token_holds_if_it_can_create(self):
+        creates = token_creates_beneath_own_deny(self.base, self.sid)
+        if creates:
+            with self.assertRaisesRegex(ContractError, TOKEN_NOT_REFUSED):
+                self.call(full_token=True)
+            self.assertTrue((self.out / "barrier.json").exists())
+            self.assertTrue(self.old.is_dir())
+            self.assertFalse(self.archive.exists())
+            self.assertFalse((self.out / "fence.json").exists())
+        result = self.call(observer=lambda **kwargs: _noop_lease())
+        self.assertEqual(result["status"], "OLD_PATH_FENCED_NEW_PHASE_ALLOWED")
+        with privileges_disabled(), self.assertRaises(PermissionError) as refused:
+            self.old.mkdir()
+        self.assertEqual(refused.exception.winerror, 5)
+        if creates:
+            with self.assertRaisesRegex(ContractError, TOKEN_NOT_REFUSED):
+                self.call(full_token=True)
+        self.assertEqual(self.call()["receipt_sha256"], result["receipt_sha256"])
 
     def test_observer_rejection_precedes_any_receipt_or_acl_effect(self):
         def reject(**kwargs):

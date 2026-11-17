@@ -3,8 +3,9 @@
 The reviewed caller must exclusively own all historical launch authority before
 entry. This module locks the two stage files and the old pilot controller file,
 then installs a durable deny for new writes to each of the five old state files.
-The controller handle is released only after that deny is read back. The old
-directory is renamed on the same volume while the stage locks remain held.
+The controller handle is released only after that deny is read back and a
+probe confirms the current token cannot create a directory beneath the old
+parent. The directory is renamed while the stage locks remain held.
 
 No provider, graph, source, or budget operation occurs here. An incomplete
 deny/rename is a HOLD and is reconciled with the same pinned inputs.
@@ -24,7 +25,7 @@ from trace_gc.errors import require
 from trace_gc.phase_authority import (_plain_absolute_path, canonical_dacl_ace,
                                       canonical_dacl_aces, dacl_has_ace,
                                       dacl_has_deny_trustee, directory_dacl_sddl)
-from src.paper_pilot_phase_cutover import NAMES, _current_sid
+from src.paper_pilot_phase_cutover import NAMES, _current_sid, _denial_problem
 
 DENY_FILE_ACE = "(D;;DCLC;;;{sid})"
 DENY_PARENT_ACE = "(D;;LC;;;{sid})"
@@ -279,13 +280,15 @@ def fence_closed_old_phase_guarded(*, old_root: str | Path,
                 parent_sddl = directory_dacl_sddl(old.parent)
                 if not dacl_has_ace(parent_sddl, DENY_PARENT_ACE, deny_sid):
                     _icacls(old.parent, "/deny", "*" + deny_sid + ":(AD)")
-                require(dacl_has_ace(directory_dacl_sddl(old.parent), DENY_PARENT_ACE,
-                                     deny_sid), "PHASE_FENCE",
+                parent_sddl = directory_dacl_sddl(old.parent)
+                require(dacl_has_ace(parent_sddl, DENY_PARENT_ACE, deny_sid), "PHASE_FENCE",
                         "old state recreation remains possible")
                 require(_only_parent_admission_added(
                             recorded["original_parent_dacl_sddl"],
-                            directory_dacl_sddl(old.parent), deny_sid),
+                            parent_sddl, deny_sid),
                         "PHASE_FENCE", "old parent DACL broadened during fence")
+                problem = _denial_problem(old.parent)
+                require(problem is None, "PHASE_FENCE", problem or "")
                 # The observer's retained read handles kept direct database
                 # writers out during the first ACL update. Once all five file
                 # denies and the parent deny are read back, release them so
@@ -316,12 +319,15 @@ def fence_closed_old_phase_guarded(*, old_root: str | Path,
             require(not _file_deny(path, deny_sid), "PHASE_FENCE",
                     "archived readback still denied")
         _readable_pins(archived, expected_file_sha256)
-        require(dacl_has_ace(directory_dacl_sddl(old.parent), DENY_PARENT_ACE, deny_sid),
+        parent_sddl = directory_dacl_sddl(old.parent)
+        require(dacl_has_ace(parent_sddl, DENY_PARENT_ACE, deny_sid),
                 "PHASE_FENCE", "old fixed path admission reopened")
         require(_only_parent_admission_added(
                     recorded["original_parent_dacl_sddl"],
-                    directory_dacl_sddl(old.parent), deny_sid),
+                    parent_sddl, deny_sid),
                 "PHASE_FENCE", "old parent DACL changed after archive")
+        problem = _denial_problem(old.parent)
+        require(problem is None, "PHASE_FENCE", problem or "")
         # The Windows ACL API may add the auto-inherited control flag when
         # restoring ACEs; require effective non-deny ACEs to remain equal.
         effective = {name: directory_dacl_sddl(archived / name)
@@ -336,8 +342,7 @@ def fence_closed_old_phase_guarded(*, old_root: str | Path,
         body = {"version": "paper-pilot-phase-namespace-fence-v1",
                 "old_root_path": str(old), "archived_root_path": str(archived),
                 "archived_files_sha256": expected_file_sha256,
-                "old_parent_dacl_sha256": bytes_digest(
-                    directory_dacl_sddl(old.parent).encode("utf-8")),
+                "old_parent_dacl_sha256": bytes_digest(parent_sddl.encode("utf-8")),
                 "deny_sid": deny_sid,
                 "status": "OLD_PATH_FENCED_NEW_PHASE_ALLOWED"}
         receipt_sha = _write_once(receipt, body)

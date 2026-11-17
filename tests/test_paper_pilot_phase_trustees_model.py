@@ -58,6 +58,15 @@ class _NtOs:
             raise PermissionError(13, "modeled removal failure")
         os.rmdir(path)
 
+    def rename(self, source, destination):
+        original = self._model.key(source)
+        replacement = self._model.key(destination)
+        os.rename(source, destination)
+        for key in list(self._model.dacls):
+            if Path(key).is_relative_to(original):
+                moved = Path(replacement) / Path(key).relative_to(original)
+                self._model.dacls[str(moved)] = self._model.dacls.pop(key)
+
 
 class WindowsModel:
     """DACL text per path, ``icacls`` deny/remove, and SID spelling. A model, not Windows."""
@@ -112,8 +121,8 @@ class WindowsModel:
         flags, aces = self.dacls[self.key(path)]
         trustee = self.spell(spec.lstrip("*").split(":")[0])
         if verb == "/deny":
-            assert spec.endswith(":(AD)"), spec
-            aces = ["(D;;LC;;;" + trustee + ")"] + aces
+            mask = {"(AD)": "LC", "(WD,AD)": "DCLC"}[spec.split(":", 1)[1]]
+            aces = ["(D;;" + mask + ";;;" + trustee + ")"] + aces
         elif verb == "/remove:d":
             if self.remove_exit:
                 return subprocess.CompletedProcess(args, self.remove_exit, "", "")
@@ -273,6 +282,29 @@ class ModeledTokenGateTests(ModeledFence):
         self.hold(v1.TOKEN_NOT_REFUSED + "; the added deny could not be removed and verified"
                   " (icacls exit 5)")
 
+    def test_acl_readback_error_rolls_back_the_new_deny(self):
+        before = self.model.sddl(self.parent)
+        with patch.object(v1, "directory_dacl_sddl", side_effect=[
+                before, ContractError("PHASE_FENCE", "private diagnostic"), before]):
+            self.hold(v1.DACL_UNVERIFIED)
+        self.assert_no_effect(before)
+
+    def test_acl_comparison_error_rolls_back_the_new_deny(self):
+        before = self.model.sddl(self.parent)
+        with patch.object(v1, "dacl_has_ace", side_effect=[
+                False, ContractError("PHASE_FENCE", "private diagnostic")]):
+            self.hold(v1.DACL_UNVERIFIED)
+        self.assert_no_effect(before)
+
+    def test_rollback_readback_error_reports_restoration_as_unverified(self):
+        before = self.model.sddl(self.parent)
+        with patch.object(v1, "directory_dacl_sddl", side_effect=[
+                before, OSError("private readback diagnostic"),
+                ContractError("PHASE_FENCE", "private rollback diagnostic")]):
+            self.hold(v1.DACL_UNVERIFIED + "; the added deny could not be removed and verified"
+                      " (restored DACL could not be read)")
+        self.assert_no_effect(before)
+
     def test_a_refusal_with_another_error_is_not_a_denial(self):
         self.model.token_bypasses_deny = True
         error = OSError(2, "modeled missing path")
@@ -296,6 +328,43 @@ class ModeledTokenGateTests(ModeledFence):
         self.assertEqual(self.model.sddl(self.parent), after)
         self.model.token_bypasses_deny = False
         self.assertEqual(self.fence(), result)
+
+
+class ModeledV4TokenGateTests(ModeledFence):
+    def test_parent_deny_must_refuse_creation_before_rename_and_on_archive_replay(self):
+        source, phase = [self.parent / name for name in ("source-stage.lock", "phase-stage.lock")]
+        for lock in (source, phase):
+            lock.write_bytes(b"0")
+        barrier = self.control / "barrier.json"
+        parent_pin = bytes_digest(self.model.sddl(self.parent).encode())
+        file_pins = {name: bytes_digest(self.model.sddl(self.old / name).encode())
+                     for name in v4.NAMES}
+
+        def fence():
+            return v4.fence_closed_old_phase_guarded(
+                old_root=self.old, archived_root=self.archived, expected_file_sha256=self.content,
+                source_stage_lock=source, phase_stage_lock=phase, deny_sid=self.sid,
+                expected_parent_dacl_sha256=parent_pin, expected_file_dacl_sha256=file_pins,
+                barrier_receipt_path=barrier, fence_receipt_path=self.receipt)
+
+        with patch.object(v4, "os", v1.os), patch.object(v4, "subprocess", self.model), \
+             patch.object(v4, "_current_sid", return_value=self.sid), \
+             patch.object(v4, "directory_dacl_sddl", side_effect=self.model.sddl), \
+             patch.object(v4, "_stage_lock", side_effect=lambda path: path.open("r+b")):
+            self.model.token_bypasses_deny = True
+            with self.assertRaisesRegex(ContractError, v1.TOKEN_NOT_REFUSED):
+                fence()
+            self.assertTrue(self.old.is_dir() and barrier.is_file())
+            self.assertFalse(self.archived.exists() or self.receipt.exists())
+            self.assertTrue(v4.dacl_has_ace(self.model.sddl(self.parent), PARENT, self.sid))
+            self.model.token_bypasses_deny = False
+            result = fence()
+            self.model.token_bypasses_deny = True
+            with self.assertRaisesRegex(ContractError, v1.TOKEN_NOT_REFUSED):
+                fence()
+            self.assertFalse(self.old.exists())
+            self.model.token_bypasses_deny = False
+            self.assertEqual(fence(), result)
 
 
 class SharedHelperContractTests(unittest.TestCase):

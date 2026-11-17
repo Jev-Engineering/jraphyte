@@ -91,21 +91,21 @@ jobs:
           python -m unittest discover -s tests -p "test_paper_pilot_phase_trustees_v1_v4.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-phase-trustees-v1-v4.log"
           grep -Eq '^Ran 10 tests in ' "$RUNNER_TEMP/windows-phase-trustees-v1-v4.log"
           grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-phase-trustees-v1-v4.log"
-      - name: Run the eight native v4 continuous-lock fence cases (observer interval, rejection and replay)
+      - name: Run the nine native v4 continuous-lock fence cases (observer interval, rejection and replay)
         if: always()
         shell: bash
         run: |
           set -o pipefail
           python -m unittest discover -s tests -p "test_paper_pilot_phase_cutover_guarded_v4.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-phase-v4.log"
-          grep -Eq '^Ran 8 tests in ' "$RUNNER_TEMP/windows-phase-v4.log"
+          grep -Eq '^Ran 9 tests in ' "$RUNNER_TEMP/windows-phase-v4.log"
           grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-phase-v4.log"
-      - name: Run the seventeen modeled v1/v4 trustee and token-gate cases (labelled model, not native evidence)
+      - name: Run the twenty-one modeled v1/v4 trustee and token-gate cases (labelled model, not native evidence)
         if: always()
         shell: bash
         run: |
           set -o pipefail
           python -m unittest discover -s tests -p "test_paper_pilot_phase_trustees_model.py" -v 2>&1 | tee "$RUNNER_TEMP/windows-phase-trustees-model.log"
-          grep -Eq '^Ran 17 tests in ' "$RUNNER_TEMP/windows-phase-trustees-model.log"
+          grep -Eq '^Ran 21 tests in ' "$RUNNER_TEMP/windows-phase-trustees-model.log"
           grep -Eq '^OK[[:space:]]*$' "$RUNNER_TEMP/windows-phase-trustees-model.log"
       - name: Run the nine converter worker parent-process cases (genuine venv redirector, extra-hop grandparent chain, exit code 259)
         if: always()

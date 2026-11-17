@@ -20,26 +20,32 @@ from tools import windows_fixture_acl
 PARENT_DENY = "(D;;LC;;;{sid})"
 
 
+def fixture_icacls_exit(*args: str) -> int:
+    """Keep raw command arguments and native output out of failure logs."""
+    try:
+        return subprocess.run(["icacls.exe", *args], capture_output=True, timeout=30).returncode
+    except (OSError, subprocess.SubprocessError):
+        raise AssertionError("fixture DACL command could not run") from None
+
+
 def token_creates_beneath_own_deny(root: Path, sid: str) -> bool:
     """Independent probe: can this process token create beneath a parent deny naming ``sid``?"""
     parent = root / "token-probe"
     parent.mkdir()
     windows_fixture_acl.stabilize_owned_fixture(root, [("probe", parent)], read=directory_dacl_sddl)
-    added = subprocess.run(["icacls.exe", str(parent), "/deny", "*" + sid + ":(AD)"],
-                           capture_output=True, text=True, timeout=30)
-    assert added.returncode == 0, added.stderr or added.stdout
+    added = fixture_icacls_exit(str(parent), "/deny", "*" + sid + ":(AD)")
+    assert added == 0, "fixture parent deny update failed"
     try:
         try:
             (parent / "child").mkdir()
         except OSError as error:
-            assert getattr(error, "winerror", None) == 5, error
+            assert getattr(error, "winerror", None) == 5, "unexpected recreation probe error"
             return False
         (parent / "child").rmdir()
         return True
     finally:
-        removed = subprocess.run(["icacls.exe", str(parent), "/remove:d", "*" + sid],
-                                 capture_output=True, text=True, timeout=30)
-        assert removed.returncode == 0, removed.stderr or removed.stdout
+        removed = fixture_icacls_exit(str(parent), "/remove:d", "*" + sid)
+        assert removed == 0, "fixture parent deny removal failed"
         parent.rmdir()
 
 
@@ -76,9 +82,8 @@ class PhaseNamespaceFenceTests(unittest.TestCase):
         self.sid = _current_sid()
 
     def tearDown(self):
-        result = subprocess.run(["icacls.exe", str(self.old.parent), "/remove:d", "*" + self.sid],
-                                capture_output=True, text=True, timeout=15)
-        self.assertEqual(result.returncode, 0)
+        result = fixture_icacls_exit(str(self.old.parent), "/remove:d", "*" + self.sid)
+        self.assertEqual(result, 0)
         self.temp.cleanup()
 
     def fence(self):
@@ -120,7 +125,7 @@ class PhaseNamespaceFenceTests(unittest.TestCase):
         # Held before any effect: the added deny is removed and the DACL reads back exactly.
         self.assertEqual((held.exception.code, held.exception.detail),
                          ("PHASE_FENCE", TOKEN_NOT_REFUSED))
-        self.assertEqual(directory_dacl_sddl(self.old.parent), before)
+        self.assertTrue(directory_dacl_sddl(self.old.parent) == before, "parent DACL changed")
         self.assertTrue(self.old.is_dir())
         self.assertFalse(self.archived.exists())
         self.assertFalse(self.receipt.exists())
@@ -144,14 +149,14 @@ class PhaseNamespaceFenceTests(unittest.TestCase):
         created = subprocess.run(["pwsh.exe", "-NoProfile", "-NonInteractive",
                                   "-File", str(script), str(junction), str(self.archived.parent)],
                                  capture_output=True, text=True, timeout=15)
-        self.assertEqual(created.returncode, 0, created.stderr)
+        self.assertEqual(created.returncode, 0, "fixture junction creation failed")
         try:
             before = directory_dacl_sddl(self.old.parent)
             with self.assertRaises(ContractError):
                 fence_closed_old_phase(old_root=self.old,
                     archived_root=junction / "state", expected_file_sha256=self.expected,
                     deny_sid=self.sid, receipt_path=self.receipt)
-            self.assertEqual(before, directory_dacl_sddl(self.old.parent))
+            self.assertTrue(directory_dacl_sddl(self.old.parent) == before, "parent DACL changed")
             self.assertTrue(self.old.exists())
             self.assertFalse(self.archived.exists())
             self.assertFalse(self.receipt.exists())

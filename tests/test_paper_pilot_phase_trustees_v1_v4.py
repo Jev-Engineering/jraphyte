@@ -17,13 +17,13 @@ import json
 import os
 from pathlib import Path
 import re
-import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from src import paper_pilot_phase_cutover as v1
 from src import paper_pilot_phase_cutover_guarded_v4 as v4
+from tests.test_paper_pilot_phase_fence import fixture_icacls_exit
 from tests.windows_privilege_scope import privileges_disabled
 from tools import windows_fixture_acl
 from trace_gc import phase_authority as authority
@@ -37,8 +37,8 @@ TEMP_PREFIX = "jraphyte-phase-trustee-"
 
 
 def _icacls(*args: str) -> None:
-    result = subprocess.run(["icacls.exe", *args], capture_output=True, text=True, timeout=30)
-    assert result.returncode == 0, result.stderr or result.stdout
+    result = fixture_icacls_exit(*args)
+    assert result == 0, "fixture DACL update failed"
 
 
 def _account_prefix() -> str:
@@ -66,8 +66,7 @@ class OwnedTree(unittest.TestCase):
     def _cleanup(self):
         for path in self.base.rglob("*"):
             for sid in self.sids:
-                subprocess.run(["icacls.exe", str(path), "/remove:d", "*" + sid],
-                               capture_output=True, text=True, timeout=30)
+                fixture_icacls_exit(str(path), "/remove:d", "*" + sid)
         self.temp.cleanup()
         self.assertFalse(self.base.exists())
 
@@ -81,17 +80,18 @@ class OwnedTree(unittest.TestCase):
 class SharedTrusteeHelperTests(OwnedTree):
     def test_numeric_sids_are_spelled_by_windows_and_never_mapped_back(self):
         spell = authority.canonical_dacl_trustee
-        self.assertEqual((spell(USERS_SID), spell(GUESTS_SID), spell("S-1-5-18")), ("BU", "BG", "SY"))
+        self.assertTrue((spell(USERS_SID), spell(GUESTS_SID), spell("S-1-5-18")) == ("BU", "BG", "SY"),
+                        "a well-known SID did not use its expected alias")
         self.assertEqual(spell("BU"), "BU")
         injected = "S-1-5-18)(A;;FA;;;WD"
         self.assertEqual(spell(injected), injected)
         local, foreign, near = _local_rid500_sid(), FOREIGN_RID500_SID, _near_rid500_sid()
-        self.assertEqual(spell(foreign), foreign)
-        self.assertEqual(spell(near), near)
-        self.assertNotIn(spell(local), (foreign, near))
+        self.assertTrue(spell(foreign) == foreign, "foreign RID-500 SID spelling changed")
+        self.assertTrue(spell(near) == near, "adjacent domain SID spelling changed")
+        self.assertTrue(spell(local) not in (foreign, near), "local SID matched another domain")
         if v1._current_sid().endswith("-500"):
             # The hosted runner's own RID-500 identity is the reproduction of issue #110.
-            self.assertEqual(spell(v1._current_sid()), "LA")
+            self.assertTrue(spell(v1._current_sid()) == "LA", "local RID-500 SID was not spelled LA")
 
     def test_real_alias_spelled_deny_matches_only_its_own_trustee(self):
         directory = self.base / "parent"
@@ -102,14 +102,14 @@ class SharedTrusteeHelperTests(OwnedTree):
             raw = authority.directory_dacl_sddl(directory)
             if sid == USERS_SID:
                 # The OS really spells it as the alias, so a literal comparison misses it.
-                self.assertIn("(D;;LC;;;BU)", raw)
-                self.assertNotIn(PARENT_ACE.format(sid=sid), raw)
-            self.assertTrue(authority.dacl_has_ace(raw, PARENT_ACE, sid), raw)
-            self.assertTrue(authority.dacl_has_deny_trustee(raw, sid), raw)
-            self.assertFalse(authority.dacl_has_ace(raw, FILE_ACE, sid), raw)
+                self.assertTrue("(D;;LC;;;BU)" in raw, "expected BU deny-create ACE missing")
+                self.assertFalse(PARENT_ACE.format(sid=sid) in raw, "BU deny used numeric spelling")
+            self.assertTrue(authority.dacl_has_ace(raw, PARENT_ACE, sid))
+            self.assertTrue(authority.dacl_has_deny_trustee(raw, sid))
+            self.assertFalse(authority.dacl_has_ace(raw, FILE_ACE, sid))
             for other in (FOREIGN_RID500_SID, _near_rid500_sid(), GUESTS_SID, ADMINS_SID):
-                self.assertFalse(authority.dacl_has_ace(raw, PARENT_ACE, other), (other, raw))
-                self.assertFalse(authority.dacl_has_deny_trustee(raw, other), (other, raw))
+                self.assertFalse(authority.dacl_has_ace(raw, PARENT_ACE, other), "deny matched an unrelated trustee")
+                self.assertFalse(authority.dacl_has_deny_trustee(raw, other), "deny matched an unrelated trustee")
             _icacls(str(directory), "/remove:d", "*" + sid)
 
 
@@ -174,7 +174,7 @@ class V1FenceAndReceiptTests(_FenceTree):
             result = self.fence(USERS_SID)
             self.assertEqual(result["status"], "OLD_PATH_FENCED_NEW_PHASE_ALLOWED")
             raw = authority.directory_dacl_sddl(self.parent)
-            self.assertIn("(D;;LC;;;BU)", raw)
+            self.assertTrue("(D;;LC;;;BU)" in raw, "expected BU deny-create ACE missing")
             with self.assertRaises(PermissionError) as refused:
                 self.old.mkdir()
             self.assertEqual(refused.exception.winerror, 5)
@@ -199,12 +199,12 @@ class V1FenceAndReceiptTests(_FenceTree):
     def test_existing_alias_deny_with_another_mask_holds_before_any_acl_change(self):
         _icacls(str(self.parent), "/deny", "*" + USERS_SID + ":(X)")
         before = authority.directory_dacl_sddl(self.parent)
-        self.assertIn(";;;BU)", before)
+        self.assertTrue(";;;BU)" in before, "expected BU trustee missing")
         with privileges_disabled():
             with self.assertRaises(ContractError) as held:
                 self.fence(USERS_SID)
         self.assertEqual(held.exception.detail, "old parent already carries another deny for the fence SID")
-        self.assertEqual(authority.directory_dacl_sddl(self.parent), before)
+        self.assertTrue(authority.directory_dacl_sddl(self.parent) == before, "parent DACL changed")
         self.assertTrue(self.old.is_dir())
         self.assertFalse(self.receipt.exists())
 
@@ -215,7 +215,7 @@ class V1FenceAndReceiptTests(_FenceTree):
         _icacls(str(self.parent), "/remove:d", "*" + USERS_SID)
         _icacls(str(self.parent), "/deny", "*" + USERS_SID + ":(WD,AD)")
         raw = authority.directory_dacl_sddl(self.parent)
-        self.assertIn("(D;;DCLC;;;BU)", raw)
+        self.assertTrue("(D;;DCLC;;;BU)" in raw, "expected wrong-mask BU deny missing")
         self.assert_rejected(self.variant(old_parent_dacl_sha256=bytes_digest(raw.encode("utf-8"))))
 
 
@@ -239,18 +239,23 @@ class V4AliasIdentityFenceTests(_FenceTree):
                          for name in v4.NAMES}
 
     def invoke(self, sid: str = USERS_SID):
-        return v4.fence_closed_old_phase_guarded(
-            old_root=self.old, archived_root=self.archived, expected_file_sha256=self.content,
-            source_stage_lock=self.parent / "source-stage.lock",
-            phase_stage_lock=self.parent / "phase-stage.lock", deny_sid=sid,
-            expected_parent_dacl_sha256=self.parent_acl, expected_file_dacl_sha256=self.file_acl,
-            barrier_receipt_path=self.control / "barrier.json", fence_receipt_path=self.receipt)
+        with privileges_disabled():
+            return v4.fence_closed_old_phase_guarded(
+                old_root=self.old, archived_root=self.archived, expected_file_sha256=self.content,
+                source_stage_lock=self.parent / "source-stage.lock",
+                phase_stage_lock=self.parent / "phase-stage.lock", deny_sid=sid,
+                expected_parent_dacl_sha256=self.parent_acl, expected_file_dacl_sha256=self.file_acl,
+                barrier_receipt_path=self.control / "barrier.json", fence_receipt_path=self.receipt)
 
     def test_fence_completes_replays_and_its_receipt_validates(self):
         result = self.invoke()
         self.assertEqual(result["status"], "OLD_PATH_FENCED_NEW_PHASE_ALLOWED")
         self.assertFalse(self.old.exists())
-        self.assertIn("(D;;LC;;;BU)", authority.directory_dacl_sddl(self.parent))
+        with privileges_disabled(), self.assertRaises(PermissionError) as refused:
+            self.old.mkdir()
+        self.assertEqual(refused.exception.winerror, 5)
+        self.assertTrue("(D;;LC;;;BU)" in authority.directory_dacl_sddl(self.parent),
+                        "expected BU deny-create ACE missing")
         for name in v4.NAMES:
             self.assertFalse(v4._file_deny(self.archived / name, USERS_SID))
         self.assertEqual(result, self.invoke())
@@ -277,11 +282,11 @@ class V4AliasIdentityFenceTests(_FenceTree):
         path = self.old / "checkpoint.sqlite3"
         _icacls(str(path), "/deny", "*" + USERS_SID + ":(X)")
         prior = authority.directory_dacl_sddl(path)
-        self.assertIn(";;;BU)", prior)
+        self.assertTrue(";;;BU)" in prior, "expected BU trustee missing")
         self.file_acl[path.name] = bytes_digest(prior.encode())
         with self.assertRaisesRegex(ContractError, "existing owner deny"):
             self.invoke()
-        self.assertEqual(authority.directory_dacl_sddl(path), prior)
+        self.assertTrue(authority.directory_dacl_sddl(path) == prior, "file DACL changed")
         self.assertFalse((self.control / "barrier.json").exists())
         self.assertTrue(self.old.exists())
 
