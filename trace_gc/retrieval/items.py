@@ -1,7 +1,7 @@
 """Canonical context construction and provenance classification, never graph truth."""
 from __future__ import annotations
 from typing import Any
-from ..canonical import dumps
+from ..canonical import digest, dumps
 from ..compiler import timestamp
 from ..errors import require
 from .contracts import item_id
@@ -309,6 +309,42 @@ def _canonical_item(view: GraphReadView, access: AccessFilter, query: dict[str, 
             "instruction_authority": False}
 
 
+def _validate_scoped_topology(kind: str, ref: str, members: list[str], edges: dict[str, Any], query: dict[str, Any]) -> None:
+    endpoints = []
+    for member in members:
+        assertion = edges[member]["assertion"]
+        endpoints.append({assertion["subject"], assertion["object"]})
+    if kind == "PATH":
+        identity = min(members, list(reversed(members)))
+        require(len(members) >= 2 and ref == digest(identity), "PATH_INVALID", "path reference differs from its hops")
+        for start in endpoints[0]:
+            current, visited = start, {start}
+            for pair in endpoints:
+                following = pair - visited
+                if current not in pair or len(following) != 1:
+                    break
+                current = following.pop()
+                visited.add(current)
+            else:
+                return
+        require(False, "PATH_INVALID", "path is not a continuous simple walk")
+    else:
+        require(members == sorted(set(members)) and ref == "community-" + digest(members)[:20],
+                "COMMUNITY_INVALID", "community reference differs from its members")
+        require(not query["community_scope"] or ref in query["community_scope"],
+                "COMMUNITY_SCOPE", "community is outside the requested scope")
+        neighbors: dict[str, set[str]] = {}
+        for pair in endpoints:
+            for node in pair:
+                neighbors.setdefault(node, set()).update(pair - {node})
+        pending, visited = {next(iter(neighbors))}, set()
+        while pending:
+            node = pending.pop()
+            visited.add(node)
+            pending.update(neighbors[node] - visited)
+        require(len(visited) == len(neighbors), "COMMUNITY_INVALID", "community members are disconnected")
+
+
 def canonical_item(view: GraphReadView, access: AccessFilter, query: dict[str, Any], *, kind: str,
                    ref: str, members: list[str] | None = None, edges: dict[str, Any] | None = None,
                    conflicts: list[list[str]] | None = None, domain_selection=None) -> dict[str, Any]:
@@ -319,7 +355,6 @@ def canonical_item(view: GraphReadView, access: AccessFilter, query: dict[str, A
     Unscoped legacy materialization retains its original item shape and text.
     """
     from .domains import ResearchDomainSelection
-    from ..canonical import digest
     if query.get("research_domain_scope") is None:
         return _canonical_item(view, access, query, kind=kind, ref=ref, members=members, edges=edges, conflicts=conflicts)
     if domain_selection is None:
@@ -328,6 +363,8 @@ def canonical_item(view: GraphReadView, access: AccessFilter, query: dict[str, A
         domain_selection = ResearchDomainSelection(view, access, query, authorized, pairs)
     selection = domain_selection
     selection.require_candidate(kind, ref, members)
+    if kind in {"PATH", "COMMUNITY"}:
+        _validate_scoped_topology(kind, ref, members or [], selection.allowed_edges, query)
     item = _canonical_item(view, access, query, kind=kind, ref=ref, members=members,
                            edges=selection.allowed_edges, conflicts=selection.conflicts)
     seeds = selection.basis(kind, ref, members)

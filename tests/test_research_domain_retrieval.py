@@ -250,8 +250,14 @@ class DomainRetrievalTests(unittest.TestCase):
         item = next(item for item in ctx["items"] if item["kind"] == "COMMUNITY")
         ctx2, _ = self.context(self.request(["COMMUNITY"], focus_entities=["Acme"], community_scope=[item["canonical_ref"]]))
         self.assertTrue(ctx2["items"])
-        ctx3, _ = self.context(self.request(["COMMUNITY"], focus_entities=["Acme"], community_scope=["research:biology"]))
+        other_scope = self.request(["COMMUNITY"], focus_entities=["Acme"], community_scope=["research:biology"])
+        ctx3, _ = self.context(other_scope)
         self.assertEqual(ctx3["items"], [])
+        view = self.r.adapter.read(other_scope)
+        access = AccessFilter(self.r.access_policy, view.catalog, view.source_status)
+        with self.assertRaisesRegex(ContractError, "COMMUNITY_SCOPE"):
+            canonical_item(view, access, other_scope, kind="COMMUNITY", ref=item["canonical_ref"],
+                           members=item["member_assertion_ids"])
         self.assertTrue(item["generated_summary"])
         self.assertFalse(item["instruction_authority"])
         self.assertEqual(item["member_assertion_ids"], ["e-owns", "e-path"])
