@@ -43,6 +43,10 @@ def parser() -> argparse.ArgumentParser:
     gd.add_argument("--output",type=Path,default=Path("trace-gc-graphrag-demo"))
     gb=sub.add_parser("graphrag-benchmark",help="Run the synthetic retrieval/pipeline ablations; not a real-model accuracy evaluation")
     gb.add_argument("--output",type=Path,default=Path("trace-gc-graphrag-benchmark"))
+    dw=sub.add_parser("domain-workload",help="Measure authored synthetic domain workloads in disposable reference stores")
+    dw.add_argument("--output",type=Path,required=True)
+    dw.add_argument("--repetitions",type=int,default=3)
+    dw.add_argument("--workers",type=int,default=2)
     c=sub.add_parser("canonical",help="Generate a TRACE-C14N-1 hash and byte vector")
     c.add_argument("input",type=Path)
     e=sub.add_parser("evaluate-labels",help="Calculate an UNSIGNED qualification artifact from independent labels")
@@ -81,6 +85,11 @@ def main(argv: list[str] | None=None) -> int:
             from .retrieval.benchmark import run_benchmark
             report=run_benchmark(args.output)
             result={k:report[k] for k in ("status","cases","runs","provider_calls","production_graph_writes","interpretation")}
+            result["output"]=str(args.output)
+        elif args.command=="domain-workload":
+            from .retrieval.workloads import run_reference_domain_workload
+            report=run_reference_domain_workload(args.output,repetitions=args.repetitions,workers=args.workers)
+            result={k:report[k] for k in ("status","sample_count","query_latency_ms","publication_latency_ms","writes","placement_decision")}
             result["output"]=str(args.output)
         elif args.command=="canonical":
             value=load(args.input);result={"profile":"TRACE-C14N-1","sha256":digest(value),"bytes_hex":canonical_bytes(value).hex()}

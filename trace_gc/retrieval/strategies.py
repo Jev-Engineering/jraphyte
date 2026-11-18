@@ -96,6 +96,8 @@ class BuiltinStrategy:
                     m.work()
                     if target in nodes:
                         continue
+                    if name == "PATH" and path:
+                        space.domain_selection.measure_transition(path[-1], ref, channel="path")
                     next_path = path + [ref]
                     if name == "NEIGHBORHOOD" and ref not in visited_edges:
                         visited_edges.add(ref)
@@ -243,10 +245,10 @@ class BuiltinStrategy:
             for root in sorted(focus or set(adj)):
                 if root in seen:
                     continue
-                nodes, members, queue = set(), set(), deque([root])
+                nodes, members, queue = set(), set(), deque([(root, None)])
                 while queue:
                     m.work()
-                    node = queue.popleft()
+                    node, predecessor = queue.popleft()
                     if node in nodes:
                         continue
                     nodes.add(node)
@@ -256,9 +258,11 @@ class BuiltinStrategy:
                         m.work()
                         if len(members) >= m.limits.maximum_edges:
                             break
+                        if edge not in members:
+                            space.domain_selection.measure_transition(predecessor, edge, channel="community")
                         members.add(edge)
                         if target not in nodes:
-                            queue.append(target)
+                            queue.append((target, edge))
                 seen.update(nodes)
                 if members:
                     ref = "community-" + digest(sorted(members))[:20]

@@ -4,14 +4,15 @@ from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from dataclasses import dataclass, field
 from threading import get_ident
-from time import monotonic
+from time import monotonic, perf_counter_ns
 from typing import Any, Callable, Protocol, runtime_checkable
-from ..canonical import digest, loads
+from ..canonical import canonical_bytes, digest, loads
 from ..catalog import Catalog
 from ..compiler import timestamp
 from ..errors import require
 from ..domain_publication import classification_identity, snapshot_body, verify_projection
 from .security import AccessFilter
+from .telemetry import active, record_read_metrics
 from .domain_index import authoritative_rows, SQLiteClassificationIndex
 
 @dataclass
@@ -233,8 +234,12 @@ class SQLiteGraphAdapter:
         classified = classification_identity(body)["migrated"]
         require(not classified or self.audit_trust is not None,
                 "CLASSIFICATION_TRUST_REQUIRED", "classified reads require application-enrolled audit trust")
+        measuring = active()
+        audit_started = perf_counter_ns() if measuring else 0
         audit = backend.audit(trust=self.audit_trust,
                               required_sources=tuple(body["source_epochs"]) if classified else ())
+        if measuring:
+            record_read_metrics(authority_audit_seconds=(perf_counter_ns() - audit_started) / 1e9)
         require(audit["classification_replay"] == "PASS", "REPLAY_CONTENT_UNAVAILABLE",
                 "classification replay proof is unavailable")
         require(not classified or audit["classification_authority_verified"], "CLASSIFICATION_TRUST_REQUIRED",
@@ -247,7 +252,15 @@ class SQLiteGraphAdapter:
         snapshot_id = catalog.put("graph-snapshot", body)
         # Compute/validate index ONLY from persisted authority, never proposals
         # carried in the caller's mutable working catalog.
-        rows = self.index.read(catalog, snapshot_id, rebuild=rebuild, persist=persist)
+        index_started = perf_counter_ns() if measuring else 0
+        index_metrics = {} if measuring else None
+        rows = self.index.read(catalog, snapshot_id, rebuild=rebuild, persist=persist, metrics=index_metrics)
+        if measuring:
+            record_read_metrics(
+                validation_seconds=(perf_counter_ns() - index_started) / 1e9,
+                source_rows=len(rows), membership_rows=len(self.index.membership(rows)),
+                logical_source_row_bytes=len(canonical_bytes(rows)), **index_metrics,
+            )
         if self.working_catalog is not None and version is None:
             for record in self.working_catalog.all():
                 catalog.add(record)
