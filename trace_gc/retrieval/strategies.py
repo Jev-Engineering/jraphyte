@@ -67,6 +67,9 @@ class BuiltinStrategy:
             focus = {x for x in focus if space.domain_selection.node_basis(x)}
         else:
             focus = {x for x in focus if space.allows("NODE", x)}
+        if (space.domain_selection.enabled and q["focus_entities"] and not focus and
+                name in {"RELATION", "TEMPORAL", "PROVENANCE", "COMMUNITY", "CONFLICT"}):
+            return
         text_terms = terms(q["text"])
         if name in {"ENTITY", "CLAIM"}:
             candidates = sorted(snap["nodes"]) if name == "ENTITY" else sorted(r["id"] for r in c.all("claim"))

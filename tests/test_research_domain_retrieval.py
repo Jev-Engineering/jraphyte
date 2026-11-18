@@ -216,7 +216,7 @@ class DomainRetrievalTests(unittest.TestCase):
         self.assertEqual(ctx["items"], [])
 
     def test_path_members_remain_search_hops_not_identity_closure(self):
-        ctx, _ = self.context(self.request(["PATH"], focus_entities=["Acme"], hop_limit=2))
+        ctx, result = self.context(self.request(["PATH"], focus_entities=["Acme"], hop_limit=2))
         self.assertTrue(all("e-alias" not in item["member_assertion_ids"] for item in ctx["items"]))
         item = next(item for item in ctx["items"] if set(item["member_assertion_ids"]) == {"e-owns", "e-path"})
         self.assertEqual(len(item["member_assertion_ids"]), 2)
@@ -227,6 +227,15 @@ class DomainRetrievalTests(unittest.TestCase):
         alias_source = self.f["sources"]["e-alias"]
         self.assertEqual(item["research_domain"]["source_assignments"][alias_source], self.f["assignments"][alias_source])
         self.assertIn("not additional search-path hops", item["text"])
+        lineage = self.c.get(result["lineage_id"], "retrieval-lineage")
+        candidate = next(row for row in lineage["candidates"] if row["item_id"] == item["id"])
+        self.assertEqual(candidate["features"]["graph_distance_utility"], 0.5)
+
+    def test_out_of_domain_focus_does_not_expand_to_unfocused_search(self):
+        for strategy in ("RELATION", "TEMPORAL", "PROVENANCE", "COMMUNITY", "CONFLICT"):
+            with self.subTest(strategy=strategy):
+                context, _ = self.context(self.request([strategy], focus_entities=["Paper-B"]))
+                self.assertEqual(context["items"], [])
 
     def test_all_path_members_contribute_labels_across_the_path(self):
         scope = research_domain_scope(self.c, self.f["taxonomy_id"],

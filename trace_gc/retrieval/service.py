@@ -57,7 +57,7 @@ class RetrievalCache:
 def ranking_features(item: dict[str, Any], query: dict[str, Any], similarity: float = 0.0) -> dict[str, float]:
     wanted = terms(query["text"])
     lexical = len(wanted & terms(item["text"])) / max(1, len(wanted))
-    distance = len(item["assertion_ids"]) if item["kind"] == "PATH" else 1
+    distance = len(item["member_assertion_ids"]) if item["kind"] == "PATH" else 1
     return {"lexical_overlap": lexical, "semantic_similarity": similarity,
             "entity_relevance": float(bool(set(query["focus_entities"]) & set(item["entity_ids"]))),
             "graph_distance_utility": 1.0 / max(1, distance),
