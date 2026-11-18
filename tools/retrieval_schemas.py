@@ -88,6 +88,18 @@ def extend(schemas):
         "original_selected_ids": IDS, "replayed_selected_ids": IDS, "added_ids": IDS, "removed_ids": IDS,
         "observation_hashes_preserved": mapping(H), "new_observation_ids": IDS,
         "synthesis_comparison": {"type": "object"}, "authorization_granted": {"const": False}, "created_at": T})
+    schemas["retrieval-replay"]["properties"]["replay_access_id"] = S
+    schemas["retrieval-replay"]["allOf"] = [{
+        "if": {"required": ["replay_access_id"]},
+        "then": {"properties": {"synthesis_comparison": {"oneOf": [
+            obj({"observation_ids": IDS}),
+            obj({"status": {"const": "NOT_RUN"}, "reason": {"const": "No synthesis executor supplied."}}),
+        ]}}},
+    }, {
+        "if": {"anyOf": [{"required": [f"{side}_{field}"]} for side in ("original", "replayed")
+                         for field in ("classification_identity", "research_domain_scope")]},
+        "then": {"required": ["replay_access_id"]},
+    }]
     schemas["retrieval-evaluation"] = obj({"version": S, "dataset_hash": H, "split": S, "label_origin": S,
         "metrics": {"type": "object"}, "configuration": {"type": "object"}, "result_ids": IDS,
         "production_qualified": {"const": False}, "created_at": T})
@@ -102,3 +114,6 @@ def extend(schemas):
     q = schemas["pack"]["properties"]["questions"]["items"]
     q["properties"]["task"]["enum"].append("GRAPH_RELEVANCE")
     q["properties"]["context_item_id"] = S
+
+    from domain_retrieval_schemas import extend as extend_domain_retrieval
+    extend_domain_retrieval(schemas)

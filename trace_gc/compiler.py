@@ -156,6 +156,12 @@ def materialize(catalog: Catalog, candidate_ids: list[str], prior_ids: list[str]
             state["graph_context"].append({"context_id": ref, "items": deepcopy(context["items"]),
                                            "instruction_authority": False})
             trace(f"/graph_context/{i}/items", ref, "/items")
+            if context.get("research_domain_scope") is not None:
+                # Carry the selected topic and revision without adding taxonomy
+                # review material to the evidence closure.
+                for field in ("classification_identity", "research_domain_scope"):
+                    state["graph_context"][i][field] = deepcopy(context[field])
+                    trace(f"/graph_context/{i}/{field}", ref, f"/{field}")
     return state,closed,traces
 
 def wire_request(pack: dict[str, Any]) -> bytes:
@@ -202,7 +208,9 @@ def compile_pack(catalog: Catalog, *, id_: str, run_id: str, candidate_ids: list
                  transformation: str = "identity-v1", token_counter: Callable[[Any],int] | None = None,
                  tokenizer_version: str = "utf8-byte-estimate-v1", request_cap: int = 64000,
                  state_longest_cap: int = 32000, graph_context_ids: list[str] | None = None,
-                 source_retrieval_ids: list[str] | None = None, model_profile: dict | None = None) -> str:
+                 source_retrieval_ids: list[str] | None = None, model_profile: dict | None = None,
+                 current_graph_access: dict[str, Any] | None = None,
+                 source_status: dict[str, Any] | None = None) -> str:
     from .semantic_profile import validate_model, adapter_for
     validate_model(model_version, model_profile)
     require(len(candidate_ids) == len(set(candidate_ids)) and bool(candidate_ids),"DUPLICATE_ID","candidate roots")
@@ -224,6 +232,11 @@ def compile_pack(catalog: Catalog, *, id_: str, run_id: str, candidate_ids: list
         pack.update(lineage_fields(catalog, graph_context_ids or [], source_retrieval_ids or [], closed["hash"]))
         pack["materializer_version"] = "materializer-v1+graph-v1"
         pack["packing_version"] = "minimum-source-graph-v1:" + pack["retrieval_fingerprint"]
+        require(token_counter is None or (current_graph_access is not None and source_status is not None), "SOURCE_STATUS_CAPABILITY",
+                "retrieval pack token counting requires live graph authorization")
+    if current_graph_access is not None:
+        from .retrieval.integration import validate_pack_lineage
+        validate_pack_lineage(catalog, pack, current_access=current_graph_access, current_status=source_status)
     counter = token_counter or byte_estimate
     pack["budget"]={"state_tokens":counter(state),"question_tokens":{q["id"]:counter(q) for q in questions},
                     "request_cap":request_cap,"state_longest_cap":state_longest_cap,"measured":token_counter is not None}

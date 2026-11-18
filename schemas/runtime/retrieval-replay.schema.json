@@ -83,6 +83,182 @@
     "created_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "replay_access_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "original_classification_identity": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "const": 1
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "migrated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "contract_version",
+        "revision",
+        "hash",
+        "migrated"
+      ],
+      "additionalProperties": false
+    },
+    "replayed_classification_identity": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "const": 1
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "migrated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "contract_version",
+        "revision",
+        "hash",
+        "migrated"
+      ],
+      "additionalProperties": false
+    },
+    "original_research_domain_scope": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "contract_version": {
+              "const": 1
+            },
+            "taxonomy_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "taxonomy_hash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "domain_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^research:[a-z0-9][a-z0-9._-]*$"
+              },
+              "uniqueItems": true,
+              "maxItems": 100
+            },
+            "match": {
+              "enum": [
+                "ANY",
+                "ALL"
+              ]
+            },
+            "include_unclassified": {
+              "type": "boolean"
+            },
+            "include_descendants": {
+              "type": "boolean"
+            },
+            "conflict_resolution": {
+              "enum": [
+                "literal-v1",
+                "authorized-identity-v1"
+              ]
+            }
+          },
+          "required": [
+            "contract_version",
+            "taxonomy_id",
+            "taxonomy_hash",
+            "domain_ids",
+            "match",
+            "include_unclassified",
+            "include_descendants"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "replayed_research_domain_scope": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "contract_version": {
+              "const": 1
+            },
+            "taxonomy_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "taxonomy_hash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "domain_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^research:[a-z0-9][a-z0-9._-]*$"
+              },
+              "uniqueItems": true,
+              "maxItems": 100
+            },
+            "match": {
+              "enum": [
+                "ANY",
+                "ALL"
+              ]
+            },
+            "include_unclassified": {
+              "type": "boolean"
+            },
+            "include_descendants": {
+              "type": "boolean"
+            },
+            "conflict_resolution": {
+              "enum": [
+                "literal-v1",
+                "authorized-identity-v1"
+              ]
+            }
+          },
+          "required": [
+            "contract_version",
+            "taxonomy_id",
+            "taxonomy_hash",
+            "domain_ids",
+            "match",
+            "include_unclassified",
+            "include_descendants"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
@@ -102,5 +278,86 @@
     "authorization_granted",
     "created_at"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "replay_access_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "synthesis_comparison": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "observation_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "uniqueItems": true
+                  }
+                },
+                "required": [
+                  "observation_ids"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "const": "NOT_RUN"
+                  },
+                  "reason": {
+                    "const": "No synthesis executor supplied."
+                  }
+                },
+                "required": [
+                  "status",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "required": [
+              "original_classification_identity"
+            ]
+          },
+          {
+            "required": [
+              "original_research_domain_scope"
+            ]
+          },
+          {
+            "required": [
+              "replayed_classification_identity"
+            ]
+          },
+          {
+            "required": [
+              "replayed_research_domain_scope"
+            ]
+          }
+        ]
+      },
+      "then": {
+        "required": [
+          "replay_access_id"
+        ]
+      }
+    }
+  ]
 }

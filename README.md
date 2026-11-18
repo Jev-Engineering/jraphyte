@@ -10,6 +10,8 @@ This release preserves the implemented 0.3 design-review improvements and extend
 
 `UpstreamGraphRAG` feeds bounded hybrid context into the existing closure, question, Jev, resolver and mutation workflow. `GraphRAGQueryService` returns source-cited contexts over the compiled graph for search, QA and agents. Both share 18 retrieval channels, strict records, access controls, version-aware caches and budgets; neither grants publication authority.
 
+Both APIs accept a pinned `research_domain_scope` for topical selection while carrying authorized evidence across labels. [Research-domain retrieval](docs/research_domain_retrieval.md)
+
 ```sh
 python -m trace_gc graphrag-demo --output examples/graphrag/scenarios
 python -m trace_gc graphrag-benchmark --output benchmarks/graphrag
