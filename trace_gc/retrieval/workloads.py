@@ -25,7 +25,7 @@ from ..domain_publication import classification_identity, empty_projection
 from ..errors import ContractError, require
 from .telemetry import measure_retrieval
 
-VERSION = "research-domain-workloads-v1.2"
+VERSION = "research-domain-workloads-v1.3"
 REFERENCE_QUERY_TIME = "2026-09-27T00:00:00Z"
 
 
@@ -212,13 +212,20 @@ class WorkloadRecorder:
 
 def measure_query(retriever: Any, case: QueryCase, recorder: WorkloadRecorder) -> str:
     with recorder.slot() as slot:
-        return _measure_query(retriever, case, slot)
+        result = _measure_query(retriever, case, slot, continue_on_query_error=False)
+    assert result is not None
+    return result
 
 
-def _measure_query(retriever: Any, case: QueryCase, recorder: Any) -> str:
+def _returned_sources(catalog, context: dict[str, Any]) -> set[str]:
+    sources = {source for item in context["items"] for source in item["source_ids"]}
+    sources.update(catalog.get(ref, "evidence")["source_snapshot_id"] for ref in context["selected_evidence_ids"])
+    return sources
+
+
+def _measure_query(retriever: Any, case: QueryCase, recorder: Any, *, continue_on_query_error: bool) -> str | None:
     # Keep the result and its catalog view consistent through observation.
     with retriever._lock:
-        result_id = None
         # Malformed requests still need failure telemetry. Hashing a NaN or
         # invalid Unicode must not replace the retriever's original exception.
         try:
@@ -231,9 +238,6 @@ def _measure_query(retriever: Any, case: QueryCase, recorder: Any) -> str:
         with measure_retrieval() as measurements:
             try:
                 result_id = retriever.retrieve(case.request)
-                result = retriever.catalog.get(result_id, "retrieval-result")
-                context = retriever.catalog.get(result["graph_context_id"], "graph-context")
-                outcome = result["status"]
             except Exception as exc:
                 # Preserve the exact exception for the caller. Do not log its
                 # message, stack, provider response, or any query/source text.
@@ -247,12 +251,16 @@ def _measure_query(retriever: Any, case: QueryCase, recorder: Any) -> str:
                     "adapter_metrics": dict(measurements.read_metrics),
                     "measurements": measurements.as_dict(),
                     "cache_delta": {name: measurements.cache[name] for name in ("hits", "misses", "invalidations", "evictions")}})
+                if continue_on_query_error:
+                    return None
                 raise
+            result = retriever.catalog.get(result_id, "retrieval-result")
+            context = retriever.catalog.get(result["graph_context_id"], "graph-context")
+            outcome = result["status"]
         elapsed = (perf_counter_ns() - started) / 1_000_000
         evidence = set(context["selected_evidence_ids"])
         conflict_items = [set(item["assertion_ids"]) for item in context["items"] if item["kind"] == "CONFLICT"]
-        sources = {s for item in context["items"] for s in item["source_ids"]}
-        sources.update(retriever.catalog.get(ref, "evidence")["source_snapshot_id"] for ref in evidence)
+        sources = _returned_sources(retriever.catalog, context)
         scope = case.request.get("research_domain_scope")
         sample = {"kind": "QUERY", "case_id": case.case_id, "pair_id": case.pair_id,
             "operation": "query:" + ("scoped:" if scope else "unscoped:") + "+".join(case.request["retrieval_strategy"]),
@@ -328,13 +336,15 @@ def _measure_publication(service: Any, catalog: Any, plan_id: str, recorder: Any
 
 def run_query_workload(factory: Callable[[], Any], cases: list[QueryCase], recorder: WorkloadRecorder, *,
                        repetitions: int = 3, workers: int = 1) -> None:
+    """Run every scheduled case, continuing after a recorded retrieval exception."""
     require(type(repetitions) is int and repetitions > 0 and type(workers) is int and 1 <= workers <= 32 and bool(cases),
             "WORKLOAD_INPUT", "nonempty cases, positive repetitions and 1..32 workers required")
     def execute(worker):
         retriever = factory()
         for _ in range(repetitions):
             for case in cases:
-                measure_query(retriever, case, recorder)
+                with recorder.slot() as slot:
+                    _measure_query(retriever, case, slot, continue_on_query_error=True)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         list(pool.map(execute, range(workers)))
 
@@ -394,7 +404,11 @@ def run_reference_domain_workload(output: str | Path | None = None, *, repetitio
         adapter = InMemoryGraphAdapter(copied, fixture["adapter"].snapshot_ids, fixture["adapter"].source_status)
         return HybridRetriever(adapter, catalog=copied, access_policy=fixture["retriever"].access_policy,
                                cache=RetrievalCache(capacity=4))
+    memory_started = perf_counter_ns()
     run_query_workload(factory, cases, recorder, repetitions=repetitions, workers=workers)
+    memory_seconds = (perf_counter_ns() - memory_started) / 1e9
+    scheduled_query_count = len(recorder.samples)
+    scheduled_query_completions = sum(row["completed"] for row in recorder.samples)
     # One separately declared negative case exercises failure cost accounting.
     # It cannot be included as a successful quality observation or an access grant.
     try:
@@ -434,6 +448,7 @@ def run_reference_domain_workload(output: str | Path | None = None, *, repetitio
                 result = measure_publication(service, f.catalog, pid, recorder, authorization=auth, preflight=preflight)
                 measure_publication(service, f.catalog, pid, recorder, authorization=auth, preflight=preflight)
                 return result
+            sqlite_started = perf_counter_ns()
             publish([migration_operation(operation_id="initialize", reason="Synthetic workload migration")], "workload-initialize")
             reader = HybridRetriever(SQLiteGraphAdapter(f.backend, audit_trust=f.trust), catalog=f.catalog,
                 access_policy=demo_access(f.catalog, f.backend.snapshot(f.catalog), scope=SCOPE), cache=RetrievalCache(capacity=4))
@@ -454,7 +469,10 @@ def run_reference_domain_workload(output: str | Path | None = None, *, repetitio
                 assignment = create_assignment(f.catalog, source_snapshot_id=f.source_ids[0], taxonomy_id=taxonomy_id,
                     domain_ids=["research:biology", "research:chemistry"] if revision % 2 else ["research:physics"],
                     classifier_id="synthetic-workload-reviewer", classifier_version=VERSION, review=review, supersedes=previous)
-                publish([classification_operation(f.catalog, assignment, operation_id="assign")], "workload-assign-" + str(revision))
+                publication = publish([classification_operation(f.catalog, assignment, operation_id="assign")],
+                                      "workload-assign-" + str(revision))
+                if revision % 2:
+                    latest_matching_version = publication["event"]["version"]
                 previous = assignment
                 expected = frozenset({f.evidence_ids[0]}) if revision % 2 else frozenset()
                 case = QueryCase("sqlite-reclassification-" + str(revision), request, expected)
@@ -465,12 +483,31 @@ def run_reference_domain_workload(output: str | Path | None = None, *, repetitio
                 prepare_index(request, rebuild=revision == 1)
                 measure_query(reader, case, recorder)
                 measure_query(reader, case, recorder)
-            historical_version = f.backend.state()["graph_version"]
-            f.status_change(f.source_ids[0])
-            # A historically matching assignment must still exclude the now-revoked source.
-            revoked_case = QueryCase("sqlite-historical-current-revocation", {**request, "graph_version": historical_version,
-                 "include_historical": True}, forbidden_source_ids=frozenset({f.source_ids[0]}))
-            measure_query(reader, revoked_case, recorder)
+            last_classification_version = publication["event"]["version"]
+            historical_request = {**request, "graph_version": latest_matching_version, "include_historical": True}
+            target_source = f.source_ids[0]
+
+            def historical_context(result_id):
+                context = f.catalog.get(f.catalog.get(result_id, "retrieval-result")["graph_context_id"], "graph-context")
+                require(context["graph_version"] == latest_matching_version, "WORKLOAD_EXPECTATION",
+                        "withdrawal control selected an unexpected graph version")
+                return context
+
+            before = historical_context(reader.retrieve(historical_request))
+            require(target_source in _returned_sources(f.catalog, before)
+                    and f.evidence_ids[0] in before["selected_evidence_ids"], "WORKLOAD_EXPECTATION",
+                    "historical withdrawal positive control did not return the matching source and evidence")
+            f.status_change(target_source)
+            revoked_case = QueryCase("sqlite-historical-current-revocation", historical_request,
+                                     forbidden_source_ids=frozenset({target_source}))
+            after = historical_context(measure_query(reader, revoked_case, recorder))
+            require(target_source not in _returned_sources(f.catalog, after), "WORKLOAD_EXPECTATION",
+                    "withdrawn source appeared in historical retrieval")
+            revocation_control = {"graph_version": latest_matching_version,
+                                  "last_classification_graph_version": last_classification_version,
+                                  "source_and_evidence_visible_before_withdrawal": True,
+                                  "source_excluded_after_withdrawal": True,
+                                  "positive_control_in_query_sample_count": False}
             # Actual concurrent writers against TWO connections to ONE SQLite
             # authority. The stale loser is recorded, never treated as a write.
             from ..backend import SQLiteReferenceBackend
@@ -507,6 +544,7 @@ def run_reference_domain_workload(output: str | Path | None = None, *, repetitio
                         "WORKLOAD_CONCURRENCY", "exactly one of two same-version writers must commit")
             finally:
                 concurrent.close()
+            sqlite_seconds = (perf_counter_ns() - sqlite_started) / 1e9
             audit = f.backend.audit(trust=f.trust)
             sqlite_topology = topology(f.backend.state())
             try:
@@ -521,8 +559,24 @@ def run_reference_domain_workload(output: str | Path | None = None, *, repetitio
         finally:
             f.close()
     report = recorder.report()
+    signed_writes = report["writes"]["committed"]
+    report["phase_rates"] = {
+        "memory_read_schedule": {
+            "wall_seconds": memory_seconds, "query_attempts": scheduled_query_count,
+            "query_completions": scheduled_query_completions,
+            "attempts_per_second": scheduled_query_count / memory_seconds if memory_seconds else None,
+            "completions_per_second": scheduled_query_completions / memory_seconds if memory_seconds else None,
+            "window": "worker pool setup, factories and all paired scheduled queries; excludes the standalone denial",
+        },
+        "sqlite_mixed": {
+            "wall_seconds": sqlite_seconds, "committed_signed_plans": signed_writes,
+            "committed_signed_plans_per_second": signed_writes / sqlite_seconds if sqlite_seconds else None,
+            "window": "initialization plan preparation through writer race and second connection close; includes reads, index work, retries and withdrawal",
+        },
+    }
     report.update(topology={"memory_read_fixture": topology(snapshot), "sqlite_write_fixture": sqlite_topology},
-                  sqlite_storage=sizes, index_preparations=index_preparations, cold_projection=cold_projection, sqlite_input_manifest=sqlite_inputs, sqlite_audit=audit, concurrent_write_outcomes=concurrent_outcomes,
+                  sqlite_storage=sizes, index_preparations=index_preparations, cold_projection=cold_projection,
+                  revocation_control=revocation_control, sqlite_input_manifest=sqlite_inputs, sqlite_audit=audit, concurrent_write_outcomes=concurrent_outcomes,
                   provider_calls=0, production_graph_writes=0,
                   placement_decision="DEFERRED_PENDING_REPRESENTATIVE_DATA_OWNER_ISOLATION_AND_SLOS")
     # Linux process-wide observations, not an isolated workload's memory demand.

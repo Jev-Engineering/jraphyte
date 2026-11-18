@@ -17,7 +17,7 @@ from trace_gc.retrieval.fixtures import domain_corpus, SCOPE
 from trace_gc.retrieval.security import AccessFilter
 from trace_gc.retrieval.telemetry import active, measure_retrieval, measured_acl, domain_hop
 from trace_gc.retrieval.workloads import (QueryCase, WorkloadRecorder, percentiles, topology, measure_query,
-                                        measure_publication, run_reference_domain_workload)
+                                        measure_publication, run_query_workload, run_reference_domain_workload)
 from test_research_domain_transactions import DomainFixture
 
 
@@ -141,6 +141,58 @@ class WorkloadExecutionTests(unittest.TestCase):
         self.assertNotIn(c.get(f["evidence"]["e-support"])["quote"], json.dumps(sample))
         self.assertEqual(sample["cache_delta"]["hits"], 1)
 
+    def test_schedule_continues_after_recorded_rejection_and_error(self):
+        fixture = domain_corpus()
+        retriever = fixture["retriever"]
+        request = query(requesting_component="downstream-search", security_scope=SCOPE,
+                        strategies=["LEXICAL"], text="improves")
+        denied = QueryCase("denied", {**request, "security_scope": "different-scope"})
+        valid = QueryCase("valid", request)
+        with self.subTest("standalone preserves retrieval exception"):
+            rows = recorder()
+            with self.assertRaises(ContractError) as rejected:
+                measure_query(retriever, denied, rows)
+            self.assertEqual(rejected.exception.code, "SECURITY_SCOPE")
+            self.assertEqual(rows.report()["query_outcomes"], {"completed": 0, "rejected_or_error": 1})
+
+        rows = recorder()
+        retrieve = retriever.retrieve
+
+        def occasionally_fails(request):
+            if request["text"] == "synthetic-error":
+                raise RuntimeError("synthetic adapter failure")
+            return retrieve(request)
+
+        retriever.retrieve = occasionally_fails
+        failed = QueryCase("adapter-error", {**request, "text": "synthetic-error"})
+        run_query_workload(lambda: retriever, [denied, failed, valid], rows, repetitions=2)
+        samples = rows.report()["samples"]
+        self.assertEqual([row["case_id"] for row in samples], ["denied", "adapter-error", "valid"] * 2)
+        self.assertEqual([row["outcome"] for row in samples[:2]], ["SECURITY_SCOPE", "ERROR"])
+        self.assertEqual(rows.report()["query_outcomes"], {"completed": 2, "rejected_or_error": 4})
+
+    def test_schedule_propagates_capacity_factory_and_measurement_failures(self):
+        case = QueryCase("case", {})
+        workspace = Mock()
+        workspace._lock = threading.RLock()
+        workspace.retrieve.side_effect = RuntimeError("synthetic retrieval failure")
+        rows = recorder(maximum_samples=1)
+        with self.assertRaises(ContractError) as capacity:
+            run_query_workload(lambda: workspace, [case, case], rows, repetitions=1)
+        self.assertEqual(capacity.exception.code, "WORKLOAD_LIMIT")
+        self.assertEqual(workspace.retrieve.call_count, 1)
+        self.assertEqual(rows.report()["query_outcomes"], {"completed": 0, "rejected_or_error": 1})
+
+        with self.assertRaisesRegex(RuntimeError, "factory failure"):
+            run_query_workload(Mock(side_effect=RuntimeError("factory failure")), [case], recorder())
+        workspace.retrieve.side_effect = None
+        workspace.retrieve.return_value = "result"
+        workspace.catalog.get.side_effect = RuntimeError("measurement failure")
+        rows = recorder()
+        with self.assertRaisesRegex(RuntimeError, "measurement failure"):
+            run_query_workload(lambda: workspace, [case], rows)
+        self.assertEqual(rows.report()["sample_count"], 0)
+
     def test_unsigned_publication_fails_and_is_counted_as_rejected_not_written(self):
         with tempfile.TemporaryDirectory() as directory:
             f = DomainFixture(directory)
@@ -163,6 +215,16 @@ class WorkloadExecutionTests(unittest.TestCase):
         self.assertEqual(report["input_manifest"]["data_kind"], "SYNTHETIC")
         self.assertEqual(report["status"], "MEASURED_NOT_QUALIFIED")
         self.assertEqual(report["sample_count"], 26)
+        rates = report["phase_rates"]
+        memory = rates["memory_read_schedule"]
+        sqlite = rates["sqlite_mixed"]
+        self.assertGreater(memory["wall_seconds"], 0)
+        self.assertGreater(sqlite["wall_seconds"], 0)
+        self.assertEqual((memory["query_attempts"], memory["query_completions"]), (8, 8))
+        self.assertAlmostEqual(memory["attempts_per_second"], 8 / memory["wall_seconds"])
+        self.assertAlmostEqual(memory["completions_per_second"], 8 / memory["wall_seconds"])
+        self.assertEqual(sqlite["committed_signed_plans"], 5)
+        self.assertAlmostEqual(sqlite["committed_signed_plans_per_second"], 5 / sqlite["wall_seconds"])
         # The integrated protocol includes rejected requests and exact identity
         # implementation pins; neither prior branch's coverage may be discarded.
         from trace_gc.canonical import bytes_digest
@@ -201,3 +263,16 @@ class WorkloadExecutionTests(unittest.TestCase):
         self.assertIsNone(report["paired_comparison"]["path"]["scoped"]["missing_structured_conflicts"])
         self.assertEqual(report["production_graph_writes"], 0)
         self.assertEqual(report["provider_calls"], 0)
+
+    def test_even_repetitions_prove_withdrawal_on_matching_historical_snapshot(self):
+        report = run_reference_domain_workload(repetitions=4, workers=1)
+        control = report["revocation_control"]
+        self.assertEqual(control["graph_version"] + 1, control["last_classification_graph_version"])
+        self.assertTrue(control["source_and_evidence_visible_before_withdrawal"])
+        self.assertTrue(control["source_excluded_after_withdrawal"])
+        self.assertFalse(control["positive_control_in_query_sample_count"])
+        revoked, = (row for row in report["samples"] if row.get("case_id") == "sqlite-historical-current-revocation")
+        self.assertEqual(revoked["graph_version"], control["graph_version"])
+        self.assertEqual(revoked["quality"]["forbidden_sources_returned"], 0)
+        self.assertEqual(report["query_outcomes"], {"completed": 41, "rejected_or_error": 1})
+        self.assertEqual(report["sample_count"], 54)
