@@ -327,6 +327,37 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "required": [
+              "original_classification_identity"
+            ]
+          },
+          {
+            "required": [
+              "original_research_domain_scope"
+            ]
+          },
+          {
+            "required": [
+              "replayed_classification_identity"
+            ]
+          },
+          {
+            "required": [
+              "replayed_research_domain_scope"
+            ]
+          }
+        ]
+      },
+      "then": {
+        "required": [
+          "replay_access_id"
+        ]
+      }
     }
   ]
 }

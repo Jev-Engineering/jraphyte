@@ -54,6 +54,14 @@ class ReplayClassificationPinTests(unittest.TestCase):
                 validate_record(self.c, self.forge(lambda body, key=key: body.pop(key)))
             self.assertEqual(caught.exception.code, "DOMAIN_REVISION")
 
+    def test_modern_replay_must_bind_its_disclosure_policy(self):
+        body = deepcopy(self.replay)
+        del body["replay_access_id"]
+        with self.assertRaisesRegex(ContractError, "REPLAY_SCOPE"):
+            validate_record(self.c, {"kind": "retrieval-replay", "body": body})
+        with self.assertRaises(ContractError):
+            self.c.put("retrieval-replay", body)
+
     def test_a_replay_with_a_changed_classification_revision_is_rejected(self):
         for prefix in ("original", "replayed"):
             with self.subTest(side=prefix), self.assertRaises(ContractError) as caught:

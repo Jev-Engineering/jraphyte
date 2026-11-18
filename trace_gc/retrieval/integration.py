@@ -237,6 +237,7 @@ def validate_record(catalog: Catalog, record: dict[str, Any]) -> None:
                for context in contexts.values()) and not any(
                    prefix + field in b for prefix in contexts for field in ("_classification_identity", "_research_domain_scope")):
             return
+        require("replay_access_id" in b, "REPLAY_SCOPE", "domain-aware replay requires a bound disclosure policy")
         require(set(b["changed_parameters"]) <= RETRIEVAL_REPLAY_PARAMETERS,
                 "REPLAY_SCOPE", "replay changes a protected query parameter")
         requests = {}
@@ -255,7 +256,7 @@ def validate_record(catalog: Catalog, record: dict[str, Any]) -> None:
                     "DOMAIN_REVISION", "replay classification identity or scope differs")
         original, replayed = contexts["original"], contexts["replayed"]
         replayed_policy = catalog.get(replayed["access_id"], "graph-access")
-        policy = catalog.get(b.get("replay_access_id", replayed["access_id"]), "graph-access")
+        policy = catalog.get(b["replay_access_id"], "graph-access")
         require(all(policy[k] == replayed_policy[k] for k in ("tenant", "workspace", "user")),
                 "REPLAY_SCOPE", "replay changed the authenticated principal")
         for result in results.values():
@@ -273,14 +274,9 @@ def validate_record(catalog: Catalog, record: dict[str, Any]) -> None:
         require(len(new_refs) == len(set(new_refs)) and not set(new_refs) & preserved.keys(),
                 "REPLAY_OBSERVATION_LINEAGE", "preserved and newly emitted receipts must be distinct")
         comparison = b["synthesis_comparison"]
-        if "replay_access_id" in b:
-            require(comparison == {"observation_ids": new_refs} or (not new_refs and comparison == {
-                    "status": "NOT_RUN", "reason": "No synthesis executor supplied."}),
-                    "REPLAY_OBSERVATION_LINEAGE", "comparison must be derived from authorized receipts")
-        elif "observation_ids" in comparison:
-            claimed = comparison["observation_ids"]
-            require(isinstance(claimed, list) and all(isinstance(ref, str) for ref in claimed) and sorted(claimed) == sorted(new_refs),
-                    "REPLAY_OBSERVATION_LINEAGE", "synthesis comparison observations differ from authorized receipts")
+        require(comparison == {"observation_ids": new_refs} or (not new_refs and comparison == {
+                "status": "NOT_RUN", "reason": "No synthesis executor supplied."}),
+                "REPLAY_OBSERVATION_LINEAGE", "comparison must be derived from authorized receipts")
         original_refs = context_observations(original)
         access = AccessFilter(policy, catalog, replayed["source_status"])
         for ref, value in preserved.items():

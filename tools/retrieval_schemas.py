@@ -95,6 +95,10 @@ def extend(schemas):
             obj({"observation_ids": IDS}),
             obj({"status": {"const": "NOT_RUN"}, "reason": {"const": "No synthesis executor supplied."}}),
         ]}}},
+    }, {
+        "if": {"anyOf": [{"required": [f"{side}_{field}"]} for side in ("original", "replayed")
+                         for field in ("classification_identity", "research_domain_scope")]},
+        "then": {"required": ["replay_access_id"]},
     }]
     schemas["retrieval-evaluation"] = obj({"version": S, "dataset_hash": H, "split": S, "label_origin": S,
         "metrics": {"type": "object"}, "configuration": {"type": "object"}, "result_ids": IDS,
