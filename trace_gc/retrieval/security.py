@@ -5,6 +5,7 @@ from typing import Any
 from ..canonical import digest
 from ..catalog import Catalog
 from ..errors import require
+from .telemetry import measured_acl
 
 
 def access_policy(*, tenant: str, workspace: str, user: str, roles: list[str] | None = None,
@@ -26,6 +27,7 @@ def grant(tenant: str, workspace: str, *, users: list[str] | None = None,
 
 
 class AccessFilter:
+    @measured_acl("__init__")
     def __init__(self, policy: dict[str, Any], catalog: Catalog, statuses: dict[str, Any], *, historical: bool = False):
         from ..schema import validate
         validate("graph-access", policy)
@@ -35,6 +37,7 @@ class AccessFilter:
     def fingerprint(self) -> str:
         return digest({"acl": self.policy, "statuses": self.statuses})
 
+    @measured_acl("allows")
     def allows(self, kind: str, ref: str) -> bool:
         p = self.policy
         g = p["grants"].get(f"{kind}:{ref}")
@@ -44,6 +47,7 @@ class AccessFilter:
                 (not g["users"] or p["user"] in g["users"]) and
                 (not g["roles"] or bool(set(g["roles"]) & set(p["roles"]))))
 
+    @measured_acl("source")
     def source(self, source_id: str, *, current_status: dict[str, Any] | None = None,
                catalog: Catalog | None = None) -> bool:
         authority = self.catalog if catalog is None else catalog
@@ -55,6 +59,7 @@ class AccessFilter:
         return (source["security_scope"] == self.policy["tenant"] and bool(status) and
                 status["permission"] == "READ" and not status["tombstone"] and status["active"])
 
+    @measured_acl("evidence")
     def evidence(self, ref: str) -> bool:
         if ref not in self.catalog:
             return False
@@ -64,11 +69,13 @@ class AccessFilter:
         self.catalog.verify_evidence(ref)  # Existing Evidence Firewall.
         return True
 
+    @measured_acl("edge")
     def edge(self, ref: str, fact: dict[str, Any]) -> bool:
         a = fact["assertion"]
         return (self.allows("edge", ref) and self.allows("node", a["subject"]) and
                 self.allows("node", a["object"]) and all(self.evidence(e) for e in fact["evidence_ids"]))
 
+    @measured_acl("decision")
     def decision(self, ref: str) -> bool:
         if not self.allows("decision", ref) or ref not in self.catalog:
             return False
@@ -87,5 +94,6 @@ class AccessFilter:
             ids = list(set(ids) | set(c["evidence_ids"]))
         return all(self.evidence(e) for e in ids)
 
+    @measured_acl("require_scope")
     def require_scope(self, scope: str) -> None:
         require(scope == self.policy["tenant"], "SECURITY_SCOPE", "authenticated tenant differs from query")

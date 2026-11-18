@@ -97,12 +97,14 @@ class SQLiteClassificationIndex:
                       for source_id, row in rows.items() for domain in (row["domain_ids"] or [""]))
 
     def read(self, catalog: Catalog, snapshot_id: str, *, rebuild: bool = False,
-             persist: bool = True) -> dict[str, dict[str, Any]]:
+             persist: bool = True, metrics: dict[str, str] | None = None) -> dict[str, dict[str, Any]]:
         """`persist=False` verifies an existing entry but never creates or deletes rows."""
         require(persist or not rebuild, "DOMAIN_INDEX_CORRUPT", "a rebuild must persist")
         snapshot = catalog.get(snapshot_id, "graph-snapshot")
         snapshot_hash = catalog.hash(snapshot_id)
         rows = authoritative_rows(catalog, snapshot)
+        if metrics is not None:
+            metrics["mode"] = "PROJECTED"
         if not self.tables_exist():
             if not persist:
                 return rows
@@ -132,6 +134,8 @@ class SQLiteClassificationIndex:
                 return rows
         else:
             require(existing == expected_meta, "DOMAIN_INDEX_CORRUPT", "index metadata differs from authoritative snapshot")
+        if metrics is not None:
+            metrics["mode"] = "REBUILT" if rebuild else ("MATERIALIZED" if existing is None else "VERIFIED")
         try:
             actual = {source_id: loads(body) for source_id, body in self.db.execute(
                 "SELECT source_id,body FROM trace_domain_index_sources WHERE snapshot_hash=? ORDER BY source_id", (snapshot_hash,))}

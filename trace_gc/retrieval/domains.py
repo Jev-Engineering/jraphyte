@@ -16,6 +16,7 @@ from ..catalog import Catalog
 from ..domains import verify_taxonomy
 from ..errors import require
 from ..schema import validate
+from .telemetry import active, domain_hop
 
 DOMAIN_SELECTION_VERSION = "authorized-research-domain-selection-v1"
 LITERAL_CONFLICTS = "literal-v1"
@@ -352,6 +353,22 @@ class ResearchDomainSelection:
                         state[stack[-1][0]] = True
         return {ref for ref, bad in state.items() if bad}
 
+    def measure_transition(self, left: str | None, right: str, *, channel: str) -> None:
+        if left is None or left == right or not active() or left not in self.edges or right not in self.edges:
+            return
+        def memberships(ref: str) -> set[tuple[str, str]]:
+            rows = self._source_rows
+            if not self.enabled:
+                catalog = self.view.catalog
+                sources = {catalog.get(evidence, "evidence")["source_snapshot_id"]
+                           for evidence in self.edges[ref]["evidence_ids"]}
+                rows = {source: self.view.source_classification(source, self.access) for source in sources}
+            else:
+                sources = self._edge_sources[ref]
+            return {(row["taxonomy_hash"], domain) for source in sources
+                    if (row := rows.get(source)) for domain in row["domain_ids"]}
+        domain_hop(memberships(left), memberships(right), channel=channel)
+
     def closure(self, seeds: set[str]) -> set[str]:
         return self._closure(frozenset(seeds), probe=False)[0]
 
@@ -362,9 +379,9 @@ class ResearchDomainSelection:
         blocked = False
         included: set[str] = set()
         expanded: dict[str, bool] = {}
-        pending = deque((ref, True) for ref in sorted(seeds))
+        pending = deque((ref, True, None) for ref in sorted(seeds))
         while pending:
-            edge_id, expand_distinctions = pending.popleft()
+            edge_id, expand_distinctions, predecessor = pending.popleft()
             # Revisit at most once when an equivalence-only proof later becomes
             # a genuine selected/conflicting fact. False never downgrades True.
             if edge_id in expanded and (expanded[edge_id] or not expand_distinctions):
@@ -375,6 +392,7 @@ class ResearchDomainSelection:
                 require(probe, "ACCESS_DENIED", "closure requires an unauthorized or unavailable prerequisite")
                 blocked = True
                 continue
+            self.measure_transition(predecessor, edge_id, channel="required_closure")
             included.add(edge_id)
             expanded[edge_id] = expand_distinctions
             a = self.edges[edge_id]["assertion"]
@@ -382,9 +400,9 @@ class ResearchDomainSelection:
             conflicts = self._conflict_neighbors.get(edge_id, set())
             self.work(len(parents) + len(conflicts))
             for parent in sorted(parents):
-                pending.append((parent, True))
+                pending.append((parent, True, edge_id))
             for other in sorted(conflicts):
-                pending.append((other, expand_distinctions))
+                pending.append((other, expand_distinctions, edge_id))
             # Same-as proofs may be transitive. Different-from is a direct
             # distinction: bring the other endpoint's equivalence proof, but
             # never expand A != B != C, including through aliases of B.
@@ -393,13 +411,13 @@ class ResearchDomainSelection:
                 equivalents = self._equivalence_incident.get(node, set())
                 self.work(len(equivalents))
                 for other in sorted(equivalents):
-                    pending.append((other, extend))
+                    pending.append((other, extend, edge_id))
                 if extend:
                     identities = self._identity_incident.get(node, set())
                     self.work(len(identities))
                     for other in sorted(identities):
                         if self._identity_predicates[other] == "different_from":
-                            pending.append((other, False))
+                            pending.append((other, False, edge_id))
         self._closure_cache[(key, probe)] = (frozenset(included), blocked)
         return included, blocked
 

@@ -16,6 +16,7 @@ from .store import GraphQueryAdapter, GraphReadView
 from .strategies import BuiltinStrategy, GraphRetriever, SearchSpace
 from .domains import ResearchDomainSelection, identity_aware_scope, require_live_scope, validate_scope
 from ..domain_publication import classification_identity
+from .telemetry import cache_event
 from .vector import EmbeddingModel, HashingEmbedding, terms
 
 
@@ -33,8 +34,10 @@ class RetrievalCache:
         with self._lock:
             if key not in self._entries:
                 self.misses += 1
+                cache_event("misses")
                 return None
             self.hits += 1
+            cache_event("hits")
             self._entries.move_to_end(key)
             return deepcopy(self._entries[key])
 
@@ -47,9 +50,11 @@ class RetrievalCache:
             while len(self._entries) > self.capacity:
                 self._entries.popitem(last=False)
                 self.evictions += 1
+                cache_event("evictions")
 
     def invalidate(self) -> None:
         with self._lock:
+            cache_event("invalidations", len(self._entries))
             self.invalidations += len(self._entries)
             self._entries.clear()
 
