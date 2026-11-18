@@ -48,7 +48,8 @@ def replay_retrieval(retriever, original_result_id: str, changes: dict[str, Any]
     """Counterfactual retrieval branch; original observations and graph remain intact.
 
     ``synthesize(new_result_id)`` may invoke the existing compiler/adapter/resolver
-    to create NEW observations. This API never grants publication authority.
+    to create NEW observations. The receipt comparison is derived from the
+    authorized observations emitted by the callback. This API never grants publication authority.
     Current permissions still apply to historical snapshots.
     """
     from .compiler import now
@@ -75,7 +76,7 @@ def replay_retrieval(retriever, original_result_id: str, changes: dict[str, Any]
             "the same graph version must resolve to the same snapshot")
     if synthesize is not None:
         retriever.validate_live_context(new_result["graph_context_id"])
-    comparison = synthesize(result_id) if synthesize is not None else {"status": "NOT_RUN", "reason": "No synthesis executor supplied."}
+        synthesize(result_id)
     after = {r["id"]: r["hash"] for r in c.all("observation")}
     require(all(after.get(ref) == value for ref, value in before.items()), "REPLAY_OBSERVATION_CHANGED", "original receipts are immutable")
     retriever.validate_live_context(original["graph_context_id"])
@@ -86,15 +87,19 @@ def replay_retrieval(retriever, original_result_id: str, changes: dict[str, Any]
     preserved = {}
     for ref, value in before.items():
         linked = observation_uses_result(c, ref, original_result_id, context["security_scope"])
-        if (linked or (ref in original_refs and access.decision(ref))) and observation_sources_readable(c, ref, access):
+        if (linked or ref in original_refs) and access.decision(ref) and observation_sources_readable(c, ref, access):
             preserved[ref] = value
     new_refs = sorted(set(after) - set(before))
-    require(all(observation_uses_result(c, ref, result_id, new_context["security_scope"]) and observation_sources_readable(c, ref, access)
-                for ref in new_refs), "REPLAY_OBSERVATION_LINEAGE", "new receipt does not cite the replayed result with readable sources")
+    require(all(access.decision(ref) and observation_uses_result(c, ref, result_id, new_context["security_scope"]) and
+                observation_sources_readable(c, ref, access) for ref in new_refs),
+            "REPLAY_OBSERVATION_LINEAGE", "new receipt requires current decision access and replayed result lineage")
+    comparison = {"observation_ids": new_refs} if synthesize is not None else {
+        "status": "NOT_RUN", "reason": "No synthesis executor supplied."}
     old_ids = {i["id"] for i in context["items"]}
     new_ids = {i["id"] for i in new_context["items"]}
     receipt = {"version": VERSION, "original_result_id": original_result_id,
-        "replayed_result_id": result_id, "changed_parameters": deepcopy(changes),
+        "replayed_result_id": result_id, "replay_access_id": c.put("graph-access", access.policy),
+        "changed_parameters": deepcopy(changes),
         "original_graph_version": context["graph_version"], "replayed_graph_version": new_context["graph_version"],
         "original_classification_identity": context.get("classification_identity", classification_identity(c.get(context["snapshot_id"], "graph-snapshot"))),
         "replayed_classification_identity": new_context["classification_identity"],

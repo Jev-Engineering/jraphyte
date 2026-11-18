@@ -49,9 +49,7 @@ def research_domain_scope(catalog: Catalog, taxonomy_id: str, domain_ids: list[s
     return body
 
 
-def validate_scope(catalog: Catalog, scope: dict[str, Any] | None) -> set[str]:
-    if scope is None:
-        return set()
+def _active_scope_terms(catalog: Catalog, scope: dict[str, Any]) -> dict[str, dict[str, Any]]:
     validate("research-domain-scope", scope)
     require(scope["domain_ids"] == sorted(set(scope["domain_ids"])), "RESEARCH_DOMAIN_SCOPE", "domain IDs must be canonical")
     require(bool(scope["domain_ids"]) or scope["include_unclassified"],
@@ -62,14 +60,41 @@ def validate_scope(catalog: Catalog, scope: dict[str, Any] | None) -> set[str]:
     require(taxonomy["review"]["status"] == "APPROVED", "RESEARCH_DOMAIN_SCOPE", "query taxonomy has not been reviewed")
     active = {row["id"]: row for row in taxonomy["domains"] if row["status"] == "ACTIVE"}
     require(set(scope["domain_ids"]) <= set(active), "RESEARCH_DOMAIN_SCOPE", "unknown or retired domain ID")
-    selected = set(scope["domain_ids"])
-    if scope["include_descendants"]:
-        while True:
-            following = selected | {ref for ref, row in active.items() if selected.intersection(row["parent_ids"])}
-            if following == selected:
-                break
-            selected = following
-    return selected
+    return active
+
+
+def _scope_branches(scope: dict[str, Any], active: dict[str, dict[str, Any]], work) -> list[set[str]]:
+    requested = scope["domain_ids"]
+    if not requested:
+        return []
+    work(len(requested))
+    branches = [set(requested)] if scope["match"] == "ANY" else [{ref} for ref in requested]
+    if not scope["include_descendants"]:
+        return branches
+    children: dict[str, list[str]] = defaultdict(list)
+    for ref, row in active.items():
+        work(1 + len(row["parent_ids"]))
+        for parent in row["parent_ids"]:
+            children[parent].append(ref)
+    for branch in branches:
+        pending = deque(sorted(branch))
+        while pending:
+            descendants = children[pending.popleft()]
+            work(1 + len(descendants))
+            for ref in descendants:
+                if ref not in branch:
+                    branch.add(ref)
+                    pending.append(ref)
+    return branches
+
+
+def validate_scope(catalog: Catalog, scope: dict[str, Any] | None, *, expand: bool = True) -> set[str]:
+    if scope is None:
+        return set()
+    active = _active_scope_terms(catalog, scope)
+    if not expand:
+        return set(scope["domain_ids"])
+    return set().union(*_scope_branches(scope, active, lambda _: None))
 
 
 class ResearchDomainSelection:
@@ -87,7 +112,8 @@ class ResearchDomainSelection:
         self._identity_aware = identity_aware_scope(query)
         self._identity_predicates: dict[str, str] = {}
         self.edges, self.conflicts, self.meter = edges, conflicts, meter
-        self.selected_domains = validate_scope(view.catalog, self.scope)
+        self._branches = _scope_branches(self.scope, _active_scope_terms(view.catalog, self.scope), self.work) if self.enabled else []
+        self.selected_domains = set().union(*self._branches)
         self._source_rows: dict[str, dict[str, Any]] = {}
         self._edge_sources: dict[str, set[str]] = {}
         self._incident: dict[str, set[str]] = defaultdict(set)
@@ -105,8 +131,10 @@ class ResearchDomainSelection:
         if not self.enabled:
             return
         c = view.catalog
-        relations = c.get(view.snapshot["schema_id"], "schema")["relations"]
-        for source_id in view.snapshot["source_epochs"]:
+        snapshot = view.snapshot
+        self._schema_id, self._nodes = snapshot["schema_id"], snapshot["nodes"]
+        self._relations = c.get(self._schema_id, "schema")["relations"]
+        for source_id in snapshot["source_epochs"]:
             self.work()
             # Never examine a denied source's assignment to choose membership.
             row = view.source_classification(source_id, access)
@@ -117,7 +145,7 @@ class ResearchDomainSelection:
             # Defense in depth: callers cannot supply an unfiltered edge map.
             require(access.edge(ref, fact), "ACCESS_DENIED", "domain selection requires authorized current evidence")
             a = fact["assertion"]
-            predicate = normalize(a, relations)[1] if self._identity_aware else a["predicate"]
+            predicate = normalize(a, self._relations)[1] if self._identity_aware else a["predicate"]
             self._identity_predicates[ref] = predicate
             usable_identity = fact["active"] or not self._identity_aware
             sources = {c.get(e, "evidence")["source_snapshot_id"] for e in fact["evidence_ids"]}
@@ -195,18 +223,15 @@ class ResearchDomainSelection:
             return False
         if self.scope["include_unclassified"] and unclassified:
             return True
-        requested = set(self.scope["domain_ids"])
-        if not requested:
+        if not self._branches:
             return False
         if self.scope["match"] == "ANY":
             return bool(labels & self.selected_domains)
         # ALL with descendants means each requested branch has a matching label,
         # not that a source must have every descendant label simultaneously.
-        if not self.scope["include_descendants"]:
-            return requested <= labels
-        for domain in requested:
-            branch = {**self.scope, "domain_ids": [domain]}
-            if not labels.intersection(validate_scope(self.view.catalog, branch)):
+        for branch in self._branches:
+            self.work(min(len(labels), len(branch)))
+            if labels.isdisjoint(branch):
                 return False
         return True
 
@@ -249,14 +274,17 @@ class ResearchDomainSelection:
         if kind in {"DECISION", "HYPOTHESIS"}:
             return set().union(*(self._evidence_edges.get(e, set()) for e in self.decision_evidence(ref))) & self.contributing_edges
         if kind in {"SCHEMA", "ONTOLOGY"}:
-            rule = self.view.catalog.get(self.view.snapshot["schema_id"], "schema")["relations"].get(ref)
+            rule = self._relations.get(ref)
             if rule is None:
                 return set()
             types = {rule["domain"], rule["range"]} - {"*"}
-            return {edge_id for edge_id in self.contributing_edges
-                    if self.edges[edge_id]["assertion"]["predicate"] == ref or
-                    any(self.view.snapshot["nodes"].get(node) in types
-                        for node in (self.edges[edge_id]["assertion"]["subject"], self.edges[edge_id]["assertion"]["object"]))}
+            basis = set()
+            for edge_id in self.contributing_edges:
+                self.work()
+                assertion = self.edges[edge_id]["assertion"]
+                if assertion["predicate"] == ref or any(self._nodes.get(assertion[key]) in types for key in ("subject", "object")):
+                    basis.add(edge_id)
+            return basis
         return set()
 
     def allows(self, kind: str, ref: str, members: list[str] | None = None) -> bool:
@@ -265,7 +293,7 @@ class ResearchDomainSelection:
         key = kind, ref, tuple(members or [])
         if key in self._candidate_cache:
             return self._candidate_cache[key]
-        c, snap = self.view.catalog, self.view.snapshot
+        c = self.view.catalog
         permitted = False
         if kind == "EVIDENCE":
             if ref in self.view.available_record_ids and self.access.evidence(ref):
@@ -285,7 +313,7 @@ class ResearchDomainSelection:
                     if all(self.access.evidence(e) for e in evidence):
                         permitted = self.matches({c.get(e, "evidence")["source_snapshot_id"] for e in evidence})
         elif kind in {"SCHEMA", "ONTOLOGY"}:
-            if self.access.allows("schema", snap["schema_id"]):
+            if self.access.allows("schema", self._schema_id):
                 permitted = self.matches(self.sources_for_edges(self.basis(kind, ref, members)))
         elif kind in {"EDGE", "PROVENANCE", "PATH", "COMMUNITY", "CONFLICT"}:
             refs = {ref} if kind in {"EDGE", "PROVENANCE"} else set(members or [])
@@ -350,19 +378,26 @@ class ResearchDomainSelection:
             included.add(edge_id)
             expanded[edge_id] = expand_distinctions
             a = self.edges[edge_id]["assertion"]
-            for parent in sorted(self.edges[edge_id]["prerequisites"]):
+            parents = self.edges[edge_id]["prerequisites"]
+            conflicts = self._conflict_neighbors.get(edge_id, set())
+            self.work(len(parents) + len(conflicts))
+            for parent in sorted(parents):
                 pending.append((parent, True))
-            for other in sorted(self._conflict_neighbors.get(edge_id, set())):
+            for other in sorted(conflicts):
                 pending.append((other, expand_distinctions))
             # Same-as proofs may be transitive. Different-from is a direct
             # distinction: bring the other endpoint's equivalence proof, but
             # never expand A != B != C, including through aliases of B.
             extend = expand_distinctions and self._identity_predicates[edge_id] != "different_from"
             for node in (a["subject"], a["object"]):
-                for other in sorted(self._equivalence_incident.get(node, set())):
+                equivalents = self._equivalence_incident.get(node, set())
+                self.work(len(equivalents))
+                for other in sorted(equivalents):
                     pending.append((other, extend))
                 if extend:
-                    for other in sorted(self._identity_incident.get(node, set())):
+                    identities = self._identity_incident.get(node, set())
+                    self.work(len(identities))
+                    for other in sorted(identities):
                         if self._identity_predicates[other] == "different_from":
                             pending.append((other, False))
         self._closure_cache[(key, probe)] = (frozenset(included), blocked)

@@ -264,6 +264,7 @@ class PipelineTests(unittest.TestCase):
             candidate_ids=self.f.candidate_ids, questions=[question(self.f.candidate_ids[0], id_="standalone")],
             snapshot_id=self.f.snapshot_id, security_scope=SCOPE)
         unrelated = record_response(self.c, unrelated_pack, fixture_response(self.c.get(unrelated_pack, "pack")))[0]
+        self.r.set_access_policy(demo_access(self.c, self.f.snapshot_id, scope=SCOPE))
 
         def synthesize(result_id):
             context_id = self.c.get(result_id, "retrieval-result")["graph_context_id"]
@@ -271,7 +272,9 @@ class PipelineTests(unittest.TestCase):
                 candidate_ids=self.f.candidate_ids, questions=[question(self.f.candidate_ids[0], id_="replayed")],
                 snapshot_id=self.f.snapshot_id, security_scope=SCOPE,
                 graph_context_ids=[context_id], source_retrieval_ids=[result_id])
-            return {"observation_ids": record_response(self.c, new_pack, fixture_response(self.c.get(new_pack, "pack")))}
+            observations = record_response(self.c, new_pack, fixture_response(self.c.get(new_pack, "pack")))
+            self.r.set_access_policy(demo_access(self.c, self.f.snapshot_id, scope=SCOPE))
+            return {"observation_ids": observations, "other": {"observations": [unrelated]}}
 
         replay = replay_retrieval(self.r, ref, {"retrieval_strategy": ["SOURCE"]}, synthesize=synthesize)
         self.assertEqual(self.c.hash(obs), before)
@@ -280,6 +283,11 @@ class PipelineTests(unittest.TestCase):
         validate_record(self.c, self.c.record(replay))
         self.assertEqual(receipt["observation_hashes_preserved"], {obs: before})
         self.assertEqual(receipt["new_observation_ids"], receipt["synthesis_comparison"]["observation_ids"])
+        self.assertEqual(set(receipt["synthesis_comparison"]), {"observation_ids"})
+        undecorated = deepcopy(receipt)
+        undecorated["synthesis_comparison"]["observation_ids"].append(unrelated)
+        with self.assertRaisesRegex(ContractError, "REPLAY_OBSERVATION_LINEAGE"):
+            validate_record(self.c, {"kind": "retrieval-replay", "body": undecorated})
         refs = references("retrieval-replay", receipt)
         self.assertIn((obs, "observation"), refs)
         self.assertNotIn((unrelated, "observation"), refs)

@@ -118,8 +118,10 @@ permits an explicit alternative domain scope and preserves the original tenant,
 requesting role and candidate. Original observations and evidence hashes remain
 immutable. Replay checks current access to both contexts before producing the
 receipt. New receipts expose only linked observations whose originating packs
-still pass current authorization. Receipt validation checks each preserved hash
-and requires new observations to cite the replayed result.
+still pass current authorization and whose own decision grants allow access.
+The receipt pins the replaying application's authorization record. Validation
+checks each preserved hash and binds new observations to authorized receipts
+from the replayed result. The comparison is derived from those new observations.
 
 The reference adapters check live source status before selecting a domain view,
 before embeddings, and before returning context. An application-supplied

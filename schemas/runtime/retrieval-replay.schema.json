@@ -84,6 +84,10 @@
       "type": "string",
       "format": "date-time"
     },
+    "replay_access_id": {
+      "type": "string",
+      "minLength": 1
+    },
     "original_classification_identity": {
       "type": "object",
       "properties": {
@@ -274,5 +278,55 @@
     "authorization_granted",
     "created_at"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "replay_access_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "synthesis_comparison": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "observation_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "uniqueItems": true
+                  }
+                },
+                "required": [
+                  "observation_ids"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "const": "NOT_RUN"
+                  },
+                  "reason": {
+                    "const": "No synthesis executor supplied."
+                  }
+                },
+                "required": [
+                  "status",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
 }

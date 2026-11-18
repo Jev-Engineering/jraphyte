@@ -16,7 +16,7 @@ from trace_gc.programs import question
 from trace_gc.replay import replay_retrieval
 from trace_gc.retrieval.contracts import query, RetrievalBudget
 from trace_gc.retrieval.domains import research_domain_scope
-from trace_gc.retrieval.fixtures import domain_corpus, SCOPE
+from trace_gc.retrieval.fixtures import demo_access, domain_corpus, SCOPE
 from trace_gc.retrieval.reranker import JevReranker, validate_reranked_context
 from trace_gc.retrieval.service import validate_context
 
@@ -158,6 +158,9 @@ class DomainSemanticBoundaryTests(unittest.TestCase):
             graph_context_ids=[context_id], source_retrieval_ids=[result_id])
         observation = record_response(self.c, pack_id, fixture_response(self.c.get(pack_id, "pack")))[0]
         before = self.c.hash(observation)
+        no_grant = self.c.get(replay_retrieval(self.r, result_id, {}), "retrieval-replay")
+        self.assertEqual(no_grant["observation_hashes_preserved"], {})
+        self.r.set_access_policy(demo_access(self.c, self.f["snapshot_id"]))
         permitted = self.c.get(replay_retrieval(self.r, result_id, {}), "retrieval-replay")
         self.assertEqual(permitted["observation_hashes_preserved"], {observation: before})
         policy = deepcopy(self.r.access_policy)

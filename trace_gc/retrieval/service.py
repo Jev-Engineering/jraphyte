@@ -181,7 +181,7 @@ class HybridRetriever:
         access = AccessFilter(self.access_policy, view.catalog, view.source_status,
                               historical=query["include_historical"] or query["mode"] == "HISTORICAL")
         access.require_scope(query["security_scope"])
-        validate_scope(view.catalog, query.get("research_domain_scope"))
+        validate_scope(view.catalog, query.get("research_domain_scope"), expand=False)
         def current_sources(sources):
             statuses = self._current_source_status(view.source_status, required=needs_status)
             self._assert_current_sources(view.catalog, view.source_status, statuses, sources)
@@ -408,6 +408,7 @@ def validate_context(catalog: Catalog, context_id: str, *, current_access: dict[
     context = catalog.get(context_id, "graph-context")
     query = catalog.get(context["query_id"], "retrieval-query")
     validate_query(query)
+    validate_scope(catalog, query.get("research_domain_scope"), expand=False)
     if work_meter is None and current_access is not None and query.get("research_domain_scope") is not None:
         work_meter = BudgetMeter(RetrievalBudget(**query["budget"]))
     snap = catalog.get(context["snapshot_id"], "graph-snapshot")
