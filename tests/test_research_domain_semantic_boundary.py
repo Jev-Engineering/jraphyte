@@ -9,8 +9,11 @@ from copy import deepcopy
 import unittest
 
 from trace_gc.adapter import record_response
+from trace_gc.compiler import compile_pack
 from trace_gc.demo import fixture_response
 from trace_gc.errors import ContractError
+from trace_gc.programs import question
+from trace_gc.replay import replay_retrieval
 from trace_gc.retrieval.contracts import query, RetrievalBudget
 from trace_gc.retrieval.domains import research_domain_scope
 from trace_gc.retrieval.fixtures import domain_corpus, SCOPE
@@ -76,6 +79,78 @@ class DomainSemanticBoundaryTests(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "RESEARCH_DOMAIN_SCOPE|ACCESS_DENIED"):
             self.rerank()
         self.assertEqual(self.calls, [])
+
+    def result_with_prerequisite(self):
+        fact = self.c.get(self.f["snapshot_id"])["assertions"]["e-owns"]
+        prerequisite = self.c.candidate(id_="candidate:prerequisite", run_id="domain-rerank-fixture",
+            assertion=fact["assertion"], claim_id=self.f["claim_id"], evidence_ids=fact["evidence_ids"])
+        root = self.c.get(self.candidate, "candidate")
+        candidate = self.c.candidate(id_="candidate:with-prerequisite", run_id=root["run_id"],
+            assertion=root["assertion"], claim_id=root["claim_id"], evidence_ids=root["evidence_ids"],
+            prerequisites=[prerequisite])
+        result = self.c.get(self.result_id, "retrieval-result")
+        request = self.c.get(result["query_id"], "retrieval-query")
+        return candidate, self.r.retrieve({**request, "candidate_id": candidate})
+
+    def test_prerequisite_endpoints_are_authorized_before_token_counting(self):
+        candidate, result_id = self.result_with_prerequisite()
+        policy = deepcopy(self.r.access_policy)
+        del policy["grants"]["node:Acme"]
+        self.r.set_access_policy(policy)
+        counted = []
+        self.reranker.token_counter = lambda value: counted.append(value) or 0
+        with self.assertRaisesRegex(ContractError, "ACCESS_DENIED"):
+            self.reranker.rerank(self.r, result_id, candidate_id=candidate)
+        self.assertEqual(counted, [])
+        self.assertEqual(self.calls, [])
+
+    def test_authorization_is_rechecked_after_token_counting(self):
+        counted = []
+
+        def count(value):
+            counted.append(value)
+            self.f["adapter"].source_status[self.f["sources"]["e-support"]].update(active=False, epoch=2)
+            return 0
+
+        self.reranker.token_counter = count
+        with self.assertRaisesRegex(ContractError, "ACCESS_DENIED"):
+            self.rerank()
+        self.assertTrue(counted)
+        self.assertEqual(self.calls, [])
+
+    def test_candidate_sources_are_authorized_before_upstream_embedding(self):
+        calls = []
+        self.r.embedding.embed = lambda texts: calls.append(texts) or []
+        result = self.c.get(self.result_id, "retrieval-result")
+        request = self.c.get(result["query_id"], "retrieval-query")
+        self.f["adapter"].source_status[self.f["sources"]["e-support"]].update(active=False, epoch=2)
+        with self.assertRaisesRegex(ContractError, "ACCESS_DENIED"):
+            self.r.retrieve({**request, "retrieval_strategy": ["VECTOR"]})
+        self.assertEqual(calls, [])
+
+    def test_replay_requires_current_access_to_original_context(self):
+        self.f["adapter"].source_status[self.f["sources"]["e-refute"]].update(active=False, epoch=2)
+        with self.assertRaisesRegex(ContractError, "ACCESS_DENIED"):
+            replay_retrieval(self.r, self.result_id, {}, synthesize=self.reranker.execute)
+        self.assertEqual(self.calls, [])
+
+    def test_replay_omits_linked_receipt_when_its_full_pack_access_is_revoked(self):
+        candidate, result_id = self.result_with_prerequisite()
+        context_id = self.c.get(result_id, "retrieval-result")["graph_context_id"]
+        pack_id = compile_pack(self.c, id_="pack:replay-prerequisite",
+            run_id="domain-rerank-fixture", candidate_ids=[candidate], questions=[question(candidate, id_="support")],
+            snapshot_id=self.f["snapshot_id"], security_scope=SCOPE,
+            graph_context_ids=[context_id], source_retrieval_ids=[result_id])
+        observation = record_response(self.c, pack_id, fixture_response(self.c.get(pack_id, "pack")))[0]
+        before = self.c.hash(observation)
+        permitted = self.c.get(replay_retrieval(self.r, result_id, {}), "retrieval-replay")
+        self.assertEqual(permitted["observation_hashes_preserved"], {observation: before})
+        policy = deepcopy(self.r.access_policy)
+        del policy["grants"]["node:Acme"]
+        self.r.set_access_policy(policy)
+        denied = self.c.get(replay_retrieval(self.r, result_id, {}), "retrieval-replay")
+        self.assertEqual(denied["observation_hashes_preserved"], {})
+        self.assertEqual(self.c.hash(observation), before)
 
 
 if __name__ == "__main__":

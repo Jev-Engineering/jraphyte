@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import Any
 from ..canonical import digest
 from ..catalog import Catalog
-from ..errors import require
+from ..errors import ContractError, require
 
 LINEAGE_FIELDS = ("graph_retrieval_query_ids", "graph_context_ids", "source_retrieval_ids", "evidence_closure_id", "retrieval_fingerprint")
 
@@ -26,6 +26,9 @@ def validate_pack_lineage(catalog: Catalog, pack: dict[str, Any], *, current_acc
         require(pack["materializer_version"] == "materializer-v1" and pack["packing_version"] == "complete-closure-v1",
                 "RETRIEVAL_LINEAGE", "version claims retrieval without lineage")
         return
+    if current_access is not None:
+        require(current_status is not None, "SOURCE_STATUS_CAPABILITY", "live pack authorization requires current source status")
+        _validate_live_pack_closure(catalog, pack, current_access, current_status)
     require(present == set(LINEAGE_FIELDS), "RETRIEVAL_LINEAGE", "all retrieval lineage fields required")
     expected = lineage_fields(catalog, pack["graph_context_ids"], pack["source_retrieval_ids"], pack["closure"]["hash"])
     require(all(pack[k] == expected[k] for k in LINEAGE_FIELDS), "RETRIEVAL_LINEAGE", "pack lineage differs")
@@ -41,8 +44,10 @@ def validate_pack_lineage(catalog: Catalog, pack: dict[str, Any], *, current_acc
         require(request["requesting_component"].startswith("upstream") and request["candidate_id"] in pack["candidate_ids"],
                 "RETRIEVAL_ROLE", "upstream candidate-bound query required")
         validate_context(catalog, ref, current_access=current_access, current_status=current_status)
+        if current_access is not None:
+            continue
         from .security import AccessFilter
-        policy = current_access or catalog.get(context["access_id"], "graph-access")
+        policy = catalog.get(context["access_id"], "graph-access")
         statuses = current_status if current_status is not None else context["source_status"]
         acl = AccessFilter(policy, catalog, statuses)
         for source_id in pack["closure"]["source_snapshot_ids"]:
@@ -51,6 +56,36 @@ def validate_pack_lineage(catalog: Catalog, pack: dict[str, Any], *, current_acc
             candidate = catalog.get(candidate_id, "candidate")
             require(acl.allows("node", candidate["assertion"]["subject"]) and
                     acl.allows("node", candidate["assertion"]["object"]), "ACCESS_DENIED", "candidate endpoints not authorized")
+
+
+def _validate_live_pack_closure(catalog: Catalog, pack: dict[str, Any], policy, statuses) -> None:
+    from ..adapter import validate_observation
+    from .security import AccessFilter
+    from .service import validate_context
+    access = AccessFilter(policy, catalog, statuses)
+    pending, seen = [pack], set()
+    while pending:
+        current = pending.pop()
+        access.require_scope(current["security_scope"])
+        for ref in current["closure"]["source_snapshot_ids"]:
+            require(access.source(ref), "ACCESS_DENIED", "model closure source not currently authorized")
+        for ref in current["closure"]["record_ids"]:
+            record = catalog.record(ref)
+            if record["kind"] == "candidate":
+                assertion = record["body"]["assertion"]
+                require(all(access.allows("node", assertion[field]) for field in ("subject", "object")),
+                        "ACCESS_DENIED", "model closure candidate endpoints not currently authorized")
+        for ref in current["prior_observation_ids"]:
+            require(access.decision(ref), "ACCESS_DENIED", "prior model observation not currently authorized")
+            validate_observation(catalog, ref)
+            prior_pack_id = catalog.get(ref, "observation")["pack_id"]
+            if prior_pack_id in seen:
+                continue
+            seen.add(prior_pack_id)
+            prior_pack = catalog.get(prior_pack_id, "pack")
+            for context_id in prior_pack.get("graph_context_ids", []):
+                validate_context(catalog, context_id, current_access=policy, current_status=statuses)
+            pending.append(prior_pack)
 
 
 def validate_observation_lineage(observation: dict[str, Any], pack: dict[str, Any]) -> None:
@@ -96,10 +131,15 @@ def observation_sources_readable(catalog: Catalog, ref: str, access) -> bool:
     if observation["pack_id"] not in catalog or observation["candidate_id"] not in catalog:
         return False
     pack = catalog.get(observation["pack_id"], "pack")
-    candidate = catalog.get(observation["candidate_id"], "candidate")["assertion"]
-    return (observation["security_scope"] == pack["security_scope"] == access.policy["tenant"] and
-            all(access.allows("node", candidate[field]) for field in ("subject", "object")) and
-            all(access.source(source_id) for source_id in pack["closure"]["source_snapshot_ids"]))
+    if observation["security_scope"] != access.policy["tenant"]:
+        return False
+    try:
+        validate_pack_lineage(catalog, pack, current_access=access.policy, current_status=access.statuses)
+        if "graph_context_ids" not in pack:
+            _validate_live_pack_closure(catalog, pack, access.policy, access.statuses)
+    except ContractError:
+        return False
+    return True
 
 
 def references(kind: str, body: dict[str, Any]) -> list[tuple[str, str]]:
@@ -188,6 +228,7 @@ def validate_record(catalog: Catalog, record: dict[str, Any]) -> None:
         from ..domain_publication import classification_identity
         from ..replay import RETRIEVAL_REPLAY_PARAMETERS
         from .security import AccessFilter
+        from .service import validate_context
         results = {prefix: catalog.get(b[prefix + "_result_id"], "retrieval-result")
                    for prefix in ("original", "replayed")}
         contexts = {prefix: catalog.get(result["graph_context_id"], "graph-context") for prefix, result in results.items()}
@@ -212,6 +253,9 @@ def validate_record(catalog: Catalog, record: dict[str, Any]) -> None:
                     digest(b[scope_key]) == digest(request.get("research_domain_scope")),
                     "DOMAIN_REVISION", "replay classification identity or scope differs")
         original, replayed = contexts["original"], contexts["replayed"]
+        policy = catalog.get(replayed["access_id"], "graph-access")
+        validate_context(catalog, results["original"]["graph_context_id"], current_access=policy,
+                         current_status=replayed["source_status"])
         require(original["graph_version"] != replayed["graph_version"] or
                 original["snapshot_id"] == replayed["snapshot_id"], "DOMAIN_REVISION",
                 "the same graph version must resolve to the same snapshot")
@@ -225,7 +269,7 @@ def validate_record(catalog: Catalog, record: dict[str, Any]) -> None:
         require(len(new_refs) == len(set(new_refs)) and not set(new_refs) & preserved.keys(),
                 "REPLAY_OBSERVATION_LINEAGE", "preserved and newly emitted receipts must be distinct")
         original_refs = context_observations(original)
-        access = AccessFilter(catalog.get(replayed["access_id"], "graph-access"), catalog, replayed["source_status"])
+        access = AccessFilter(policy, catalog, replayed["source_status"])
         for ref, value in preserved.items():
             observation = catalog.record(ref, "observation")
             require(observation["hash"] == value and observation_sources_readable(catalog, ref, access) and

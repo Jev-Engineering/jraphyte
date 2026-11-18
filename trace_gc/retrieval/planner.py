@@ -167,12 +167,14 @@ class UpstreamGraphRAG:
                 result = c.get(result_id, "retrieval-result")
                 context = c.get(result["graph_context_id"], "graph-context")
             task = "IDENTITY" if candidate["candidate_kind"] == "IDENTITY" else "SUPPORT"
+            statuses = self.retriever.validate_live_context(result["graph_context_id"])
             pack_id = compile_pack(c, id_=f"graphrag-pack:{candidate_id}:{round_}:{result_id[-16:]}",
                 run_id=candidate["run_id"], candidate_ids=[candidate_id],
                 questions=[question(candidate_id, id_=f"semantic-{round_}", task=task)], snapshot_id=context["snapshot_id"],
                 security_scope=self.retriever.access_policy["tenant"], execution_mode=candidate["execution_mode"],
                 model_version=model_version, graph_context_ids=[result["graph_context_id"]], source_retrieval_ids=[result_id],
-                token_counter=token_counter, tokenizer_version=tokenizer_version)
+                token_counter=token_counter, tokenizer_version=tokenizer_version,
+                current_graph_access=self.retriever.access_policy, source_status=statuses)
             statuses = self.retriever.validate_live_context(result["graph_context_id"])
             from .integration import validate_pack_lineage
             validate_pack_lineage(c, c.get(pack_id, "pack"), current_access=self.retriever.access_policy, current_status=statuses)

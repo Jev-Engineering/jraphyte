@@ -62,7 +62,7 @@ def replay_retrieval(retriever, original_result_id: str, changes: dict[str, Any]
     validate_record(c, c.record(original_result_id))
     original = c.get(original_result_id, "retrieval-result")
     context = c.get(original["graph_context_id"], "graph-context")
-    validate_record(c, c.record(original["graph_context_id"]))
+    retriever.validate_live_context(original["graph_context_id"])
     request = c.get(original["query_id"], "retrieval-query")
     before = {r["id"]: r["hash"] for r in c.all("observation")}
     request.update(graph_version=context["graph_version"], created_at=now())
@@ -78,8 +78,8 @@ def replay_retrieval(retriever, original_result_id: str, changes: dict[str, Any]
     comparison = synthesize(result_id) if synthesize is not None else {"status": "NOT_RUN", "reason": "No synthesis executor supplied."}
     after = {r["id"]: r["hash"] for r in c.all("observation")}
     require(all(after.get(ref) == value for ref, value in before.items()), "REPLAY_OBSERVATION_CHANGED", "original receipts are immutable")
-    status_reader = getattr(retriever.adapter, "current_source_status", None)
-    statuses = status_reader() if callable(status_reader) else new_context["source_status"]
+    retriever.validate_live_context(original["graph_context_id"])
+    statuses = retriever.validate_live_context(new_result["graph_context_id"])
     access = AccessFilter(retriever.access_policy, c, statuses)
 
     original_refs = context_observations(context)

@@ -29,13 +29,15 @@ class JevReranker:
         items = original["items"][:request["budget"]["maximum_semantic_items"]]
         if not items:
             return result_id
+        statuses = retriever.validate_live_context(result["graph_context_id"])
         pack_id = compile_pack(c, id_="rerank-pack:" + digest([result_id, self.version, self.model_version]),
             run_id=candidate["run_id"], candidate_ids=[candidate_id],
             questions=[retrieval_question(candidate_id, i["id"], id_=f"relevance-{n}") for n, i in enumerate(items)],
             snapshot_id=original["snapshot_id"], security_scope=request["security_scope"],
             execution_mode=candidate["execution_mode"], model_version=self.model_version, program_version=RETRIEVAL_VERSION,
             graph_context_ids=[result["graph_context_id"]], source_retrieval_ids=[result_id],
-            token_counter=self.token_counter, tokenizer_version=self.tokenizer_version)
+            token_counter=self.token_counter, tokenizer_version=self.tokenizer_version,
+            current_graph_access=retriever.access_policy, source_status=statuses)
         started = time.monotonic()
         statuses = retriever.validate_live_context(result["graph_context_id"])
         from .integration import validate_pack_lineage

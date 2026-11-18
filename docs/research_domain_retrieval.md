@@ -7,7 +7,10 @@ Reference implementation for issue #8 in the domain-aware evidence graph initiat
 `research_domain_scope` is an optional, explicitly named field of the versioned
 query and retrieval plan. It pins `contract_version: 1`, the immutable taxonomy
 ID and hash, canonical domain IDs, `match: ANY | ALL`, `include_unclassified`,
-and `include_descendants`. `research_domain_scope(catalog, taxonomy_id, ids, ...)`
+and `include_descendants`. The optional `conflict_resolution` accepts
+`authorized-identity-v1` (the constructor default) and `literal-v1`
+(also used when an older request omits the field).
+`research_domain_scope(catalog, taxonomy_id, ids, ...)`
 constructs and validates the value. An empty domain list is only meaningful with
 `include_unclassified: true`. Unknown or retired IDs and proposed taxonomies
 fail closed. Taxonomy review attribution is not a publication signature.
@@ -110,15 +113,19 @@ contexts. A replay on the same
 graph version must resolve to the same immutable snapshot. The replay allowlist
 permits an explicit alternative domain scope and preserves the original tenant,
 requesting role and candidate. Original observations and evidence hashes remain
-immutable. New replay receipts expose only linked observations with currently
-readable sources. Receipt validation checks each preserved hash and requires
-new observations to cite the replayed result.
+immutable. Replay checks current access to both contexts before producing the
+receipt. New receipts expose only linked observations whose originating packs
+still pass current authorization. Receipt validation checks each preserved hash
+and requires new observations to cite the replayed result.
 
 Before embeddings and before returning context, the reference adapters' live
 source-status hook is checked. A changed source epoch requires a new consistent
 read; revocation denies use. Upstream synthesis, reranking and downstream
 materialization revalidate context against current ACL/status at their model/use
-boundary. Both migrated and explicitly scoped old snapshots require this hook.
+boundary. Upstream embedding also checks the input candidate's endpoints and
+evidence sources. The full candidate and source closure of a retrieval pack is
+authorized before token counting and checked again before execution. Both
+migrated and explicitly scoped old snapshots require this hook.
 The reference check runs synchronously at each boundary. Deployment-native
 revocation propagation, I/O deadlines and cancellation remain #11 acceptance
 work. Historical replay of standalone evidence or decisions needs a journal
@@ -141,7 +148,7 @@ search view.
 
 ## Local conformance
 
-`tests/test_research_domain_retrieval.py` has 38 tests. Its strategy matrix
+`tests/test_research_domain_retrieval.py` includes a strategy matrix that
 requires each of the 18 strategies to produce its own correctly typed positive
 result and checks an unrelated-domain negative for every strategy; automatic
 conflict fallback cannot satisfy an otherwise empty channel. Additional cases

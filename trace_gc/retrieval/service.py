@@ -185,6 +185,17 @@ class HybridRetriever:
             self._assert_current_sources(view.catalog, view.source_status, statuses, sources)
             return statuses
 
+        def embedding_sources(sources):
+            candidate_id = query["candidate_id"]
+            if candidate_id is not None and query["requesting_component"].startswith("upstream"):
+                candidate = self.catalog.get(candidate_id, "candidate")
+                assertion = candidate["assertion"]
+                current_access = AccessFilter(self.access_policy, view.catalog, {})
+                require(all(current_access.allows("node", assertion[field]) for field in ("subject", "object")),
+                        "ACCESS_DENIED", "embedding query candidate endpoints not authorized")
+                sources = sources | {self.catalog.get(ref, "evidence")["source_snapshot_id"] for ref in candidate["evidence_ids"]}
+            return current_sources(sources)
+
         if view.catalog is not self.catalog:
             for record in view.catalog.all():
                 self.catalog.add(record)
@@ -235,7 +246,7 @@ class HybridRetriever:
                 conflicts = query_conflicts(visible, view.catalog.get(view.snapshot["schema_id"], "schema")["relations"], query, meter)
                 selection = ResearchDomainSelection(view, access, query, visible, conflicts, meter)
                 space = SearchSpace(view, access, query, visible, conflicts, meter, self.embedding, selection,
-                                    current_sources)
+                                    embedding_sources)
                 for name in methods:
                     meter.check()
                     if name not in {"LEXICAL", "VECTOR", "SOURCE", "EVIDENCE"}:
