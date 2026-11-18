@@ -179,6 +179,8 @@ class UpstreamGraphRAG:
             from .integration import validate_pack_lineage
             validate_pack_lineage(c, c.get(pack_id, "pack"), current_access=self.retriever.access_policy, current_status=statuses)
             observations = execute(pack_id)
+            statuses = self.retriever.validate_live_context(result["graph_context_id"])
+            validate_pack_lineage(c, c.get(pack_id, "pack"), current_access=self.retriever.access_policy, current_status=statuses)
             require(bool(observations) and all(c.get(x, "observation")["pack_id"] == pack_id for x in observations),
                     "REQUEST_BINDING", "executor returned observations for a different pack")
             last_batch = solve(c, run_id=candidate["run_id"], candidate_ids=[candidate_id], observation_ids=observations,

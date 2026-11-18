@@ -7,9 +7,10 @@ Reference implementation for issue #8 in the domain-aware evidence graph initiat
 `research_domain_scope` is an optional, explicitly named field of the versioned
 query and retrieval plan. It pins `contract_version: 1`, the immutable taxonomy
 ID and hash, canonical domain IDs, `match: ANY | ALL`, `include_unclassified`,
-and `include_descendants`. The optional `conflict_resolution` accepts
-`authorized-identity-v1` (the constructor default) and `literal-v1`
-(also used when an older request omits the field).
+and `include_descendants`. Live scoped queries require the constructor's default
+`authorized-identity-v1` conflict-resolution pin. Archived `literal-v1` contexts
+and older contexts that omit the pin retain their historical materialization.
+Replay can compare one of those contexts with an explicit identity-aware scope.
 `research_domain_scope(catalog, taxonomy_id, ids, ...)`
 constructs and validates the value. An empty domain list is only meaningful with
 `include_unclassified: true`. Unknown or retired IDs and proposed taxonomies
@@ -129,8 +130,10 @@ revocation denies use. Upstream synthesis, reranking and downstream
 materialization revalidate context against current ACL/status at their model/use
 boundary. Upstream embedding also checks the input candidate's endpoints and
 evidence sources. The full candidate and source closure of a retrieval pack is
-authorized before token counting and checked again before execution. Both
-migrated and explicitly scoped old snapshots require this hook.
+authorized before token counting and checked before execution and before using
+the returned observations. Scoped reads require the present-status hook.
+Unscoped adapters that implement the original read-only protocol use their
+consistent read status when the hook is absent.
 The reference check runs synchronously at each boundary. Deployment-native
 revocation propagation, I/O deadlines and cancellation remain #11 acceptance
 work. Historical replay of standalone evidence or decisions needs a journal
@@ -139,10 +142,12 @@ history can replay snapshot assertions and their evidence closure.
 
 Pre-scope queries and contexts retain their original fingerprint calculation
 when they omit the fields. New contexts pin the classification identity even
-when the scope is null, and use a new strategy version. Candidate search and
-selection are metered. Adapter reads and independent artifact verification can
-add time beyond search, and large closure graphs can exhaust the work budget
-before producing candidates.
+when the scope is null, and use a new strategy version. Candidate search,
+selection and scoped canonical reconstruction share the discovery work meter.
+If verification exhausts it, the service returns a partial result with no
+unverified selections. An empty result needs no graph reconstruction. Separate
+live use checks have their own bounded verification. Adapter I/O and archival
+verification have separate operational timing from candidate search.
 
 Only canonical selected graph context reaches the model. Its classification
 identity and scope have exact field traces. Classification review basis is not

@@ -14,7 +14,7 @@ from .items import canonical_item, query_conflicts, authorized_scope_edges
 from .security import AccessFilter
 from .store import GraphQueryAdapter, GraphReadView
 from .strategies import BuiltinStrategy, GraphRetriever, SearchSpace
-from .domains import ResearchDomainSelection, identity_aware_scope, validate_scope
+from .domains import ResearchDomainSelection, identity_aware_scope, require_live_scope, validate_scope
 from ..domain_publication import classification_identity
 from .vector import EmbeddingModel, HashingEmbedding, terms
 
@@ -147,7 +147,7 @@ class HybridRetriever:
     def _current_source_status(self, original, *, required: bool):
         getter = getattr(self.adapter, "current_source_status", None)
         require(callable(getter) or not required, "SOURCE_STATUS_CAPABILITY",
-                "classified or domain-scoped reads require a present-status adapter hook")
+                "domain-scoped reads require a present-status adapter hook")
         return getter() if callable(getter) else original
 
     def _assert_current_sources(self, catalog, original, live, source_ids) -> None:
@@ -159,9 +159,8 @@ class HybridRetriever:
 
     def validate_live_context(self, context_id: str) -> dict[str, Any]:
         context = self.catalog.get(context_id, "graph-context")
-        snap = self.catalog.get(context["snapshot_id"], "graph-snapshot")
-        statuses = self._current_source_status(context["source_status"], required=bool(
-            context.get("research_domain_scope") or classification_identity(snap)["migrated"]))
+        scoped = context.get("research_domain_scope") is not None
+        statuses = self._current_source_status(context["source_status"], required=scoped)
         sources = {source_id for item in context["items"] for source_id in item["source_ids"]}
         self._assert_current_sources(self.catalog, context["source_status"], statuses, sources)
         validate_context(self.catalog, context_id, current_access=self.access_policy, current_status=statuses)
@@ -169,11 +168,12 @@ class HybridRetriever:
 
     def _retrieve(self, query: dict[str, Any], *, plan_id: str | None = None) -> str:
         validate_query(query)
+        require_live_scope(query)
         meter = BudgetMeter(RetrievalBudget(**query["budget"]))
         if self.run_budget is not None:
             self.run_budget.consume("retrieval_requests")
         view = self.adapter.read(query)
-        needs_status = query.get("research_domain_scope") is not None or view.classification_identity["migrated"]
+        needs_status = query.get("research_domain_scope") is not None
         if needs_status:
             require(self._current_source_status(view.source_status, required=True) == view.source_status,
                     "STALE_SOURCE_EPOCH", "source status changed before domain selection; retry a consistent read")
@@ -311,12 +311,29 @@ class HybridRetriever:
                 discarded.append({"item_id": item["id"], "reason": reason})
         if discarded and stop == "SEARCH_COMPLETE":
             stop = "CONTEXT_BUDGET_REACHED"
-        selected_ids = {i["id"] for i in selected}
-        evidence_ids = sorted({e for i in selected for e in i["evidence_ids"]})
-        source_ids = sorted({s for i in selected for s in i["source_ids"]})
+        accounted_sources = {source for row in ranked for source in row["item"]["source_ids"]}
+        current_status = current_sources(accounted_sources)
+        require(self.access_policy == access.policy, "ACCESS_DENIED",
+                "retrieval access changed during search; retry under current authority")
         # Internal lineage stores only IDs needed to revalidate selected material.
         available = sorted({r for i in selected for r in i["record_refs"] if r in view.available_record_ids})
-        current_status = current_sources(source_ids)
+        if needs_status and selected:
+            verification_view = GraphReadView(self.catalog, view.snapshot_id, current_status, set(available), [], view.adapter_version)
+            verification_access = AccessFilter(self.access_policy, self.catalog, current_status)
+            try:
+                _validate_context_items(verification_view, verification_access, query, selected, meter=meter)
+            except ContractError as exc:
+                if exc.code != "RETRIEVAL_BUDGET_EXHAUSTED":
+                    raise
+                discarded.extend({"item_id": i["id"], "reason": "verification_budget"} for i in selected)
+                selected, available = [], []
+                for resource, values in seen.items():
+                    values.clear()
+                    meter.used[resource] = 0
+                meter.used["tokens"] = 0
+                partial, stop = True, "RETRIEVAL_BUDGET_EXHAUSTED"
+        selected_ids = {i["id"] for i in selected}
+        evidence_ids = sorted({e for i in selected for e in i["evidence_ids"]})
         body = {"version": VERSION, "query_id": query_id, "snapshot_id": view.snapshot_id,
                 "classification_identity": view.classification_identity, "research_domain_scope": query.get("research_domain_scope"),
                 "graph_version": view.snapshot["graph_version"], "security_scope": query["security_scope"],
@@ -335,10 +352,6 @@ class HybridRetriever:
                 "embedding_version": self.embedding.version, "adapter_version": view.adapter_version,
                 "strategy_versions": versions, "created_at": now()}
         context_id = self.catalog.put("graph-context", body)
-        # Independently reconstruct from immutable catalog records. A mutable
-        # SearchSpace and its membership cache do not establish authority.
-        validate_context(self.catalog, context_id, current_access=self.access_policy,
-                         current_status=current_status)
         if not partial and not cache_hit:
             self.cache.put(key, candidates)
         lineage = {"version": VERSION, "query_id": query_id, "graph_context_id": context_id, "plan_id": plan_id,
@@ -370,12 +383,33 @@ class HybridRetriever:
             "warnings": sorted(set(warnings)), "usage": deepcopy(meter.used), "created_at": now()})
 
 
+def _validate_context_items(view: GraphReadView, access: AccessFilter, query: dict[str, Any], items: list[dict[str, Any]],
+                            *, meter: BudgetMeter | None = None) -> None:
+    if not items:
+        return
+    edges = authorized_scope_edges(view, access, query, meter)
+    relations = view.catalog.get(view.snapshot["schema_id"], "schema")["relations"]
+    conflicts = query_conflicts(edges, relations, query, meter)
+    selection = ResearchDomainSelection(view, access, query, edges, conflicts, meter)
+    for item in items:
+        if meter is not None:
+            meter.work()
+        expected = canonical_item(view, access, query, kind=item["kind"], ref=item["canonical_ref"],
+                                  members=item["member_assertion_ids"], edges=edges, conflicts=conflicts,
+                                  domain_selection=selection)
+        require(item == expected, "CONTEXT_MATERIALIZATION", "source-derived context differs from canonical records")
+    if meter is not None:
+        meter.check()
+
+
 def validate_context(catalog: Catalog, context_id: str, *, current_access: dict[str, Any] | None = None,
-                     current_status: dict[str, Any] | None = None) -> None:
+                     current_status: dict[str, Any] | None = None, work_meter: BudgetMeter | None = None) -> None:
     """Reconstruct selected data, typed projections and source attribution exactly."""
     context = catalog.get(context_id, "graph-context")
     query = catalog.get(context["query_id"], "retrieval-query")
     validate_query(query)
+    if work_meter is None and current_access is not None and query.get("research_domain_scope") is not None:
+        work_meter = BudgetMeter(RetrievalBudget(**query["budget"]))
     snap = catalog.get(context["snapshot_id"], "graph-snapshot")
     require(context["graph_version"] == snap["graph_version"] and context["security_scope"] == query["security_scope"],
             "STALE_GRAPH_CONTEXT", "query/snapshot/scope differs")
@@ -396,24 +430,15 @@ def validate_context(catalog: Catalog, context_id: str, *, current_access: dict[
                 "RETRIEVAL_CONFIGURATION", "retrieval fingerprint differs")
     else:
         from .reranker import validate_reranked_context
-        validate_reranked_context(catalog, context)
+        validate_reranked_context(catalog, context, work_meter=work_meter)
     statuses = current_status if current_status is not None else context["source_status"]
     access = AccessFilter(current_access or policy, catalog, statuses,
                           historical=query["include_historical"] or query["mode"] == "HISTORICAL")
     access.require_scope(query["security_scope"])
     view = GraphReadView(catalog, context["snapshot_id"], statuses, set(context["available_record_ids"]), [], context["adapter_version"])
-    # Reconstruct conflicts using the complete authorized snapshot, including their
-    # sources. Persisted context statuses include selected conflicts' source spans.
-    edges = authorized_scope_edges(view, access, query)
-    conflicts = query_conflicts(edges, catalog.get(snap["schema_id"], "schema")["relations"], query)
-    selection = ResearchDomainSelection(view, access, query, edges, conflicts)
     ids = [i["id"] for i in context["items"]]
     require(len(ids) == len(set(ids)), "DUPLICATE_ID", "context item IDs")
-    for item in context["items"]:
-        expected = canonical_item(view, access, query, kind=item["kind"], ref=item["canonical_ref"],
-                                  members=item["member_assertion_ids"], edges=edges, conflicts=conflicts,
-                                  domain_selection=selection)
-        require(item == expected, "CONTEXT_MATERIALIZATION", "source-derived context differs from canonical records")
+    _validate_context_items(view, access, query, context["items"], meter=work_meter)
     projections = {"retrieved_nodes": {e for i in context["items"] for e in i["entity_ids"]},
                    "retrieved_edges": {e for i in context["items"] for e in i["assertion_ids"]},
                    "selected_evidence_ids": {e for i in context["items"] for e in i["evidence_ids"]},

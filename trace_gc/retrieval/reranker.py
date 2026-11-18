@@ -59,6 +59,8 @@ class JevReranker:
             bonuses[questions[obs["question_id"]]["context_item_id"]] = (
                 1.0 if obs["semantic_outcome"] == "RELEVANT" else -1.0 if obs["semantic_outcome"] == "IRRELEVANT" else 0.0)
         require(seen == set(questions), "RERANK_OBSERVATION", "incomplete relevance judgments")
+        statuses = retriever.validate_live_context(result["graph_context_id"])
+        validate_pack_lineage(c, pack, current_access=retriever.access_policy, current_status=statuses)
         context = deepcopy(original)
         context["ranking_scores"] = {key: value+bonuses.get(key, 0.0) for key, value in context["ranking_scores"].items()}
         context["items"].sort(key=lambda i: (i["kind"] != "CONFLICT", -context["ranking_scores"][i["id"]], i["id"]))
@@ -86,14 +88,14 @@ class JevReranker:
             "warnings": sorted(set(result["warnings"]+["RELEVANCE_IS_NOT_TRUTH"])), "created_at": now()})
 
 
-def validate_reranked_context(catalog, context):
+def validate_reranked_context(catalog, context, *, work_meter=None):
     """Rebuild a relevance-only change from the original immutable model receipts."""
     from .service import validate_context
     require("reranking_base_context_id" in context, "RERANK_OBSERVATION", "missing original context")
     ref = context["reranking_base_context_id"]
     base = catalog.get(ref, "graph-context")
     require("reranking_observation_ids" not in base, "RERANK_OBSERVATION", "stacked reranking is not supported")
-    validate_context(catalog, ref)
+    validate_context(catalog, ref, work_meter=work_meter)
     expected = deepcopy(base)
     bonuses = {}
     pack_ids = set()

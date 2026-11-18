@@ -72,6 +72,21 @@ class DomainSemanticBoundaryTests(unittest.TestCase):
             self.rerank()
         self.assertEqual(self.calls, [])
 
+    def test_revocation_during_rerank_prevents_returning_a_stale_context(self):
+        execute = self.reranker.execute
+        before = len(self.c.all("graph-context"))
+
+        def execute_then_withdraw(pack_id):
+            observations = execute(pack_id)
+            self.f["adapter"].source_status[self.f["sources"]["e-refute"]].update(active=False, epoch=2)
+            return observations
+
+        self.reranker.execute = execute_then_withdraw
+        with self.assertRaisesRegex(ContractError, "ACCESS_DENIED"):
+            self.rerank()
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(len(self.c.all("graph-context")), before)
+
     def test_current_acl_revocation_prevents_the_semantic_call(self):
         policy = deepcopy(self.r.access_policy)
         del policy["grants"]["source:" + self.f["sources"]["e-support"]]

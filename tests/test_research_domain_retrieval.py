@@ -25,10 +25,10 @@ from trace_gc.retrieval.contracts import query, RetrievalBudget, STRATEGIES
 from trace_gc.retrieval.domains import ResearchDomainSelection, research_domain_scope
 from trace_gc.retrieval.fixtures import domain_corpus, demo_access, SCOPE
 from trace_gc.retrieval.integration import validate_record, validate_pack_lineage
-from trace_gc.retrieval.items import authorized_scope_edges, canonical_item, conflict_pairs
+from trace_gc.retrieval.items import authorized_scope_edges, canonical_item, conflict_pairs, query_conflicts
 from trace_gc.retrieval.planner import RetrievalPlanner
 from trace_gc.retrieval.security import AccessFilter
-from trace_gc.retrieval.service import GraphRAGQueryService, HybridRetriever, validate_context
+from trace_gc.retrieval.service import GraphRAGQueryService, HybridRetriever, _validate_context_items, validate_context
 from trace_gc.retrieval.store import GraphReadView, InMemoryGraphAdapter
 
 
@@ -570,6 +570,47 @@ class DomainRetrievalTests(unittest.TestCase):
         unknown = research_domain_scope(self.c, self.f["taxonomy_id"], [], include_unclassified=True)
         with self.assertRaisesRegex(ContractError, "SOURCE_STATUS_CAPABILITY"):
             self.r.retrieve(self.request(["LEXICAL"], text="randomized", research_domain_scope=unknown))
+
+    def test_unscoped_migrated_read_supports_original_adapter_protocol(self):
+        adapter = self.f["adapter"]
+
+        class ReadOnlyAdapter:
+            version = "legacy-read-only-fixture-v1"
+
+            def read(self, request):
+                return adapter.read(request)
+
+        self.r.adapter = ReadOnlyAdapter()
+        context, result = self.context(self.request(["LEXICAL"], text="randomized", research_domain_scope=None))
+        self.assertTrue(context["classification_identity"]["migrated"])
+        self.assertTrue(context["items"])
+        self.r.validate_live_context(result["graph_context_id"])
+
+    def test_scoped_empty_budget_result_does_not_reconstruct_graph(self):
+        budget = RetrievalBudget(maximum_latency_ms=0)
+        with patch("trace_gc.retrieval.service.query_conflicts", wraps=query_conflicts) as conflicts:
+            context, result = self.context(self.request(["LEXICAL"], text="randomized", budget=budget))
+        self.assertEqual(result["status"], "PARTIAL")
+        self.assertEqual(context["items"], [])
+        conflicts.assert_not_called()
+
+    def test_scoped_verification_spends_the_remaining_work_budget(self):
+        discovery_cost = []
+
+        def measure(*args, meter=None):
+            discovery_cost.append(meter.used["cost_units"])
+            _validate_context_items(*args, meter=meter)
+
+        request = self.request(["LEXICAL"], text="randomized")
+        with patch("trace_gc.retrieval.service._validate_context_items", side_effect=measure):
+            self.r.retrieve(request)
+        budget = replace(self.budget, maximum_cost_units=discovery_cost[0])
+        context, result = self.context(self.request(["LEXICAL"], text="randomized", budget=budget))
+        self.assertEqual(result["status"], "PARTIAL")
+        self.assertEqual(context["items"], [])
+        lineage = self.c.get(result["lineage_id"], "retrieval-lineage")
+        self.assertEqual(lineage["discarded"][0]["reason"], "verification_budget")
+        self.assertLessEqual(lineage["cost_units"], budget.maximum_cost_units)
 
     def test_unscoped_materialization_remains_legacy_shaped(self):
         ctx, _ = self.context(self.request(["LEXICAL"], text="randomized", research_domain_scope=None))

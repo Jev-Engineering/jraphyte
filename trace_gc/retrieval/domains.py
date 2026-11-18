@@ -31,6 +31,12 @@ def identity_aware_scope(query: dict[str, Any]) -> bool:
     return scope is not None and mode == AUTHORIZED_IDENTITY_CONFLICTS
 
 
+def require_live_scope(query: dict[str, Any]) -> None:
+    """New scoped searches always retain authorized identity-based refutations."""
+    require(query.get("research_domain_scope") is None or identity_aware_scope(query),
+            "RESEARCH_DOMAIN_SCOPE", "live scoped retrieval requires authorized-identity-v1")
+
+
 def research_domain_scope(catalog: Catalog, taxonomy_id: str, domain_ids: list[str], *,
                           match: str = "ANY", include_unclassified: bool = False,
                           include_descendants: bool = False,

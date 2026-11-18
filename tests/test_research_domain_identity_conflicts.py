@@ -1,6 +1,7 @@
 """Synthetic, authority-bound identity/refutation regressions (not corpus quality)."""
 from copy import deepcopy
 import unittest
+from unittest.mock import patch
 
 from trace_gc.constraints import validate_graph
 from trace_gc.errors import ContractError
@@ -202,7 +203,11 @@ class IdentityConflictTests(unittest.TestCase):
     def test_missing_legacy_pin_preserves_old_materialization_and_can_be_compared(self):
         legacy = deepcopy(self.scope)
         legacy.pop('conflict_resolution')
-        old, old_context = self.retrieve(research_domain_scope=legacy)
+        with self.assertRaisesRegex(ContractError, 'RESEARCH_DOMAIN_SCOPE'):
+            self.retrieve(research_domain_scope=legacy)
+        # Generate the archived fixture with the historical materialization path.
+        with patch('trace_gc.retrieval.service.require_live_scope'):
+            old, old_context = self.retrieve(research_domain_scope=legacy)
         self.assertEqual(set(old_context['retrieved_edges']), {'e-support', 'e-claim-identity'})
         self.assertIn('LEGACY_LITERAL_CONFLICT_RESOLUTION_MAY_OMIT_ALIASED_REFUTATIONS', old['warnings'])
         before = self.c.hash(old['graph_context_id'])
@@ -213,7 +218,10 @@ class IdentityConflictTests(unittest.TestCase):
                          current_status=self.adapter.current_source_status())
         self.assertEqual(self.c.hash(old['graph_context_id']), before)
         explicit = research_domain_scope(self.c, self.f['taxonomy_id'], ['research:biology'], conflict_resolution='literal-v1')
-        _, explicit_context = self.retrieve(research_domain_scope=explicit)
+        with self.assertRaisesRegex(ContractError, 'RESEARCH_DOMAIN_SCOPE'):
+            self.retrieve(research_domain_scope=explicit)
+        with patch('trace_gc.retrieval.service.require_live_scope'):
+            _, explicit_context = self.retrieve(research_domain_scope=explicit)
         self.assertEqual(explicit_context['retrieved_edges'], old_context['retrieved_edges'])
 
     def test_unknown_algorithm_pin_is_rejected(self):
@@ -223,7 +231,8 @@ class IdentityConflictTests(unittest.TestCase):
     def test_counterfactual_replay_keeps_original_literal_scope_immutable(self):
         legacy = deepcopy(self.scope)
         legacy.pop('conflict_resolution')
-        original_id = self.retriever.retrieve(self.request(research_domain_scope=legacy))
+        with patch('trace_gc.retrieval.service.require_live_scope'):
+            original_id = self.retriever.retrieve(self.request(research_domain_scope=legacy))
         original_hash = self.c.hash(original_id)
         # Explicit synthetic availability journal for this exact read snapshot.
         self.adapter.events = [{'version': self.snapshot['graph_version'], 'state_after': self.snapshot,

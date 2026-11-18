@@ -7,6 +7,7 @@ closure, never as an independent topical hit.
 from copy import deepcopy
 from dataclasses import replace
 import unittest
+from unittest.mock import patch
 
 from trace_gc.constraints import validate_graph
 from trace_gc.errors import ContractError
@@ -174,10 +175,12 @@ class PrerequisiteClosureTests(unittest.TestCase):
     def test_literal_pin_also_carries_prerequisites(self):
         legacy = deepcopy(self.scope)
         legacy['conflict_resolution'] = 'literal-v1'
-        _, context = self.retrieve(research_domain_scope=legacy)
+        with patch('trace_gc.retrieval.service.require_live_scope'):
+            _, context = self.retrieve(research_domain_scope=legacy)
         self.assertTrue({'e-support', 'e-prereq-1', 'e-prereq-2'} <= set(context['items'][0]['assertion_ids']))
         self.deny('e-prereq-1')
-        _, denied = self.retrieve(research_domain_scope=legacy)
+        with patch('trace_gc.retrieval.service.require_live_scope'):
+            _, denied = self.retrieve(research_domain_scope=legacy)
         self.assertNoGraphState(denied)
 
 
