@@ -3,7 +3,7 @@
 Inherited methods must therefore not depend on attributes that only `__init__` creates.
 These tests build a bridge instance around a minimal SQLite store, so they need no
 external reviewed core. They are NOT a pinned-core conformance result: the exact
-24-check gate (`tools/check_legacy.py --core ...`) is still required.
+upstream gate runs via `tools/check_legacy.py --core ...`.
 """
 import sqlite3
 import threading

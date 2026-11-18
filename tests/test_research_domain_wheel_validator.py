@@ -48,12 +48,10 @@ class DomainWheelValidatorTests(unittest.TestCase):
                 self.tool.audit_wheel(self.make_wheel(directory, self.complete(), name="source.zip"))
             with self.assertRaisesRegex(ValueError, "unsafe wheel member"):
                 self.tool.audit_wheel(self.make_wheel(directory, self.complete() + ["../escape.py"]))
-            partial = self.complete()[1:]
-            with self.assertRaisesRegex(ValueError, "lacks domain resources"):
-                self.tool.audit_wheel(self.make_wheel(directory, partial))
-            no_taxonomy = self.complete()[:-1]
-            with self.assertRaisesRegex(ValueError, "lacks domain resources"):
-                self.tool.audit_wheel(self.make_wheel(directory, no_taxonomy))
+            full = self.complete()
+            for missing in full:
+                with self.subTest(missing=missing), self.assertRaisesRegex(ValueError, "lacks domain resources"):
+                    self.tool.audit_wheel(self.make_wheel(directory, [name for name in full if name != missing]))
 
     def test_installed_smoke_is_valid_python(self):
         compile(self.tool.SMOKE, "<installed-wheel-smoke>", "exec")
@@ -93,6 +91,7 @@ class DomainWheelValidatorTests(unittest.TestCase):
             "status": "PASS", "installed_imports": True, "checkout_imports": False,
             "schema_count": len(self.tool.DOMAIN_SCHEMAS), "domain_contract_lifecycle": "PASS",
             "reference_taxonomy_review": "PROPOSED", "cli_version": "TRACE-GC 0.4.0",
+            "domain_conformance_checks": 1,
         }
 
     def test_audit_and_install_share_a_private_copy(self):
@@ -137,6 +136,9 @@ class DomainWheelValidatorTests(unittest.TestCase):
             json.dumps(dict(base, installed_imports=1)).encode(),
             json.dumps(dict(base, checkout_imports=True)).encode(),
             json.dumps(dict(base, schema_count=True)).encode(),
+            json.dumps({key: value for key, value in base.items() if key != "domain_conformance_checks"}).encode(),
+            *(json.dumps(dict(base, domain_conformance_checks=value)).encode()
+              for value in (True, 0, -1, 1.0, "1")),
             json.dumps(dict(base, cli_version="/private/tree")).encode(),
         ]
         with tempfile.TemporaryDirectory() as directory:

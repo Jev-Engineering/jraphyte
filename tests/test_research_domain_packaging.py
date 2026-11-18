@@ -17,7 +17,10 @@ class DomainPackagingTests(unittest.TestCase):
     def test_installed_resources_cover_domain_contracts(self):
         resources = files("trace_gc").joinpath("data", "schemas")
         names = {entry.name for entry in resources.iterdir() if entry.name.endswith(".schema.json")}
-        required = {name + ".schema.json" for name in ("research-domain-taxonomy", "classification-assignment")}
+        required = {name + ".schema.json" for name in (
+            "research-domain-taxonomy", "classification-assignment", "classification-read-identity",
+            "research-domain-scope", "retrieval-query",
+        )}
         self.assertTrue(required <= names)
         for name in required:
             value = json.loads(resources.joinpath(name).read_text(encoding="utf-8"))
@@ -96,6 +99,9 @@ class DomainPackagingTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             generated = {p.name: p.read_bytes() for p in (target / "schemas/runtime").glob("*.schema.json")}
             packaged = {p.name: p.read_bytes() for p in (target / "trace_gc/data/schemas").glob("*.schema.json")}
-            expected = {p.name: p.read_bytes() for p in (root / "schemas/runtime").glob("*.schema.json")}
+            expected_runtime = {p.name: p.read_bytes() for p in (root / "schemas/runtime").glob("*.schema.json")}
+            expected_packaged = {p.name: p.read_bytes() for p in
+                                 (root / "trace_gc/data/schemas").glob("*.schema.json")}
             self.assertEqual(generated, packaged)
-            self.assertEqual(generated, expected)
+            self.assertEqual(generated, expected_runtime)
+            self.assertEqual(packaged, expected_packaged)

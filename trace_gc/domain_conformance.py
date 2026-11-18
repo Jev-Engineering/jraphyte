@@ -18,8 +18,34 @@ from .domain_publication import OPERATIONS, classification_operation, migration_
 from .domains import create_assignment, reference_taxonomy
 from .errors import ContractError, require
 from .plans import create_plan
+from .retrieval.contracts import RetrievalBudget, query
+from .retrieval.domains import research_domain_scope
+from .retrieval.fixtures import demo_access
+from .retrieval.service import HybridRetriever
 from .retrieval.store import SQLiteGraphAdapter
 from .trust import IssuerPolicy, Signer, authorize_plan
+
+
+def _check_scoped_lexical(fixture, taxonomy_id: str, snapshot_id: str) -> None:
+    catalog = fixture.catalog
+    both = set(fixture.evidence_ids)
+    first, second = fixture.evidence_ids
+    quote = catalog.get(first, "evidence")["quote"]
+    require(quote == catalog.get(second, "evidence")["quote"], "DOMAIN_CONFORMANCE",
+            "scoped lexical fixture must offer the same quote from both sources")
+    retriever = HybridRetriever(SQLiteGraphAdapter(fixture.backend, audit_trust=fixture.trust),
+                                access_policy=demo_access(catalog, snapshot_id, scope=SCOPE))
+    for domain, expected in (("research:chemistry", both), ("research:biology", {first})):
+        request = query(requesting_component="domain-conformance", security_scope=SCOPE,
+                        text=quote, strategies=["LEXICAL"], include_conflicts=False,
+                        budget=RetrievalBudget(maximum_latency_ms=20000),
+                        research_domain_scope=research_domain_scope(catalog, taxonomy_id, [domain]))
+        result = retriever.catalog.get(retriever.retrieve(request), "retrieval-result")
+        context_id = result["graph_context_id"]
+        retriever.validate_live_context(context_id)
+        context = retriever.catalog.get(context_id, "graph-context")
+        require(set(context["selected_evidence_ids"]) == expected, "DOMAIN_CONFORMANCE",
+                f"lexical evidence selection differs for {domain}")
 
 
 def run_domain_conformance(output: str | Path | None = None, *,
@@ -129,6 +155,8 @@ def run_domain_conformance(output: str | Path | None = None, *,
             require(classified == dict(zip(f.source_ids, assignments, strict=True)),
                     "DOMAIN_CONFORMANCE", "classification projection did not bind each exact assignment")
             checks.append("multi_source_assignment_publication")
+            _check_scoped_lexical(f, taxonomy_id, classified_snapshot_id)
+            checks.append("authenticated_scoped_lexical_retrieval")
             second = create_assignment(c, source_snapshot_id=f.source_ids[0], taxonomy_id=taxonomy_id,
                 domain_ids=["research:physics"], review=review, classifier_id="isolated-domain-reviewer",
                 classifier_version="conformance-v1", supersedes=assignments[0])
@@ -186,7 +214,7 @@ def run_domain_conformance(output: str | Path | None = None, *,
                 "final_graph_version": accepted["graph_version"], "final_state_hash": digest(accepted),
                 "execution_mode": "SYNTHETIC", "label_origin": "FABRICATED_CONFORMANCE_ONLY", "provider_calls": 0,
                 "production_graph_writes": 0, "production_qualification": "NOT_ESTABLISHED",
-                "scope": "Isolated classification lifecycle, atomicity, historical snapshots and authenticated journal conformance; not representative workload or operational qualification."}
+                "scope": "Isolated classification lifecycle, atomicity, historical snapshots, scoped retrieval and authenticated journal conformance; not representative workload or operational qualification."}
         finally:
             f.close()
     if output is not None:

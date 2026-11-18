@@ -5,8 +5,9 @@ exercised by an isolated interpreter started outside the source tree. It checks
 that every domain contract module and schema resource comes from the installed
 copy, then runs a synthetic contract lifecycle: multi-label, unclassified and
 superseding assignments, a complete bundle validation, and rejection of an
-approved assignment that binds the packaged PROPOSED taxonomy. Synthetic
-fixtures only: this is not deployment qualification or publication evidence.
+approved assignment that binds the packaged PROPOSED taxonomy. The installed
+SQLite lifecycle also validates authenticated domain-scoped lexical retrieval
+using synthetic evidence.
 """
 from __future__ import annotations
 
@@ -21,27 +22,41 @@ import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
-DOMAIN_SCHEMAS = ("research-domain-taxonomy", "classification-assignment")
+DOMAIN_SCHEMAS = (
+    "research-domain-taxonomy",
+    "classification-assignment",
+    "classification-read-identity",
+    "research-domain-scope",
+    "retrieval-query",
+)
 TAXONOMY = "trace_gc/data/research_domains/reference_taxonomy_v1.json"
 
 SMOKE = r'''
 import contextlib, copy, io, json, pathlib, sys
+from importlib.resources import files
 root = pathlib.Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(root))
 import trace_gc.catalog, trace_gc.domains, trace_gc.ledger, trace_gc.validation, trace_gc.schema, trace_gc.cli
 from jsonschema import Draft202012Validator
 modules = (trace_gc.catalog, trace_gc.domains, trace_gc.ledger, trace_gc.validation, trace_gc.schema, trace_gc.cli)
+def assert_installed(path):
+    assert pathlib.Path(path).resolve().is_relative_to(root), path
+
 for module in modules:
-    assert pathlib.Path(module.__file__).resolve().is_relative_to(root), module.__file__
-schemas = pathlib.Path(trace_gc.domains.__file__).parent / "data" / "schemas"
+    assert_installed(module.__file__)
+data = files("trace_gc").joinpath("data")
+assert_installed(data.joinpath("research_domains", "reference_taxonomy_v1.json"))
+schemas = data.joinpath("schemas")
 for name in json.loads(sys.argv[2]):
     path = schemas / (name + ".schema.json")
+    assert_installed(path)
     assert path.is_file(), name
     Draft202012Validator.check_schema(json.loads(path.read_text(encoding="utf-8")))
 schema_count = len(list(schemas.glob("*.schema.json")))
 from trace_gc.catalog import Catalog
 from trace_gc.canonical import dumps, loads
 from trace_gc.demo import relation
+from trace_gc.domain_conformance import run_domain_conformance
 from trace_gc.domains import create_assignment, reference_taxonomy, validate_catalog
 from trace_gc.errors import ContractError
 from trace_gc.ledger import make_bundle
@@ -80,8 +95,13 @@ bundle = make_bundle(c, run_id="wheel-domain-contract", execution_mode="SYNTHETI
 outcome = trace_gc.validation.validate_bundle(loads(dumps(bundle)))
 assert outcome["status"] == "PASS" and not outcome["authorization_granted"], outcome
 assert {"DOMAIN_TAXONOMY", "CLASSIFICATION"} <= {e["stage"] for e in bundle["ledger"]}
+domain = run_domain_conformance()
+assert domain["status"] == "PASS" and domain["backend"] == "sqlite-reference-v1", domain
+assert domain["checks_run"] == len(domain["checks"]), domain
+assert "authenticated_scoped_lexical_retrieval" in domain["checks"], domain
 result = {"status": "PASS", "installed_imports": True, "checkout_imports": False, "schema_count": schema_count,
-          "domain_contract_lifecycle": "PASS", "reference_taxonomy_review": "PROPOSED"}
+          "domain_contract_lifecycle": "PASS", "reference_taxonomy_review": "PROPOSED",
+          "domain_conformance_checks": domain["checks_run"]}
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     try:
@@ -90,6 +110,9 @@ with contextlib.redirect_stdout(out):
         assert exc.code in (None, 0), exc.code
 result["cli_version"] = out.getvalue().strip()
 assert result["cli_version"]
+for name, module in tuple(sys.modules.items()):
+    if name == "trace_gc" or name.startswith("trace_gc."):
+        assert_installed(module.__file__)
 print(json.dumps(result))
 '''
 
@@ -138,12 +161,14 @@ def _smoke_result(stdout: str) -> dict:
         "domain_contract_lifecycle": "PASS",
         "reference_taxonomy_review": "PROPOSED",
     }
-    if not isinstance(result, dict) or set(result) != {*required, "schema_count", "cli_version"}:
+    if not isinstance(result, dict) or set(result) != {*required, "schema_count", "cli_version", "domain_conformance_checks"}:
         raise invalid
     for key, expected in required.items():
         if type(result[key]) is not type(expected) or result[key] != expected:
             raise invalid
     if type(result["schema_count"]) is not int or result["schema_count"] < len(DOMAIN_SCHEMAS):
+        raise invalid
+    if type(result["domain_conformance_checks"]) is not int or result["domain_conformance_checks"] <= 0:
         raise invalid
     version = result["cli_version"]
     if not isinstance(version, str) or not re.fullmatch(r"TRACE-GC [0-9][0-9A-Za-z.+!-]{0,63}", version):

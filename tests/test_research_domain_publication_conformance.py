@@ -18,6 +18,7 @@ class PublicationConformanceTests(unittest.TestCase):
         self.assertIn("signed_classification_stale_graph_cas", result["checks"])
         self.assertIn("classification_planning_rejects_stale_predecessor", result["checks"])
         self.assertIn("classification_preflight_rejects_stale_source_epoch", result["checks"])
+        self.assertIn("authenticated_scoped_lexical_retrieval", result["checks"])
         self.assertIn("historical_assignment_replay", result["checks"])
         self.assertIn("classified_database_reopen_authenticated_audit", result["checks"])
         self.assertEqual(result["provider_calls"], 0)
