@@ -102,3 +102,6 @@ def extend(schemas):
     q = schemas["pack"]["properties"]["questions"]["items"]
     q["properties"]["task"]["enum"].append("GRAPH_RELEVANCE")
     q["properties"]["context_item_id"] = S
+
+    from domain_retrieval_schemas import extend as extend_domain_retrieval
+    extend_domain_retrieval(schemas)
