@@ -6,6 +6,7 @@ is enrolled, and no representative-corpus or deployment claim is made.
 """
 from __future__ import annotations
 
+from base64 import b64decode
 from copy import deepcopy
 from dataclasses import replace
 import unittest
@@ -14,7 +15,7 @@ from unittest.mock import patch
 from trace_gc.adapter import record_response
 from trace_gc.canonical import digest
 from trace_gc.catalog import Catalog
-from trace_gc.compiler import compile_pack, validate_pack
+from trace_gc.compiler import compile_pack, validate_pack, wire_request
 from trace_gc.demo import fixture_response
 from trace_gc.domains import create_assignment, reference_taxonomy
 from trace_gc.errors import ContractError
@@ -446,11 +447,36 @@ class DomainRetrievalTests(unittest.TestCase):
         graph = pack["state"]["graph_context"][0]
         self.assertEqual(graph["classification_identity"], ctx["classification_identity"])
         self.assertEqual(graph["research_domain_scope"], self.scope)
+        for field in ("classification_identity", "research_domain_scope"):
+            ref = result["graph_context_id"]
+            self.assertIn({"path": f"/graph_context/0/{field}", "record_id": ref,
+                           "record_hash": self.c.hash(ref), "locator": f"/{field}",
+                           "transformation": "identity-v1"}, pack["materialization"])
         replay_id = replay_retrieval(self.r, self.c.put("retrieval-result", result), {"retrieval_strategy": ["RELATION"]})
         replay = self.c.get(replay_id)
         validate_record(self.c, self.c.record(replay_id))
         self.assertEqual(replay["original_classification_identity"], replay["replayed_classification_identity"])
         self.assertEqual(replay["replayed_research_domain_scope"], self.scope)
+
+    def test_unscoped_model_wire_retains_the_existing_graph_context_shape(self):
+        fact = self.c.get(self.f["snapshot_id"])["assertions"]["e-support"]
+        candidate = self.c.candidate(id_="candidate:unscoped-pack", run_id="unscoped-pack",
+                                    assertion=fact["assertion"], claim_id=self.f["claim_id"],
+                                    evidence_ids=fact["evidence_ids"])
+        request = self.request(["LEXICAL"], text="improves", candidate_id=candidate, research_domain_scope=None)
+        request["requesting_component"] = "upstream-synthesis"
+        ctx, result = self.context(request)
+        ref = result["graph_context_id"]
+        pack_id = compile_pack(self.c, id_="pack:unscoped", run_id="unscoped-pack", candidate_ids=[candidate],
+                               questions=[question(candidate, id_="support")], snapshot_id=self.f["snapshot_id"],
+                               security_scope=SCOPE, graph_context_ids=[ref], source_retrieval_ids=[])
+        pack = self.c.get(pack_id)
+        expected = deepcopy(pack)
+        expected["state"]["graph_context"] = [{"context_id": ref, "items": ctx["items"],
+                                                "instruction_authority": False}]
+        self.assertEqual(b64decode(pack["request_base64"]), wire_request(expected))
+        self.assertFalse(any(row["path"].startswith("/graph_context/0/") and row["locator"] != "/items"
+                             for row in pack["materialization"]))
 
     def test_old_context_revalidation_respects_now_revoked_source(self):
         _, result = self.context(self.request(["LEXICAL"], text="improves"))

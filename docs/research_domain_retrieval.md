@@ -100,10 +100,12 @@ community summaries remain noncanonical and have no instruction authority.
 
 Snapshot identity and cache keys include the accepted classification revision
 and hash, current source status and application ACL. Cached canonical items are
-reconstructed against authority on reuse. Context, lineage, downstream answers,
-planner requests, upstream materialization and replay carry the exact scope and
-classification identity. Replay validates both graph versions and their
-classification revisions against the referenced contexts. A replay on the same
+reconstructed against authority on reuse. The planner carries the exact scope
+into each query. The read determines the classification identity. Context,
+lineage, downstream answers, and replay bind both values. Scoped upstream model
+packs carry both values in their traced graph context. Replay validates both
+graph versions and their classification revisions against the referenced
+contexts. A replay on the same
 graph version must resolve to the same immutable snapshot. The replay allowlist
 permits an explicit alternative domain scope and preserves the original tenant,
 requesting role and candidate. Original observations and evidence hashes remain

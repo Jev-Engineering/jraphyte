@@ -156,6 +156,12 @@ def materialize(catalog: Catalog, candidate_ids: list[str], prior_ids: list[str]
             state["graph_context"].append({"context_id": ref, "items": deepcopy(context["items"]),
                                            "instruction_authority": False})
             trace(f"/graph_context/{i}/items", ref, "/items")
+            if context.get("research_domain_scope") is not None:
+                # Carry the selected topic and revision without adding taxonomy
+                # review material to the evidence closure.
+                for field in ("classification_identity", "research_domain_scope"):
+                    state["graph_context"][i][field] = deepcopy(context[field])
+                    trace(f"/graph_context/{i}/{field}", ref, f"/{field}")
     return state,closed,traces
 
 def wire_request(pack: dict[str, Any]) -> bytes:
