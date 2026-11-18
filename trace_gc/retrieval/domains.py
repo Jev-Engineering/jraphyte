@@ -270,9 +270,14 @@ class ResearchDomainSelection:
                 permitted = self.matches(self.sources_for_edges(self.node_basis(ref)))
         elif kind in {"DECISION", "HYPOTHESIS"}:
             if ref in self.view.available_record_ids and self.access.decision(ref):
-                evidence = self.decision_evidence(ref)
-                if all(self.access.evidence(e) for e in evidence):
-                    permitted = self.matches({c.get(e, "evidence")["source_snapshot_id"] for e in evidence})
+                record = c.record(ref)
+                record_kinds = {"candidate"} if kind == "HYPOTHESIS" else {"resolution", "evaluation", "observation"}
+                candidate = self.query["candidate_id"]
+                if record["kind"] in record_kinds and (candidate is None or
+                        candidate not in {ref, record["body"].get("candidate_id")}):
+                    evidence = self.decision_evidence(ref)
+                    if all(self.access.evidence(e) for e in evidence):
+                        permitted = self.matches({c.get(e, "evidence")["source_snapshot_id"] for e in evidence})
         elif kind in {"SCHEMA", "ONTOLOGY"}:
             if self.access.allows("schema", snap["schema_id"]):
                 permitted = self.matches(self.sources_for_edges(self.basis(kind, ref, members)))

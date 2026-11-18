@@ -99,6 +99,8 @@ source-span, token, work and time budgets. Otherwise the entire item is dropped
 and the result reports partial/budget-limited retrieval. A one-span budget cannot
 keep a supporting span while dropping its required refutation. Generated
 community summaries remain noncanonical and have no instruction authority.
+`community_scope` selects topology-derived component IDs for the queried view.
+Changing the edges eligible for traversal can change the component ID.
 
 ## Version binding, current revocation and model contexts
 
@@ -118,9 +120,12 @@ receipt. New receipts expose only linked observations whose originating packs
 still pass current authorization. Receipt validation checks each preserved hash
 and requires new observations to cite the replayed result.
 
-Before embeddings and before returning context, the reference adapters' live
-source-status hook is checked. A changed source epoch requires a new consistent
-read; revocation denies use. Upstream synthesis, reranking and downstream
+The reference adapters check live source status before selecting a domain view,
+before embeddings, and before returning context. An application-supplied
+retrieval token counter also receives only candidates whose sources and access
+are still current, including cached candidates and candidates later dropped by
+the budget. A changed source epoch requires a new consistent read, and
+revocation denies use. Upstream synthesis, reranking and downstream
 materialization revalidate context against current ACL/status at their model/use
 boundary. Upstream embedding also checks the input candidate's endpoints and
 evidence sources. The full candidate and source closure of a retrieval pack is

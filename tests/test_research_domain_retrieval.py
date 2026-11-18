@@ -307,9 +307,16 @@ class DomainRetrievalTests(unittest.TestCase):
 
     def test_no_self_candidate_or_inflight_vote_as_corroboration(self):
         decisions = self.add_decisions()
-        ctx, _ = self.context(self.request(["DECISION", "SIMILAR_CASE"], text="Intervention Paper",
-            focus_entities=[self.f["claim_id"]], candidate_id=decisions["e-support"][0], include_historical=True))
+        candidate, observation = decisions["e-support"]
+        request = self.request(["DECISION", "SIMILAR_CASE"], text="Intervention Paper",
+            focus_entities=[self.f["claim_id"]], candidate_id=candidate, include_historical=True)
+        ctx, _ = self.context(request)
         self.assertFalse(set(decisions["e-support"]) & {item["canonical_ref"] for item in ctx["items"]})
+        view = self.r.adapter.read(request)
+        access = AccessFilter(self.r.access_policy, view.catalog, view.source_status)
+        for kind, ref in (("DECISION", observation), ("DECISION", candidate), ("HYPOTHESIS", candidate)):
+            with self.subTest(kind=kind, ref=ref), self.assertRaisesRegex(ContractError, "RESEARCH_DOMAIN_SCOPE"):
+                canonical_item(view, access, request, kind=kind, ref=ref)
 
     def test_domain_match_never_overrides_source_acl_before_embedding(self):
         denied = self.f["sources"]["e-method"]
@@ -356,14 +363,39 @@ class DomainRetrievalTests(unittest.TestCase):
     def test_revocation_during_embedding_fails_before_context_publication(self):
         source = self.f["sources"]["e-method"]
         before = len(self.c.all("graph-context"))
+        counted_sources = set()
+
         def revoke():
             self.f["adapter"].source_status[source].update(active=False, epoch=2)
+
+        def count(item):
+            counted_sources.update(item["source_ids"])
+            return 0
+
         self.r.embedding = SpyEmbedding(revoke)
+        self.r.token_counter = count
         with self.assertRaisesRegex(ContractError, "ACCESS_DENIED"):
             self.r.retrieve(self.request(["VECTOR"], text="randomized"))
         self.assertEqual(len(self.c.all("graph-context")), before)
+        self.assertNotIn(source, counted_sources)
         # It was allowed at entry to this synchronous call; no cancellation of
         # an already delivered model request or production SLO is asserted.
+
+    def test_scoped_selection_requires_a_current_status_view(self):
+        source = self.f["sources"]["e-method"]
+        adapter = self.f["adapter"]
+        read = adapter.read
+
+        def read_then_withdraw(request):
+            view = read(request)
+            adapter.source_status[source].update(active=False, epoch=2)
+            return view
+
+        spy = SpyEmbedding()
+        self.r.embedding = spy
+        with patch.object(adapter, "read", read_then_withdraw), self.assertRaisesRegex(ContractError, "STALE_SOURCE_EPOCH"):
+            self.r.retrieve(self.request(["VECTOR"], text="randomized"))
+        self.assertEqual(spy.seen, [])
 
     def test_source_epoch_change_during_embedding_requires_fresh_read(self):
         source = self.f["sources"]["e-method"]

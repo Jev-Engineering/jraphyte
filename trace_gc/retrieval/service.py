@@ -173,13 +173,15 @@ class HybridRetriever:
         if self.run_budget is not None:
             self.run_budget.consume("retrieval_requests")
         view = self.adapter.read(query)
+        needs_status = query.get("research_domain_scope") is not None or view.classification_identity["migrated"]
+        if needs_status:
+            require(self._current_source_status(view.source_status, required=True) == view.source_status,
+                    "STALE_SOURCE_EPOCH", "source status changed before domain selection; retry a consistent read")
         # Current source status participates in identity even for an old graph version.
         access = AccessFilter(self.access_policy, view.catalog, view.source_status,
                               historical=query["include_historical"] or query["mode"] == "HISTORICAL")
         access.require_scope(query["security_scope"])
         validate_scope(view.catalog, query.get("research_domain_scope"))
-        needs_status = query.get("research_domain_scope") is not None or view.classification_identity["migrated"]
-
         def current_sources(sources):
             statuses = self._current_source_status(view.source_status, required=needs_status)
             self._assert_current_sources(view.catalog, view.source_status, statuses, sources)
@@ -282,9 +284,14 @@ class HybridRetriever:
             utility = row["rrf"] if query["ranking_strategy"] == "rrf-v1" else row["score"]
             rows.append({"item_id": item["id"], "kind": item["kind"], "score": utility,
                          "features": row["features"], "methods": row["methods"]})
-            reported_tokens = self.token_counter(item)
-            require(type(reported_tokens) is int and reported_tokens >= 0, "TOKEN_ACCOUNTING", "invalid retrieval token count")
-            tokens = max(conservative_tokens(item), reported_tokens)
+            tokens = conservative_tokens(item)
+            if self.token_counter is not conservative_tokens:
+                current_sources(item["source_ids"])
+                require(self.access_policy == access.policy, "ACCESS_DENIED",
+                        "retrieval access changed before token counting; retry under current authority")
+                reported_tokens = self.token_counter(item)
+                require(type(reported_tokens) is int and reported_tokens >= 0, "TOKEN_ACCOUNTING", "invalid retrieval token count")
+                tokens = max(tokens, reported_tokens)
             if blocked_conflict_members & set(item["assertion_ids"]):
                 accepted, reason = False, "incomplete_conflict_pair_blocked"
             else:
