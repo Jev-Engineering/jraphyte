@@ -138,7 +138,7 @@ def run_domain_conformance(output: str | Path | None = None, *,
                     "DOMAIN_CONFORMANCE", "current projection does not show the reviewed successor")
             historical_request = {"graph_version": classified_snapshot["graph_version"],
                                   "temporal_scope": {"as_of": None, "before_source": None}}
-            historical = SQLiteGraphAdapter(b).read(historical_request)
+            historical = SQLiteGraphAdapter(b, audit_trust=f.trust).read(historical_request)
             require(historical.snapshot_id == classified_snapshot_id and historical.snapshot == classified_snapshot,
                     "DOMAIN_CONFORMANCE", "reclassification changed the historical snapshot")
             checks.extend(["reclassification_updates_current_projection", "historical_assignment_replay"])

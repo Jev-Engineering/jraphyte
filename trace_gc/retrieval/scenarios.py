@@ -54,7 +54,7 @@ def admit(fixture, document: str, text: str, *, name: str) -> str:
 def retriever_for(fixture):
     c = fixture.catalog
     snapshot = fixture.backend.snapshot(c)
-    return HybridRetriever(SQLiteGraphAdapter(fixture.backend, c), catalog=c,
+    return HybridRetriever(SQLiteGraphAdapter(fixture.backend, c, audit_trust=fixture.trust), catalog=c,
         access_policy=demo_access(c, snapshot, scope=SCOPE), run_budget=fixture.budget)
 
 

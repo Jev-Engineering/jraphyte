@@ -148,14 +148,15 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(edge["observation_ids"])
         self.assertFalse(edge["provenance_complete"])
 
-    def test_historical_snapshot_after_withdrawal(self):
+    def test_historical_snapshot_keeps_version_but_excludes_withdrawn_evidence(self):
         commit, _ = self.publish_graph()
         old_version = commit["receipt"]["version"]
         self.f.status_change(self.f.source_ids[0])
         current = GraphRAGQueryService(self.r).query(self.request(downstream=True))
         self.assertFalse(any(i["assertion_ids"] for i in current["context"]["items"]))
         historical = GraphRAGQueryService(self.r).query(self.request(downstream=True, graph_version=old_version, include_historical=True, mode="HISTORICAL"))
-        self.assertTrue(any(i["assertion_ids"] for i in historical["context"]["items"]))
+        self.assertEqual(historical["context"]["graph_version"], old_version)
+        self.assertFalse(any(i["assertion_ids"] or i["evidence_ids"] for i in historical["context"]["items"]))
 
     def test_historical_does_not_restore_denied_permissions(self):
         commit, _ = self.publish_graph()
