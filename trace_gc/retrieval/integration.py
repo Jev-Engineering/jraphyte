@@ -46,7 +46,7 @@ def validate_pack_lineage(catalog: Catalog, pack: dict[str, Any], *, current_acc
         statuses = current_status if current_status is not None else context["source_status"]
         acl = AccessFilter(policy, catalog, statuses)
         for source_id in pack["closure"]["source_snapshot_ids"]:
-            require(acl.allows("source", source_id), "ACCESS_DENIED", "model closure source not authorized")
+            require(acl.source(source_id), "ACCESS_DENIED", "model closure source not currently authorized")
         for candidate_id in pack["candidate_ids"]:
             candidate = catalog.get(candidate_id, "candidate")
             require(acl.allows("node", candidate["assertion"]["subject"]) and
@@ -98,6 +98,8 @@ def references(kind: str, body: dict[str, Any]) -> list[tuple[str, str]]:
         add("original_result_id", "retrieval-result"); add("replayed_result_id", "retrieval-result"); add("new_observation_ids", "observation")
     elif kind == "retrieval-evaluation":
         add("result_ids", "retrieval-result")
+    if kind in {"retrieval-query", "retrieval-plan"} and body.get("research_domain_scope") is not None:
+        refs.append((body["research_domain_scope"]["taxonomy_id"], "research-domain-taxonomy"))
     if kind in {"pack", "observation", "resolution"}:
         add("graph_context_ids", "graph-context"); add("graph_retrieval_query_ids", "retrieval-query")
         add("source_retrieval_ids", "retrieval-result")
@@ -109,6 +111,11 @@ def validate_record(catalog: Catalog, record: dict[str, Any]) -> None:
     if kind == "retrieval-query":
         from .contracts import validate_query
         validate_query(b)
+        from .domains import validate_scope
+        validate_scope(catalog, b.get("research_domain_scope"))
+    elif kind == "retrieval-plan":
+        from .domains import validate_scope
+        validate_scope(catalog, b.get("research_domain_scope"))
     elif kind == "graph-context":
         from .service import validate_context
         validate_context(catalog, record["id"])
@@ -123,6 +130,12 @@ def validate_record(catalog: Catalog, record: dict[str, Any]) -> None:
         context = catalog.get(b["graph_context_id"], "graph-context")
         require(b["graph_version"] == context["graph_version"] and b["query_id"] == context["query_id"],
                 "RETRIEVAL_LINEAGE", "lineage query/version differs")
+        if b["plan_id"] is not None:
+            request = catalog.get(b["query_id"], "retrieval-query")
+            plan = catalog.get(b["plan_id"], "retrieval-plan")
+            require(plan["candidate_id"] == request["candidate_id"] and
+                    digest(plan.get("research_domain_scope")) == digest(request.get("research_domain_scope")),
+                    "RETRIEVAL_PLAN_BINDING", "candidate or research-domain scope differs")
         require(all(len(x) == len({row["item_id"] for row in x}) for x in (b["selected"], b["discarded"], b["candidates"])),
                 "RETRIEVAL_LINEAGE", "duplicate selection accounting")
         require({r["item_id"]: r["score"] for r in b["candidates"] if r["item_id"] in context["ranking_scores"]} == context["ranking_scores"],
@@ -132,6 +145,46 @@ def validate_record(catalog: Catalog, record: dict[str, Any]) -> None:
         candidates = {x["item_id"] for x in b["candidates"]}
         require(selected == {x["id"] for x in context["items"]} and not selected & discarded and
                 selected | discarded == candidates, "RETRIEVAL_LINEAGE", "selection accounting differs")
+        if "classification_identity" in context:
+            require("research_domain_scope" in b and
+                    digest(b.get("classification_identity")) == digest(context["classification_identity"]) and
+                    digest(b["research_domain_scope"]) == digest(context["research_domain_scope"]),
+                    "DOMAIN_REVISION", "lineage classification identity or scope differs")
+    elif kind == "retrieval-replay":
+        from ..domain_publication import classification_identity
+        from ..replay import RETRIEVAL_REPLAY_PARAMETERS
+        require(set(b["changed_parameters"]) <= RETRIEVAL_REPLAY_PARAMETERS,
+                "REPLAY_SCOPE", "replay changes a protected query parameter")
+        contexts = {}
+        requests = {}
+        for prefix, result_ref in (("original", b["original_result_id"]), ("replayed", b["replayed_result_id"])):
+            result = catalog.get(result_ref, "retrieval-result")
+            context = catalog.get(result["graph_context_id"], "graph-context")
+            request = catalog.get(result["query_id"], "retrieval-query")
+            contexts[prefix], requests[prefix] = context, request
+            require(result["query_id"] == context["query_id"] and
+                    b[prefix + "_graph_version"] == context["graph_version"] and
+                    b[prefix + "_selected_ids"] == sorted(i["id"] for i in context["items"]),
+                    "RETRIEVAL_LINEAGE", "replay context version or selection differs")
+            if "classification_identity" in context:
+                require(prefix + "_classification_identity" in b and prefix + "_research_domain_scope" in b,
+                        "DOMAIN_REVISION", "replay omits the classification identity or scope of a domain-aware context")
+            identity_key, scope_key = prefix + "_classification_identity", prefix + "_research_domain_scope"
+            if identity_key in b or scope_key in b:
+                require(identity_key in b and scope_key in b and
+                        digest(b[identity_key]) == digest(classification_identity(catalog.get(context["snapshot_id"], "graph-snapshot"))) and
+                        digest(b[scope_key]) == digest(request.get("research_domain_scope")),
+                        "DOMAIN_REVISION", "replay classification identity or scope differs")
+        original, replayed = contexts["original"], contexts["replayed"]
+        require(original["graph_version"] != replayed["graph_version"] or
+                original["snapshot_id"] == replayed["snapshot_id"], "DOMAIN_REVISION",
+                "the same graph version must resolve to the same snapshot")
+        expected = {**requests["original"], "graph_version": original["graph_version"],
+                    "created_at": requests["replayed"]["created_at"], **b["changed_parameters"]}
+        require(digest(expected) == digest(requests["replayed"]), "REPLAY_SCOPE", "replayed query differs from declared changes")
+        old_ids, new_ids = set(b["original_selected_ids"]), set(b["replayed_selected_ids"])
+        require(b["added_ids"] == sorted(new_ids - old_ids) and b["removed_ids"] == sorted(old_ids - new_ids),
+                "RETRIEVAL_LINEAGE", "replay selection delta differs")
     elif kind == "resolution":
         expected = resolution_lineage(catalog, b["observation_ids"])
         require({k: b[k] for k in LINEAGE_FIELDS if k in b} == expected, "RETRIEVAL_LINEAGE", "resolver lineage differs")
@@ -143,6 +196,11 @@ def validate_record(catalog: Catalog, record: dict[str, Any]) -> None:
         context = catalog.get(b["graph_context_id"], "graph-context")
         require(b["items"] == context["items"] and b["query_id"] == context["query_id"] and
                 b["graph_version"] == context["graph_version"], "RETRIEVAL_LINEAGE", "answer context differs")
+        if "classification_identity" in context:
+            require("research_domain_scope" in b and
+                    digest(b.get("classification_identity")) == digest(context["classification_identity"]) and
+                    digest(b["research_domain_scope"]) == digest(context["research_domain_scope"]),
+                    "DOMAIN_REVISION", "answer classification identity or scope differs")
         require(sorted(x["evidence_id"] for x in b["citations"]) == context["selected_evidence_ids"],
                 "PROVENANCE_MISMATCH", "answer must cite every selected canonical evidence span once")
         for citation in b["citations"]:

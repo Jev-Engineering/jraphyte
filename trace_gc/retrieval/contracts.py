@@ -1,5 +1,6 @@
 """Versioned retrieval contracts. Scores are utilities, never calibrated truth."""
 from __future__ import annotations
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from typing import Any
 from ..canonical import digest
@@ -66,7 +67,8 @@ class RetrievalBudget:
 def query(*, requesting_component: str, security_scope: str, focus_entities: list[str] | None = None,
           text: str = "", candidate_id: str | None = None, decision_id: str | None = None,
           strategies: list[str] | None = None, budget: RetrievalBudget | None = None,
-          mode: str = "BALANCED_EVIDENCE", **changes: Any) -> dict[str, Any]:
+          mode: str = "BALANCED_EVIDENCE", research_domain_scope: dict[str, Any] | None = None,
+          **changes: Any) -> dict[str, Any]:
     limits = budget or RetrievalBudget()
     body = {"version": VERSION, "requesting_component": requesting_component,
             "security_scope": security_scope, "candidate_id": candidate_id, "decision_id": decision_id,
@@ -74,6 +76,7 @@ def query(*, requesting_component: str, security_scope: str, focus_entities: lis
             "target_information": [], "hop_limit": min(1, limits.maximum_hops), "allowed_relation_types": [],
             "excluded_relation_types": [], "temporal_scope": {"as_of": None, "valid_at": None, "before_source": None},
             "graph_version": None, "ontology_scope": [], "source_scope": [], "community_scope": [],
+            "research_domain_scope": deepcopy(research_domain_scope),
             "include_provenance": True, "include_conflicts": True, "include_historical": False,
             "include_superseded": False, "retrieval_strategy": ["ENTITY", "NEIGHBORHOOD", "EVIDENCE", "CONFLICT"] if strategies is None else list(strategies),
             "ranking_strategy": "evidence-utility-v1", "mode": mode, "budget": limits.to_dict(),
