@@ -185,8 +185,9 @@ class HybridRetriever:
             self._assert_current_sources(view.catalog, view.source_status, statuses, sources)
             return statuses
 
-        for record in view.catalog.all():
-            self.catalog.add(record)
+        if view.catalog is not self.catalog:
+            for record in view.catalog.all():
+                self.catalog.add(record)
         if plan_id is not None:
             plan = self.catalog.get(plan_id, "retrieval-plan")
             require(plan["candidate_id"] == query["candidate_id"] and
@@ -316,9 +317,8 @@ class HybridRetriever:
                 "embedding_version": self.embedding.version, "adapter_version": view.adapter_version,
                 "strategy_versions": versions, "created_at": now()}
         context_id = self.catalog.put("graph-context", body)
-        # Independently reconstruct from the immutable records copied BEFORE any
-        # candidate plugin executes. A mutable SearchSpace or membership cache is
-        # not authoritative. Do not cache candidates until this verification passes.
+        # Independently reconstruct from immutable catalog records. A mutable
+        # SearchSpace and its membership cache do not establish authority.
         validate_context(self.catalog, context_id, current_access=self.access_policy,
                          current_status=current_status)
         if not partial and not cache_hit:
