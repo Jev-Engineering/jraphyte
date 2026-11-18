@@ -86,9 +86,10 @@ from closure assertion IDs, pins scope and classification hashes, and records
 source-to-assignment IDs (null for missing assignments). Identity equivalence
 proof can be transitive, but `different_from` is only a direct distinction. The
 other endpoint's equivalence proof is included without expanding unrelated
-`A != B != C` chains. Search paths keep their ordered member IDs and hop budget;
-extra explanatory assertions are explicitly not represented as additional
-search-path hops.
+`A != B != C` chains. Path hops and community membership use topical assertions.
+With `ALL` matching, their combined topical labels can satisfy the scope.
+An explicit conflict can carry both sides of the pair while its anchor metadata
+identifies the topical members.
 
 The whole anchor and closure must fit the existing unique-edge, unique-node,
 source-span, token, work and time budgets. Otherwise the entire item is dropped
@@ -109,7 +110,9 @@ contexts. A replay on the same
 graph version must resolve to the same immutable snapshot. The replay allowlist
 permits an explicit alternative domain scope and preserves the original tenant,
 requesting role and candidate. Original observations and evidence hashes remain
-immutable.
+immutable. New replay receipts expose only linked observations with currently
+readable sources. Receipt validation checks each preserved hash and requires
+new observations to cite the replayed result.
 
 Before embeddings and before returning context, the reference adapters' live
 source-status hook is checked. A changed source epoch requires a new consistent

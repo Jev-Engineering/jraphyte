@@ -18,7 +18,7 @@ from trace_gc.retrieval.store import SQLiteGraphAdapter
 from trace_gc.retrieval.service import HybridRetriever, GraphRAGQueryService, validate_context
 from trace_gc.retrieval.planner import RetrievalPlanner, UpstreamGraphRAG
 from trace_gc.retrieval.reranker import JevReranker
-from trace_gc.retrieval.integration import validate_record
+from trace_gc.retrieval.integration import references, validate_record
 from trace_gc.validation import validate_bundle
 from trace_gc.replay import replay_retrieval
 
@@ -260,9 +260,32 @@ class PipelineTests(unittest.TestCase):
         pack, ref = self.retrieved_pack()
         obs = record_response(self.c, pack, fixture_response(self.c.get(pack, "pack")))[0]
         before = self.c.hash(obs)
-        replay = replay_retrieval(self.r, ref, {"retrieval_strategy": ["SOURCE"]})
+        unrelated_pack = compile_pack(self.c, id_="unrelated-replay-pack", run_id=RUN,
+            candidate_ids=self.f.candidate_ids, questions=[question(self.f.candidate_ids[0], id_="standalone")],
+            snapshot_id=self.f.snapshot_id, security_scope=SCOPE)
+        unrelated = record_response(self.c, unrelated_pack, fixture_response(self.c.get(unrelated_pack, "pack")))[0]
+
+        def synthesize(result_id):
+            context_id = self.c.get(result_id, "retrieval-result")["graph_context_id"]
+            new_pack = compile_pack(self.c, id_="counterfactual-replay-pack", run_id=RUN,
+                candidate_ids=self.f.candidate_ids, questions=[question(self.f.candidate_ids[0], id_="replayed")],
+                snapshot_id=self.f.snapshot_id, security_scope=SCOPE,
+                graph_context_ids=[context_id], source_retrieval_ids=[result_id])
+            return {"observation_ids": record_response(self.c, new_pack, fixture_response(self.c.get(new_pack, "pack")))}
+
+        replay = replay_retrieval(self.r, ref, {"retrieval_strategy": ["SOURCE"]}, synthesize=synthesize)
         self.assertEqual(self.c.hash(obs), before)
         self.assertEqual(self.c.get(replay, "retrieval-replay")["observation_hashes_preserved"][obs], before)
+        receipt = self.c.get(replay, "retrieval-replay")
+        validate_record(self.c, self.c.record(replay))
+        self.assertEqual(receipt["observation_hashes_preserved"], {obs: before})
+        self.assertEqual(receipt["new_observation_ids"], receipt["synthesis_comparison"]["observation_ids"])
+        refs = references("retrieval-replay", receipt)
+        self.assertIn((obs, "observation"), refs)
+        self.assertNotIn((unrelated, "observation"), refs)
+        receipt["observation_hashes_preserved"][obs] = "0" * 64
+        with self.assertRaisesRegex(ContractError, "REPLAY_OBSERVATION_LINEAGE"):
+            validate_record(self.c, self.c.record(self.c.put("retrieval-replay", receipt)))
 
     def test_summary_cannot_be_substituted_for_source_evidence(self):
         _, ref = self.retrieved_pack()

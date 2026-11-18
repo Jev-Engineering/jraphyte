@@ -72,6 +72,36 @@ def resolution_lineage(catalog: Catalog, observations: list[str]) -> dict[str, A
                                      digest(sorted({b["retrieval_fingerprint"] for b in bodies}))}
 
 
+def context_observations(context: dict[str, Any]) -> set[str]:
+    return {ref for item in context["items"] for ref in item["observation_ids"]} | set(context.get("reranking_observation_ids", []))
+
+
+def observation_uses_result(catalog: Catalog, ref: str, result_id: str, security_scope: str) -> bool:
+    observation = catalog.get(ref, "observation")
+    if observation["pack_id"] not in catalog:
+        return False
+    pack = catalog.get(observation["pack_id"], "pack")
+    if not (observation["security_scope"] == pack["security_scope"] == security_scope and
+            result_id in pack.get("source_retrieval_ids", [])):
+        return False
+    result = catalog.get(result_id, "retrieval-result")
+    request = catalog.get(result["query_id"], "retrieval-query")
+    candidate = observation["candidate_id"]
+    return (result["graph_context_id"] in pack["graph_context_ids"] and
+            request["candidate_id"] == candidate and candidate in pack["candidate_ids"])
+
+
+def observation_sources_readable(catalog: Catalog, ref: str, access) -> bool:
+    observation = catalog.get(ref, "observation")
+    if observation["pack_id"] not in catalog or observation["candidate_id"] not in catalog:
+        return False
+    pack = catalog.get(observation["pack_id"], "pack")
+    candidate = catalog.get(observation["candidate_id"], "candidate")["assertion"]
+    return (observation["security_scope"] == pack["security_scope"] == access.policy["tenant"] and
+            all(access.allows("node", candidate[field]) for field in ("subject", "object")) and
+            all(access.source(source_id) for source_id in pack["closure"]["source_snapshot_ids"]))
+
+
 def references(kind: str, body: dict[str, Any]) -> list[tuple[str, str]]:
     refs: list[tuple[str, str]] = []
     def add(key, expected):
@@ -96,6 +126,8 @@ def references(kind: str, body: dict[str, Any]) -> list[tuple[str, str]]:
         add("query_id", "retrieval-query"); add("result_id", "retrieval-result"); add("graph_context_id", "graph-context")
     elif kind == "retrieval-replay":
         add("original_result_id", "retrieval-result"); add("replayed_result_id", "retrieval-result"); add("new_observation_ids", "observation")
+        if "replayed_classification_identity" in body:
+            refs.extend((ref, "observation") for ref in body["observation_hashes_preserved"])
     elif kind == "retrieval-evaluation":
         add("result_ids", "retrieval-result")
     if kind in {"retrieval-query", "retrieval-plan"} and body.get("research_domain_scope") is not None:
@@ -151,30 +183,34 @@ def validate_record(catalog: Catalog, record: dict[str, Any]) -> None:
                     digest(b["research_domain_scope"]) == digest(context["research_domain_scope"]),
                     "DOMAIN_REVISION", "lineage classification identity or scope differs")
     elif kind == "retrieval-replay":
+        from ..adapter import validate_observation
+        from ..compiler import validate_pack
         from ..domain_publication import classification_identity
         from ..replay import RETRIEVAL_REPLAY_PARAMETERS
+        from .security import AccessFilter
+        results = {prefix: catalog.get(b[prefix + "_result_id"], "retrieval-result")
+                   for prefix in ("original", "replayed")}
+        contexts = {prefix: catalog.get(result["graph_context_id"], "graph-context") for prefix, result in results.items()}
+        if all("classification_identity" not in context and "research_domain_scope" not in context
+               for context in contexts.values()) and not any(
+                   prefix + field in b for prefix in contexts for field in ("_classification_identity", "_research_domain_scope")):
+            return
         require(set(b["changed_parameters"]) <= RETRIEVAL_REPLAY_PARAMETERS,
                 "REPLAY_SCOPE", "replay changes a protected query parameter")
-        contexts = {}
         requests = {}
-        for prefix, result_ref in (("original", b["original_result_id"]), ("replayed", b["replayed_result_id"])):
-            result = catalog.get(result_ref, "retrieval-result")
-            context = catalog.get(result["graph_context_id"], "graph-context")
+        for prefix, result in results.items():
+            context = contexts[prefix]
             request = catalog.get(result["query_id"], "retrieval-query")
-            contexts[prefix], requests[prefix] = context, request
+            requests[prefix] = request
             require(result["query_id"] == context["query_id"] and
                     b[prefix + "_graph_version"] == context["graph_version"] and
                     b[prefix + "_selected_ids"] == sorted(i["id"] for i in context["items"]),
                     "RETRIEVAL_LINEAGE", "replay context version or selection differs")
-            if "classification_identity" in context:
-                require(prefix + "_classification_identity" in b and prefix + "_research_domain_scope" in b,
-                        "DOMAIN_REVISION", "replay omits the classification identity or scope of a domain-aware context")
             identity_key, scope_key = prefix + "_classification_identity", prefix + "_research_domain_scope"
-            if identity_key in b or scope_key in b:
-                require(identity_key in b and scope_key in b and
-                        digest(b[identity_key]) == digest(classification_identity(catalog.get(context["snapshot_id"], "graph-snapshot"))) and
-                        digest(b[scope_key]) == digest(request.get("research_domain_scope")),
-                        "DOMAIN_REVISION", "replay classification identity or scope differs")
+            require(identity_key in b and scope_key in b and
+                    digest(b[identity_key]) == digest(classification_identity(catalog.get(context["snapshot_id"], "graph-snapshot"))) and
+                    digest(b[scope_key]) == digest(request.get("research_domain_scope")),
+                    "DOMAIN_REVISION", "replay classification identity or scope differs")
         original, replayed = contexts["original"], contexts["replayed"]
         require(original["graph_version"] != replayed["graph_version"] or
                 original["snapshot_id"] == replayed["snapshot_id"], "DOMAIN_REVISION",
@@ -185,6 +221,28 @@ def validate_record(catalog: Catalog, record: dict[str, Any]) -> None:
         old_ids, new_ids = set(b["original_selected_ids"]), set(b["replayed_selected_ids"])
         require(b["added_ids"] == sorted(new_ids - old_ids) and b["removed_ids"] == sorted(old_ids - new_ids),
                 "RETRIEVAL_LINEAGE", "replay selection delta differs")
+        preserved, new_refs = b["observation_hashes_preserved"], b["new_observation_ids"]
+        require(len(new_refs) == len(set(new_refs)) and not set(new_refs) & preserved.keys(),
+                "REPLAY_OBSERVATION_LINEAGE", "preserved and newly emitted receipts must be distinct")
+        original_refs = context_observations(original)
+        access = AccessFilter(catalog.get(replayed["access_id"], "graph-access"), catalog, replayed["source_status"])
+        for ref, value in preserved.items():
+            observation = catalog.record(ref, "observation")
+            require(observation["hash"] == value and observation_sources_readable(catalog, ref, access) and
+                    ((ref in original_refs and access.decision(ref)) or observation_uses_result(
+                        catalog, ref, b["original_result_id"], original["security_scope"])),
+                    "REPLAY_OBSERVATION_LINEAGE", "preserved receipt hash or original result attribution differs")
+        for ref in new_refs:
+            require(observation_sources_readable(catalog, ref, access) and
+                    observation_uses_result(catalog, ref, b["replayed_result_id"], replayed["security_scope"]),
+                    "REPLAY_OBSERVATION_LINEAGE", "new receipt does not cite the replayed result")
+        verified_packs = set()
+        for ref in sorted(set(preserved) | set(new_refs)):
+            validate_observation(catalog, ref)
+            pack_id = catalog.get(ref, "observation")["pack_id"]
+            if pack_id not in verified_packs:
+                validate_pack(catalog, catalog.get(pack_id, "pack"))
+                verified_packs.add(pack_id)
     elif kind == "resolution":
         expected = resolution_lineage(catalog, b["observation_ids"])
         require({k: b[k] for k in LINEAGE_FIELDS if k in b} == expected, "RETRIEVAL_LINEAGE", "resolver lineage differs")

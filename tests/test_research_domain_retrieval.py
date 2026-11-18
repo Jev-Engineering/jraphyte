@@ -217,11 +217,33 @@ class DomainRetrievalTests(unittest.TestCase):
 
     def test_path_members_remain_search_hops_not_identity_closure(self):
         ctx, _ = self.context(self.request(["PATH"], focus_entities=["Acme"], hop_limit=2))
+        self.assertTrue(all("e-alias" not in item["member_assertion_ids"] for item in ctx["items"]))
         item = next(item for item in ctx["items"] if set(item["member_assertion_ids"]) == {"e-owns", "e-path"})
         self.assertEqual(len(item["member_assertion_ids"]), 2)
         self.assertIn("e-alias", item["assertion_ids"])
         self.assertNotIn("e-alias", item["member_assertion_ids"])
+        self.assertEqual(item["research_domain"]["anchor_assertion_ids"], ["e-owns", "e-path"])
+        self.assertEqual(item["research_domain"]["closure_assertion_ids"], ["e-alias"])
+        alias_source = self.f["sources"]["e-alias"]
+        self.assertEqual(item["research_domain"]["source_assignments"][alias_source], self.f["assignments"][alias_source])
         self.assertIn("not additional search-path hops", item["text"])
+
+    def test_all_path_members_contribute_labels_across_the_path(self):
+        scope = research_domain_scope(self.c, self.f["taxonomy_id"],
+                                      ["research:biology", "research:chemistry"], match="ALL")
+        source = self.f["sources"]["e-path"]
+        snapshot = self.c.get(self.f["snapshot_id"])
+        previous = snapshot["classifications"]["assignments"][source]
+        assignment = self.c.get(previous)
+        snapshot["classifications"]["assignments"][source] = create_assignment(
+            self.c, source_snapshot_id=source, taxonomy_id=self.f["taxonomy_id"],
+            domain_ids=["research:chemistry"], review=assignment["review"],
+            classifier_id="synthetic-topology", classifier_version="fixture-v1", supersedes=previous)
+        snapshot["classifications"]["revision"] += 1
+        self.replace_snapshot(snapshot)
+        ctx, _ = self.context(self.request(["PATH"], focus_entities=["Acme"], hop_limit=2, research_domain_scope=scope))
+        self.assertEqual([item["research_domain"]["anchor_assertion_ids"] for item in ctx["items"]],
+                         [["e-owns", "e-path"]])
 
     def test_community_scope_remains_topology_not_taxonomy(self):
         ctx, _ = self.context(self.request(["COMMUNITY"], focus_entities=["Acme"]))
@@ -232,6 +254,19 @@ class DomainRetrievalTests(unittest.TestCase):
         self.assertEqual(ctx3["items"], [])
         self.assertTrue(item["generated_summary"])
         self.assertFalse(item["instruction_authority"])
+        self.assertEqual(item["member_assertion_ids"], ["e-owns", "e-path"])
+        self.assertEqual(item["research_domain"]["closure_assertion_ids"], ["e-alias"])
+        self.assertIn(self.f["evidence"]["e-alias"], item["evidence_ids"])
+
+    def test_conflict_pair_keeps_refutation_as_closure_without_standalone_anchor(self):
+        ctx, _ = self.context(self.request(["CONFLICT", "PROVENANCE", "RELATION"],
+                                         focus_entities=[self.f["claim_id"]]))
+        item = next(item for item in ctx["items"] if item["kind"] == "CONFLICT")
+        self.assertEqual(set(item["member_assertion_ids"]), {"e-support", "e-refute"})
+        self.assertEqual(item["research_domain"]["anchor_assertion_ids"], ["e-support"])
+        self.assertEqual(item["research_domain"]["closure_assertion_ids"], ["e-refute"])
+        self.assertIn(self.f["evidence"]["e-refute"], item["evidence_ids"])
+        self.assertFalse(any(item["canonical_ref"] == "e-refute" for item in ctx["items"]))
 
     def test_schema_requires_acl_and_authorized_topical_basis(self):
         ctx, _ = self.context(self.request(["SCHEMA"], focus_relationships=["uses_dataset"]))

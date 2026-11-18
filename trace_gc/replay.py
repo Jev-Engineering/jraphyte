@@ -53,7 +53,8 @@ def replay_retrieval(retriever, original_result_id: str, changes: dict[str, Any]
     """
     from .compiler import now
     from .retrieval.contracts import VERSION
-    from .retrieval.integration import validate_record
+    from .retrieval.integration import context_observations, observation_sources_readable, observation_uses_result, validate_record
+    from .retrieval.security import AccessFilter
     from .domain_publication import classification_identity
     c = retriever.catalog
     require(set(changes) <= RETRIEVAL_REPLAY_PARAMETERS, "REPLAY_SCOPE",
@@ -77,9 +78,22 @@ def replay_retrieval(retriever, original_result_id: str, changes: dict[str, Any]
     comparison = synthesize(result_id) if synthesize is not None else {"status": "NOT_RUN", "reason": "No synthesis executor supplied."}
     after = {r["id"]: r["hash"] for r in c.all("observation")}
     require(all(after.get(ref) == value for ref, value in before.items()), "REPLAY_OBSERVATION_CHANGED", "original receipts are immutable")
+    status_reader = getattr(retriever.adapter, "current_source_status", None)
+    statuses = status_reader() if callable(status_reader) else new_context["source_status"]
+    access = AccessFilter(retriever.access_policy, c, statuses)
+
+    original_refs = context_observations(context)
+    preserved = {}
+    for ref, value in before.items():
+        linked = observation_uses_result(c, ref, original_result_id, context["security_scope"])
+        if (linked or (ref in original_refs and access.decision(ref))) and observation_sources_readable(c, ref, access):
+            preserved[ref] = value
+    new_refs = sorted(set(after) - set(before))
+    require(all(observation_uses_result(c, ref, result_id, new_context["security_scope"]) and observation_sources_readable(c, ref, access)
+                for ref in new_refs), "REPLAY_OBSERVATION_LINEAGE", "new receipt does not cite the replayed result with readable sources")
     old_ids = {i["id"] for i in context["items"]}
     new_ids = {i["id"] for i in new_context["items"]}
-    return c.put("retrieval-replay", {"version": VERSION, "original_result_id": original_result_id,
+    receipt = {"version": VERSION, "original_result_id": original_result_id,
         "replayed_result_id": result_id, "changed_parameters": deepcopy(changes),
         "original_graph_version": context["graph_version"], "replayed_graph_version": new_context["graph_version"],
         "original_classification_identity": context.get("classification_identity", classification_identity(c.get(context["snapshot_id"], "graph-snapshot"))),
@@ -88,5 +102,7 @@ def replay_retrieval(retriever, original_result_id: str, changes: dict[str, Any]
         "replayed_research_domain_scope": new_context["research_domain_scope"],
         "original_selected_ids": sorted(old_ids), "replayed_selected_ids": sorted(new_ids),
         "added_ids": sorted(new_ids-old_ids), "removed_ids": sorted(old_ids-new_ids),
-        "observation_hashes_preserved": before, "new_observation_ids": sorted(set(after)-set(before)),
-        "synthesis_comparison": comparison, "authorization_granted": False, "created_at": now()})
+        "observation_hashes_preserved": preserved, "new_observation_ids": new_refs,
+        "synthesis_comparison": comparison, "authorization_granted": False, "created_at": now()}
+    validate_record(c, {"kind": "retrieval-replay", "body": receipt})
+    return c.put("retrieval-replay", receipt)

@@ -125,7 +125,7 @@ class ResearchDomainSelection:
                     self._equivalence_incident[node].add(ref)
             for evidence_id in fact["evidence_ids"]:
                 self._evidence_edges[evidence_id].add(ref)
-            if self.search_edge(ref) and self.contributes(sources):
+            if self._matches_anchor_filters(ref) and self.contributes(sources):
                 self.contributing_edges.add(ref)
             if usable_identity and predicate == "same_as":
                 left, right = self._root(a["subject"]), self._root(a["object"])
@@ -161,9 +161,7 @@ class ResearchDomainSelection:
             node = next_node
         return root
 
-    def search_edge(self, ref: str) -> bool:
-        if not self.enabled:
-            return True
+    def _matches_anchor_filters(self, ref: str) -> bool:
         from .items import compatible_relation
         fact = self.edges[ref]
         return (compatible_relation(fact["assertion"]["predicate"], self.query) and
@@ -237,7 +235,7 @@ class ResearchDomainSelection:
         if kind in {"EDGE", "PROVENANCE"}:
             return {ref}
         if kind in {"PATH", "COMMUNITY", "CONFLICT"}:
-            return set(members or [])
+            return set(members or []) & self.contributing_edges
         if kind in {"NODE", "CLAIM"}:
             return set(self.node_basis(ref))
         if kind == "EVIDENCE":
@@ -278,12 +276,11 @@ class ResearchDomainSelection:
         elif kind in {"SCHEMA", "ONTOLOGY"}:
             if self.access.allows("schema", snap["schema_id"]):
                 permitted = self.matches(self.sources_for_edges(self.basis(kind, ref, members)))
-        else:
+        elif kind in {"EDGE", "PROVENANCE", "PATH", "COMMUNITY", "CONFLICT"}:
             refs = {ref} if kind in {"EDGE", "PROVENANCE"} else set(members or [])
-            if refs and refs <= self.allowed_edges.keys():
-                anchors = {edge_id for edge_id in refs if self.search_edge(edge_id)}
-                if kind == "CONFLICT" or anchors == refs:
-                    permitted = self.matches(self.sources_for_edges(anchors))
+            anchors = refs & self.contributing_edges
+            if anchors and (anchors == refs or (kind == "CONFLICT" and refs <= self.allowed_edges.keys())):
+                permitted = self.matches(self.sources_for_edges(anchors))
         self._candidate_cache[key] = bool(permitted)
         return bool(permitted)
 

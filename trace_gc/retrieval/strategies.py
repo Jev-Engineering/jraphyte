@@ -27,8 +27,9 @@ class SearchSpace:
         from .domains import ResearchDomainSelection
         if self.domain_selection is None:
             self.domain_selection = ResearchDomainSelection(self.view, self.access, self.query, self.edges, self.conflicts, self.meter)
-        self.edges = self.domain_selection.allowed_edges
-        self.conflicts = [pair for pair in self.conflicts if all(ref in self.edges for ref in pair)]
+        authorized = self.domain_selection.allowed_edges
+        self.edges = {ref: fact for ref, fact in authorized.items() if ref in self.domain_selection.contributing_edges}
+        self.conflicts = [pair for pair in self.conflicts if all(ref in authorized for ref in pair)]
 
     def allows(self, kind: str, ref: str, members: list[str] | None = None) -> bool:
         return self.domain_selection.allows(kind, ref, members)
@@ -42,8 +43,6 @@ class SearchSpace:
         result: dict[str, list[tuple[str, str]]] = {}
         for ref, fact in self.edges.items():
             self.meter.work()
-            if not self.domain_selection.search_edge(ref):
-                continue
             a = fact["assertion"]
             result.setdefault(a["subject"], []).append((a["object"], ref))
             result.setdefault(a["object"], []).append((a["subject"], ref))
@@ -62,9 +61,13 @@ class BuiltinStrategy:
 
     def retrieve(self, space: SearchSpace) -> Iterable[dict[str, Any]]:
         q, c, snap, m = space.query, space.view.catalog, space.view.snapshot, space.meter
-        focus = {x for x in q["focus_entities"] if space.access.allows("node", x) and space.allows("NODE", x)}
-        text_terms = terms(q["text"])
         name = self.name
+        focus = {x for x in q["focus_entities"] if space.access.allows("node", x)}
+        if space.domain_selection.enabled and name in {"NEIGHBORHOOD", "PATH", "COMMUNITY"}:
+            focus = {x for x in focus if space.domain_selection.node_basis(x)}
+        else:
+            focus = {x for x in focus if space.allows("NODE", x)}
+        text_terms = terms(q["text"])
         if name in {"ENTITY", "CLAIM"}:
             candidates = sorted(snap["nodes"]) if name == "ENTITY" else sorted(r["id"] for r in c.all("claim"))
             for ref in candidates:
@@ -181,9 +184,10 @@ class BuiltinStrategy:
                     if not frontier:
                         break
         elif name == "CONFLICT":
+            authorized = space.domain_selection.allowed_edges
             for pair in space.conflicts:
                 m.work()
-                entities = {x for ref in pair for x in (space.edges[ref]["assertion"]["subject"], space.edges[ref]["assertion"]["object"])}
+                entities = {x for ref in pair for x in (authorized[ref]["assertion"]["subject"], authorized[ref]["assertion"]["object"])}
                 if (not focus or focus & entities) and space.allows("CONFLICT", digest(pair), pair):
                     yield space.make("CONFLICT", digest(pair), pair)
                     for ref in pair:
